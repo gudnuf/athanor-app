@@ -78,6 +78,12 @@ enum SessionEvent: Equatable {
 
 @MainActor
 protocol AthanorEngineProtocol: AnyObject {
+    /// True for `AthanorCoreEngine` (real athanor-core, post-D2/D3), false for
+    /// `DemoEngine`. SessionScreen reads this — not a type check — to decide
+    /// whether the real Bellows (mic capture + BellowsHandle) is even worth
+    /// attempting; DemoEngine's sine-stub bed never depends on it.
+    var isReal: Bool { get }
+
     /// Begin a session against a chosen thread (mask/mode may be nil to let
     /// the Mystagogue choose). Returns THIS session's event stream; a fresh
     /// `beginSession`/`beginInitiation` call hands out a fresh stream.

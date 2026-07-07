@@ -88,6 +88,8 @@ import AthanorCoreFFI
 // engine constructs and links. E4/E5 own the on-device audio + render polish.
 @MainActor
 final class AthanorCoreEngine: AthanorEngineProtocol {
+    let isReal = true
+
     private let engine: AthanorCoreFFI.AthanorEngine
     private var currentHandle: AthanorCoreFFI.SessionHandle?
     private var currentBridge: SessionEventBridge?

@@ -20,6 +20,8 @@ import Foundation
 @MainActor
 final class DemoEngine: AthanorEngineProtocol {
 
+    let isReal = false
+
     private var continuation: AsyncStream<SessionEvent>.Continuation?
     private var turnIndex = 0
     private var scriptedInitiation = false
