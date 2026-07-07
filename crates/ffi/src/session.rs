@@ -19,7 +19,7 @@ use athanor_core::Store;
 use tokio::sync::Mutex as TokioMutex;
 
 use crate::engine::{AthanorEngine, EngineError};
-use crate::events::{SessionEvent, SessionEventListener, DEFAULT_REGISTER};
+use crate::events::{ReplyRegister, SessionEvent, SessionEventListener};
 
 /// Default voice/work-mode when the caller doesn't pick one.
 const DEFAULT_MASK: &str = "philosophus";
@@ -221,11 +221,11 @@ fn update_sink<'a>(
     cond: &'a mut CondensationState,
 ) -> impl FnMut(AcpUpdate) + Send + 'a {
     move |update| match update {
-        AcpUpdate::TextDelta(t) => emit(
+        AcpUpdate::TextDelta { text, register } => emit(
             listener,
             SessionEvent::TextDelta {
-                text: t,
-                register: DEFAULT_REGISTER.to_string(),
+                text,
+                register: ReplyRegister::from(register),
             },
         ),
         AcpUpdate::ToolCall(call) => {

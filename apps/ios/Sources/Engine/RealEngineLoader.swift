@@ -25,6 +25,13 @@ enum RealEngineLoader {
     /// falls back to `DemoEngine` whenever the real path is unavailable.
     @MainActor
     static func resolve() -> any AthanorEngineProtocol {
+        // QA/screenshot hook only (same launch-arg family as `screen=` /
+        // `autoplay=`): force the canned DemoEngine even when a real key is
+        // present, so a deterministic scripted beat (e.g. the reading-register
+        // lesson) can be captured without depending on a live model reply.
+        if ProcessInfo.processInfo.arguments.contains("force-demo=1") {
+            return DemoEngine()
+        }
         #if canImport(AthanorCoreFFI)
         if let real = tryRealEngine() { return real }
         #endif
@@ -321,7 +328,9 @@ private final class SessionEventBridge: AthanorCoreFFI.SessionEventListener, @un
     private static func map(_ e: AthanorCoreFFI.SessionEvent) -> SessionEvent {
         switch e {
         case let .textDelta(text, register):
-            return .textDelta(text, register: register == "serif" ? .serif : .quick)
+            // Core's register enum -> the app's voice enum: reading passages
+            // render in the serif reading voice, everything else stays quick.
+            return .textDelta(text, register: register == .reading ? .serif : .quick)
         case let .toolCall(kind):
             return .toolCall(kind: kind)
         case let .condensation(realizationId, childThreadId, text):

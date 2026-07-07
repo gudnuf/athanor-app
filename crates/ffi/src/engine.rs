@@ -70,8 +70,8 @@ fn build_engine(anthropic_key: Option<String>, tier: &TierConfig) -> Arc<dyn Mys
 /// out of scope (flagged in the C1/C2 report).
 fn demo_engine() -> MockEngine {
     MockEngine::new(vec![
-        AcpUpdate::TextDelta(
-            "The furnace is warm. This is a demo — wire a key to hear the Mystagogue.".into(),
+        AcpUpdate::text_delta(
+            "The furnace is warm. This is a demo — wire a key to hear the Mystagogue.",
         ),
         AcpUpdate::TurnComplete,
     ])

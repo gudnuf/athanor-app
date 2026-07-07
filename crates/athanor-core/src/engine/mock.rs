@@ -92,7 +92,7 @@ mod tests {
     #[tokio::test]
     async fn mock_engine_streams_then_dispatches_a_tool_then_completes() {
         let engine = MockEngine::new(vec![
-            AcpUpdate::TextDelta("Consider ".into()),
+            AcpUpdate::text_delta("Consider "),
             AcpUpdate::ToolCall(AcpToolCall {
                 id: "1".into(),
                 name: "open_thread".into(),
@@ -114,7 +114,7 @@ mod tests {
     #[tokio::test]
     async fn mock_engine_with_no_tool_calls_only_streams_and_completes() {
         let engine = MockEngine::new(vec![
-            AcpUpdate::TextDelta("just text".into()),
+            AcpUpdate::text_delta("just text"),
             AcpUpdate::TurnComplete,
         ]);
         let tools = RecordingDispatch::default();

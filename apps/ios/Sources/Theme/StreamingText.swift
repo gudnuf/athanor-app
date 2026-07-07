@@ -46,10 +46,15 @@ struct StreamingText: View {
         Group {
             switch register {
             case .serif:
+                // The reading voice (mockups-v2 `.say-teacher`): a calmer, larger
+                // serif with real line spacing — a lesson given more air than the
+                // quick note gets.
                 Text(rendered)
-                    .font(Ember.F.serif(19))
+                    .font(Ember.F.serif(20))
                     .foregroundStyle(Ember.C.ink)
+                    .lineSpacing(6)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 4)
             case .quick:
                 Text(rendered)
                     .font(Ember.F.sans(15, weight: .medium))

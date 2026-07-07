@@ -10,18 +10,37 @@
 //!   `session.rs`);
 //! - `Error` from a `run_turn` that returns `Err` (never a panic across FFI).
 
+/// Which voice a reply run is spoken in — projected across FFI from
+/// `athanor_core::engine::Register`. The Session screen (E4) switches between
+/// the quick conversational sans voice and the serif reading voice on this.
+#[derive(uniffi::Enum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReplyRegister {
+    /// The conversational default — quick sans note.
+    Quick,
+    /// The reading voice — a deeper lesson, rendered as calmer, larger serif.
+    Reading,
+}
+
+impl From<athanor_core::engine::Register> for ReplyRegister {
+    fn from(r: athanor_core::engine::Register) -> Self {
+        match r {
+            athanor_core::engine::Register::Quick => ReplyRegister::Quick,
+            athanor_core::engine::Register::Reading => ReplyRegister::Reading,
+        }
+    }
+}
+
 /// One streamed update from a session, projected for the Swift shell.
 #[derive(uniffi::Enum, Clone, Debug, PartialEq)]
 pub enum SessionEvent {
-    /// A chunk of the Mystagogue's reply text.
-    ///
-    /// `register` is the reply-register hint the plan's Session screen (E4)
-    /// uses to switch between a quick sans voice and the serif reading voice.
-    // TODO(core): athanor-core does not yet emit a register discriminator —
-    // the Conductor/engine stream carries no quick-vs-serif signal. This field
-    // is defaulted to "quick" at the bridge for every delta until core grows a
-    // real register signal to project here (flag raised in the C1/C2 report).
-    TextDelta { text: String, register: String },
+    /// A chunk of the Mystagogue's reply text, tagged with the register it is
+    /// spoken in. The core's `Conductor` parses the model's reading-voice
+    /// markers (identity.md §6), strips them, and tags each run — so `register`
+    /// here is a real signal from core, never a bridge default.
+    TextDelta {
+        text: String,
+        register: ReplyRegister,
+    },
     /// The engine invoked a Mystagogue tool this turn; `kind` is the tool name
     /// (`fix_salt`, `open_thread`, `evaporate_thread`, `kindle_passage`,
     /// `weave_domains`, `update_memory`).
@@ -51,7 +70,3 @@ pub enum SessionEvent {
 pub trait SessionEventListener: Send + Sync {
     fn on_event(&self, event: SessionEvent);
 }
-
-/// The default reply-register hint until core emits a real signal. See the
-/// `TextDelta::register` TODO above.
-pub(crate) const DEFAULT_REGISTER: &str = "quick";

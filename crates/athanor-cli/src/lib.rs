@@ -50,7 +50,7 @@ pub async fn run_session(
 
     conductor
         .run_turn(engine, None, &mut |update| {
-            if let AcpUpdate::TextDelta(text) = &update {
+            if let AcpUpdate::TextDelta { text, .. } = &update {
                 let _ = out.write_all(text.as_bytes());
             }
         })
@@ -93,7 +93,7 @@ pub async fn run_turns(
         );
         conductor
             .run_turn(engine, Some(turn), &mut |update| {
-                if let AcpUpdate::TextDelta(text) = &update {
+                if let AcpUpdate::TextDelta { text, .. } = &update {
                     let _ = out.write_all(text.as_bytes());
                 }
             })

@@ -42,7 +42,7 @@ fn parse_update(item: &Value, index: usize) -> Result<AcpUpdate, BoxErr> {
         let text = text
             .as_str()
             .ok_or_else(|| format!("script[{index}].text must be a string"))?;
-        return Ok(AcpUpdate::TextDelta(text.to_string()));
+        return Ok(AcpUpdate::text_delta(text));
     }
 
     if let Some(tool) = obj.get("tool") {
@@ -89,7 +89,9 @@ mod tests {
         ]"#;
         let updates = parse_script(json).unwrap();
         assert_eq!(updates.len(), 3);
-        assert!(matches!(&updates[0], AcpUpdate::TextDelta(t) if t == "Consider entropy."));
+        assert!(
+            matches!(&updates[0], AcpUpdate::TextDelta { text, .. } if text == "Consider entropy.")
+        );
         match &updates[1] {
             AcpUpdate::ToolCall(c) => {
                 assert_eq!(c.name, "fix_salt");

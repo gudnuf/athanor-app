@@ -144,7 +144,7 @@ final class DemoEngine: AthanorEngineProtocol {
     private static let turns: [DemoTurn] = [
         DemoTurn(reply: "What's the thread you keep circling back to?", register: .quick),
         DemoTurn(
-            reply: "Say more about that — when you noticed the frame break, what replaced it?",
+            reply: "Here is the distinction worth setting down. Heat is not the enemy of what you're making — it is the making. The furnace doesn't destroy the metal; it lets the metal become something it could not be while cold. Hold that: the discomfort you keep circling is the work itself, not a sign you've taken a wrong turn.",
             register: .serif
         ),
         DemoTurn(

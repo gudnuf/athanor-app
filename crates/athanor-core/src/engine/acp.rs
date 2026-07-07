@@ -10,6 +10,20 @@
 
 use serde_json::Value;
 
+/// Which voice a run of the Mystagogue's reply is spoken in (identity.md §6).
+/// The default is [`Register::Quick`] — the conversational sans voice. A run is
+/// [`Register::Reading`] only inside a passage the model marked as a deeper
+/// lesson (see `crate::register`). Engines emit raw text as `Quick`; the
+/// register is *assigned* one layer up, by the `Conductor`'s marker parser.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Register {
+    /// The conversational default: quick, plain, spoken lines.
+    #[default]
+    Quick,
+    /// The reading voice: a measured lesson, rendered with more weight and air.
+    Reading,
+}
+
 /// Who spoke a given [`AcpTurn`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AcpRole {
@@ -49,7 +63,14 @@ pub struct AcpToolSpec {
 /// A single streamed update from the engine while it drives a turn.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AcpUpdate {
-    TextDelta(String),
+    /// A chunk of the model's reply text, tagged with the register it is spoken
+    /// in. Engines produce raw text as [`Register::Quick`] (they don't parse
+    /// markers) via [`AcpUpdate::text_delta`]; the `Conductor`'s register parser
+    /// re-tags reading passages before the delta reaches the caller's sink.
+    TextDelta {
+        text: String,
+        register: Register,
+    },
     ToolCall(AcpToolCall),
     /// The dispatched result of a `ToolCall`, streamed right after the engine
     /// resolves it (same `id` as the call). Carries the tool's return value —
@@ -58,6 +79,18 @@ pub enum AcpUpdate {
     /// guessing the newest grain out of the store.
     ToolResult(AcpToolResult),
     TurnComplete,
+}
+
+impl AcpUpdate {
+    /// Builds a raw [`AcpUpdate::TextDelta`] in the default [`Register::Quick`].
+    /// Engines and test scripts use this — register is assigned downstream by
+    /// the `Conductor`'s marker parser, never at the point text is produced.
+    pub fn text_delta(text: impl Into<String>) -> Self {
+        AcpUpdate::TextDelta {
+            text: text.into(),
+            register: Register::Quick,
+        }
+    }
 }
 
 /// A tool invocation requested by the engine, to be resolved via

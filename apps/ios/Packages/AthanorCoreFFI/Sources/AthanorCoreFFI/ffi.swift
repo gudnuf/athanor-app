@@ -2344,18 +2344,96 @@ public func FfiConverterTypeEngineError_lower(_ value: EngineError) -> RustBuffe
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
+ * Which voice a reply run is spoken in — projected across FFI from
+ * `athanor_core::engine::Register`. The Session screen (E4) switches between
+ * the quick conversational sans voice and the serif reading voice on this.
+ */
+
+public enum ReplyRegister: Equatable, Hashable {
+    
+    /**
+     * The conversational default — quick sans note.
+     */
+    case quick
+    /**
+     * The reading voice — a deeper lesson, rendered as calmer, larger serif.
+     */
+    case reading
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension ReplyRegister: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeReplyRegister: FfiConverterRustBuffer {
+    typealias SwiftType = ReplyRegister
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ReplyRegister {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .quick
+        
+        case 2: return .reading
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ReplyRegister, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .quick:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .reading:
+            writeInt(&buf, Int32(2))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReplyRegister_lift(_ buf: RustBuffer) throws -> ReplyRegister {
+    return try FfiConverterTypeReplyRegister.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReplyRegister_lower(_ value: ReplyRegister) -> RustBuffer {
+    return FfiConverterTypeReplyRegister.lower(value)
+}
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+/**
  * One streamed update from a session, projected for the Swift shell.
  */
 
 public enum SessionEvent: Equatable, Hashable {
     
     /**
-     * A chunk of the Mystagogue's reply text.
-     *
-     * `register` is the reply-register hint the plan's Session screen (E4)
-     * uses to switch between a quick sans voice and the serif reading voice.
+     * A chunk of the Mystagogue's reply text, tagged with the register it is
+     * spoken in. The core's `Conductor` parses the model's reading-voice
+     * markers (identity.md §6), strips them, and tags each run — so `register`
+     * here is a real signal from core, never a bridge default.
      */
-    case textDelta(text: String, register: String
+    case textDelta(text: String, register: ReplyRegister
     )
     /**
      * The engine invoked a Mystagogue tool this turn; `kind` is the tool name
@@ -2404,7 +2482,7 @@ public struct FfiConverterTypeSessionEvent: FfiConverterRustBuffer {
         let variant: Int32 = try readInt(&buf)
         switch variant {
         
-        case 1: return .textDelta(text: try FfiConverterString.read(from: &buf), register: try FfiConverterString.read(from: &buf)
+        case 1: return .textDelta(text: try FfiConverterString.read(from: &buf), register: try FfiConverterTypeReplyRegister.read(from: &buf)
         )
         
         case 2: return .toolCall(kind: try FfiConverterString.read(from: &buf)
@@ -2429,7 +2507,7 @@ public struct FfiConverterTypeSessionEvent: FfiConverterRustBuffer {
         case let .textDelta(text,register):
             writeInt(&buf, Int32(1))
             FfiConverterString.write(text, into: &buf)
-            FfiConverterString.write(register, into: &buf)
+            FfiConverterTypeReplyRegister.write(register, into: &buf)
             
         
         case let .toolCall(kind):

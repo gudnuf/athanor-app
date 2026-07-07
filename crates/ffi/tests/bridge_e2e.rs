@@ -12,7 +12,7 @@ use athanor_core::domain::ThreadState;
 use athanor_core::engine::{AcpToolCall, AcpUpdate, MockEngine};
 use athanor_core::Store;
 use ffi::engine::AthanorEngine;
-use ffi::events::{SessionEvent, SessionEventListener};
+use ffi::events::{ReplyRegister, SessionEvent, SessionEventListener};
 use serde_json::json;
 
 /// Collects every `SessionEvent` the bridge emits so the test can assert order.
@@ -34,7 +34,7 @@ async fn scripted_turn_fixes_salt_streams_condensation_then_reads_round_trip() {
 
     // A scripted turn: reflect, fix salt against the parent thread, complete.
     let mock = MockEngine::new(vec![
-        AcpUpdate::TextDelta("Erasure is dissipation.".into()),
+        AcpUpdate::text_delta("Erasure is dissipation."),
         AcpUpdate::ToolCall(AcpToolCall {
             id: "1".into(),
             name: "fix_salt".into(),
@@ -73,7 +73,7 @@ async fn scripted_turn_fixes_salt_streams_condensation_then_reads_round_trip() {
     );
     assert!(
         matches!(&events[0], SessionEvent::TextDelta { text, register }
-            if text.contains("dissipation") && register == "quick"),
+            if text.contains("dissipation") && *register == ReplyRegister::Quick),
         "first event is a quick-register text delta: {:?}",
         events[0]
     );
@@ -199,7 +199,7 @@ async fn begin_initiation_open_streams_the_mystagogues_first_reply_with_no_learn
     let store = Arc::new(Store::open_in_memory("dev").unwrap());
 
     let mock = MockEngine::new(vec![
-        AcpUpdate::TextDelta("Before anything else — what's been pulling at you?".into()),
+        AcpUpdate::text_delta("Before anything else — what's been pulling at you?"),
         AcpUpdate::TurnComplete,
     ]);
     let engine = AthanorEngine::with_engine(Arc::clone(&store), Arc::new(mock));

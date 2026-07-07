@@ -15,6 +15,7 @@ pub mod error;
 pub mod ids;
 pub mod mystagogue;
 pub mod prompt;
+pub mod register;
 pub mod session;
 pub mod store;
 pub mod tabula;

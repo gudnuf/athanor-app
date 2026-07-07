@@ -50,7 +50,7 @@ pub fn eager_parroter() -> Persona {
             let question = "what happens to disorder in an isolated system over time";
             vec![
                 Step::Engine(vec![
-                    AcpUpdate::TextDelta(format!("{question}?")),
+                    AcpUpdate::text_delta(format!("{question}?")),
                     AcpUpdate::TurnComplete,
                 ]),
                 // The learner echoes the question back nearly verbatim —
@@ -93,7 +93,7 @@ pub fn stuck_one() -> Persona {
         build: |_thread_id| {
             vec![
                 Step::Engine(vec![
-                    AcpUpdate::TextDelta("The wall you keep hitting might be the teacher.".into()),
+                    AcpUpdate::text_delta("The wall you keep hitting might be the teacher."),
                     tool_call(
                         "1",
                         "open_thread",
@@ -103,14 +103,12 @@ pub fn stuck_one() -> Persona {
                 ]),
                 Step::Learner("I don't know.".into()),
                 Step::Engine(vec![
-                    AcpUpdate::TextDelta("Sit with not-knowing a moment longer.".into()),
+                    AcpUpdate::text_delta("Sit with not-knowing a moment longer."),
                     AcpUpdate::TurnComplete,
                 ]),
                 Step::Learner("I still don't know.".into()),
                 Step::Engine(vec![
-                    AcpUpdate::TextDelta(
-                        "Good. That's the frame breaking, not you failing.".into(),
-                    ),
+                    AcpUpdate::text_delta("Good. That's the frame breaking, not you failing."),
                     AcpUpdate::TurnComplete,
                 ]),
             ]
@@ -129,7 +127,7 @@ pub fn tangent_chaser() -> Persona {
         build: |_thread_id| {
             vec![
                 Step::Engine(vec![
-                    AcpUpdate::TextDelta("Stay with the thread you opened.".into()),
+                    AcpUpdate::text_delta("Stay with the thread you opened."),
                     AcpUpdate::TurnComplete,
                 ]),
                 Step::Learner("actually, what about magnetism instead?".into()),
@@ -175,16 +173,14 @@ pub fn silent_one() -> Persona {
         build: |_thread_id| {
             vec![
                 Step::Engine(vec![
-                    AcpUpdate::TextDelta("What's stirring, even quietly?".into()),
+                    AcpUpdate::text_delta("What's stirring, even quietly?"),
                     AcpUpdate::TurnComplete,
                 ]),
                 Step::Learner("...".into()),
                 Step::Engine(vec![
                     // One sentence, no bare declarative — stays within the
                     // Philosophus coarse proxy (grade_mask_fidelity).
-                    AcpUpdate::TextDelta(
-                        "Still nothing — no rush, but is there anything at all?".into(),
-                    ),
+                    AcpUpdate::text_delta("Still nothing — no rush, but is there anything at all?"),
                     AcpUpdate::TurnComplete,
                 ]),
                 Step::Learner("maybe.".into()),

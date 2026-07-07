@@ -197,7 +197,7 @@ impl GooseEngine {
                     for content in &message.content {
                         match content {
                             MessageContent::Text(t) if !t.text.is_empty() => {
-                                sink(AcpUpdate::TextDelta(t.text.clone()));
+                                sink(AcpUpdate::text_delta(t.text.clone()));
                             }
                             MessageContent::FrontendToolRequest(req) => match &req.tool_call {
                                 Ok(params) => {
@@ -406,7 +406,9 @@ mod tests {
             "engine must surface the tool call: {updates:?}"
         );
         assert!(
-            updates.iter().any(|u| matches!(u, AcpUpdate::TextDelta(_))),
+            updates
+                .iter()
+                .any(|u| matches!(u, AcpUpdate::TextDelta { .. })),
             "engine must stream terminal text: {updates:?}"
         );
         assert!(
@@ -600,7 +602,9 @@ mod tests {
             .expect("live round-trip should succeed");
 
         assert!(
-            updates.iter().any(|u| matches!(u, AcpUpdate::TextDelta(_))),
+            updates
+                .iter()
+                .any(|u| matches!(u, AcpUpdate::TextDelta { .. })),
             "live turn must stream text: {updates:?}"
         );
         assert!(

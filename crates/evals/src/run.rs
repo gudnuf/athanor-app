@@ -99,7 +99,7 @@ pub async fn run_persona(persona: &Persona) -> ScenarioReport {
                 let mut buffer = String::new();
                 engine
                     .run_turn(prompt, &mystagogue, &mut |update| match update {
-                        AcpUpdate::TextDelta(delta) => buffer.push_str(&delta),
+                        AcpUpdate::TextDelta { text, .. } => buffer.push_str(&text),
                         AcpUpdate::ToolCall(call) => {
                             if !buffer.is_empty() {
                                 local_turns.push(Turn::Assistant(std::mem::take(&mut buffer)));

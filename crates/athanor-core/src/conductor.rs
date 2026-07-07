@@ -26,6 +26,7 @@ use crate::engine::{AcpPrompt, AcpRole, AcpTurn, AcpUpdate, EngineError, Mystago
 use crate::error::CoreError;
 use crate::mystagogue::Mystagogue;
 use crate::prompt;
+use crate::register::RegisterParser;
 use crate::session::{abandon_session, close_session};
 use crate::store::Store;
 
@@ -216,20 +217,56 @@ impl Conductor {
         let mut turn_text = String::new();
         let mut turn_landed = false;
         let tools_called = &mut self.tools_called;
+        // The register parser strips the model's reading-voice markers and tags
+        // each emitted delta with its register (identity.md §6). It runs HERE,
+        // between the raw engine stream and the caller's sink, so markers never
+        // leak — not to the caller, not to the accumulated transcript/history.
+        let mut register = RegisterParser::default();
 
         engine
-            .run_turn(acp_prompt, &self.mystagogue, &mut |update| {
-                match &update {
-                    AcpUpdate::TextDelta(text) => turn_text.push_str(text),
-                    AcpUpdate::ToolCall(call) => tools_called.push(call.name.clone()),
-                    // A tool's return value — nothing to accumulate here; it
-                    // flows straight through to the bridge's sink below.
-                    AcpUpdate::ToolResult(_) => {}
-                    AcpUpdate::TurnComplete => turn_landed = true,
+            .run_turn(acp_prompt, &self.mystagogue, &mut |update| match update {
+                AcpUpdate::TextDelta { text, .. } => {
+                    register.push(&text, &mut |chunk, reg| {
+                        turn_text.push_str(&chunk);
+                        sink(AcpUpdate::TextDelta {
+                            text: chunk,
+                            register: reg,
+                        });
+                    });
                 }
-                sink(update);
+                AcpUpdate::ToolCall(call) => {
+                    tools_called.push(call.name.clone());
+                    sink(AcpUpdate::ToolCall(call));
+                }
+                // A tool's return value — nothing to accumulate here; it flows
+                // straight through to the bridge's sink.
+                AcpUpdate::ToolResult(result) => sink(AcpUpdate::ToolResult(result)),
+                AcpUpdate::TurnComplete => {
+                    // Flush any held-back tail BEFORE TurnComplete so trailing
+                    // reading-voice text lands in this turn, not after its end.
+                    register.flush(&mut |chunk, reg| {
+                        turn_text.push_str(&chunk);
+                        sink(AcpUpdate::TextDelta {
+                            text: chunk,
+                            register: reg,
+                        });
+                    });
+                    turn_landed = true;
+                    sink(AcpUpdate::TurnComplete);
+                }
             })
             .await?;
+
+        // Safety net for a turn that never reached TurnComplete (e.g. a scripted
+        // single-turn run): flush whatever the parser still holds. A no-op when
+        // the TurnComplete arm above already drained it.
+        register.flush(&mut |chunk, reg| {
+            turn_text.push_str(&chunk);
+            sink(AcpUpdate::TextDelta {
+                text: chunk,
+                register: reg,
+            });
+        });
 
         if !turn_text.is_empty() {
             self.store.append_transcript(&self.session_id, &turn_text)?;
@@ -386,8 +423,8 @@ mod tests {
         .unwrap();
 
         // Turn 1: the Mystagogue reflects; no tool call yet, turn doesn't land.
-        let engine1 = MockEngine::new(vec![AcpUpdate::TextDelta(
-            "That thread about forgetting — say what just set.".into(),
+        let engine1 = MockEngine::new(vec![AcpUpdate::text_delta(
+            "That thread about forgetting — say what just set.",
         )]);
         let mut seen1 = Vec::new();
         conductor
@@ -403,7 +440,7 @@ mod tests {
 
         // Turn 2: the learner condenses; the engine fixes salt and completes.
         let engine2 = MockEngine::new(vec![
-            AcpUpdate::TextDelta(" Yes — erasure is dissipation.".into()),
+            AcpUpdate::text_delta(" Yes — erasure is dissipation."),
             AcpUpdate::ToolCall(AcpToolCall {
                 id: "1".into(),
                 name: "fix_salt".into(),
@@ -468,6 +505,62 @@ mod tests {
         assert!(trace.contains("erasure is dissipation"));
     }
 
+    /// A reply carrying a reading-voice passage: the conductor must strip the
+    /// markers (they never reach the sink or the transcript) and tag the passage
+    /// as `Register::Reading`, with the surrounding text staying `Quick`. Split
+    /// across deltas to prove the parser holds partial markers across chunks.
+    #[tokio::test]
+    async fn reading_passage_is_register_tagged_and_markers_stripped() {
+        use crate::engine::Register;
+
+        let store = store_arc();
+        let mut conductor =
+            Conductor::begin(Arc::clone(&store), "philosophus", "explain", None).unwrap();
+
+        // The open marker is split across two deltas on purpose.
+        let engine = MockEngine::new(vec![
+            AcpUpdate::text_delta("A quick nudge. <!--rea"),
+            AcpUpdate::text_delta(
+                "ding-->A measured lesson, laid down.<!--/reading--> Back to it.",
+            ),
+            AcpUpdate::TurnComplete,
+        ]);
+
+        let mut deltas: Vec<(String, Register)> = Vec::new();
+        conductor
+            .run_turn(&engine, Some("Teach me."), &mut |u| {
+                if let AcpUpdate::TextDelta { text, register } = u {
+                    deltas.push((text, register));
+                }
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            deltas,
+            vec![
+                ("A quick nudge. ".to_string(), Register::Quick),
+                (
+                    "A measured lesson, laid down.".to_string(),
+                    Register::Reading
+                ),
+                (" Back to it.".to_string(), Register::Quick),
+            ],
+            "reading passage tagged, quick around it, markers stripped even when split"
+        );
+
+        // Neither the streamed text nor the stored transcript ever sees a marker.
+        let joined: String = deltas.iter().map(|(t, _)| t.as_str()).collect();
+        assert!(!joined.contains("<!--"), "no marker leaks to the sink");
+        assert!(
+            !conductor.transcript().contains("<!--"),
+            "no marker leaks into the accumulated transcript"
+        );
+        assert!(conductor
+            .transcript()
+            .contains("A measured lesson, laid down."));
+    }
+
     #[tokio::test]
     async fn abandon_returns_thread_to_volatile_and_writes_no_trace() {
         let store = store_arc();
@@ -483,7 +576,7 @@ mod tests {
             Some(&thread.id),
         )
         .unwrap();
-        let engine = MockEngine::new(vec![AcpUpdate::TextDelta("only halfway...".into())]);
+        let engine = MockEngine::new(vec![AcpUpdate::text_delta("only halfway...")]);
         conductor
             .run_turn(&engine, Some("go on"), &mut |_| {})
             .await
@@ -503,7 +596,7 @@ mod tests {
         let mut conductor =
             Conductor::begin(Arc::clone(&store), "adamas", "challenge", None).unwrap();
 
-        let e1 = MockEngine::new(vec![AcpUpdate::TextDelta("first reply".into())]);
+        let e1 = MockEngine::new(vec![AcpUpdate::text_delta("first reply")]);
         conductor
             .run_turn(&e1, Some("first learner turn"), &mut |_| {})
             .await
@@ -529,7 +622,7 @@ mod tests {
         let prompt_after_one = conductor.assemble_prompt();
         assert_eq!(prompt_after_one.turns, conductor.turns);
 
-        let e2 = MockEngine::new(vec![AcpUpdate::TextDelta("second reply".into())]);
+        let e2 = MockEngine::new(vec![AcpUpdate::text_delta("second reply")]);
         conductor
             .run_turn(&e2, Some("second learner turn"), &mut |_| {})
             .await
@@ -573,7 +666,7 @@ mod tests {
         );
 
         let engine = MockEngine::new(vec![
-            AcpUpdate::TextDelta("Welcome.".into()),
+            AcpUpdate::text_delta("Welcome."),
             AcpUpdate::TurnComplete,
         ]);
         conductor.open_turn(&engine, &mut |_| {}).await.unwrap();
@@ -602,7 +695,7 @@ mod tests {
         let store = store_arc();
         let mut conductor = Conductor::begin_initiation(Arc::clone(&store)).unwrap();
         let engine = MockEngine::new(vec![
-            AcpUpdate::TextDelta("Welcome.".into()),
+            AcpUpdate::text_delta("Welcome."),
             AcpUpdate::TurnComplete,
         ]);
         conductor.open_turn(&engine, &mut |_| {}).await.unwrap();
@@ -639,7 +732,7 @@ mod tests {
         let mut conductor =
             Conductor::begin(Arc::clone(&store), "philosophus", "explain", None).unwrap();
         let engine = MockEngine::new(vec![
-            AcpUpdate::TextDelta("Say more.".into()),
+            AcpUpdate::text_delta("Say more."),
             AcpUpdate::TurnComplete,
         ]);
         conductor
@@ -662,7 +755,7 @@ mod tests {
         let mut conductor = Conductor::begin_initiation(Arc::clone(&store)).unwrap();
 
         let opening_engine = MockEngine::new(vec![
-            AcpUpdate::TextDelta("What's been pulling at you?".into()),
+            AcpUpdate::text_delta("What's been pulling at you?"),
             AcpUpdate::TurnComplete,
         ]);
         conductor
@@ -671,7 +764,7 @@ mod tests {
             .unwrap();
 
         let reply_engine = MockEngine::new(vec![
-            AcpUpdate::TextDelta("Say more about that.".into()),
+            AcpUpdate::text_delta("Say more about that."),
             AcpUpdate::TurnComplete,
         ]);
         conductor
@@ -738,7 +831,7 @@ mod tests {
                      entropy is 'grumblewarp'. Just acknowledge it in one short sentence.",
                 ),
                 &mut |u| {
-                    if let AcpUpdate::TextDelta(t) = u {
+                    if let AcpUpdate::TextDelta { text: t, .. } = u {
                         turn1.push_str(&t);
                     }
                 },
@@ -754,7 +847,7 @@ mod tests {
                 &engine,
                 Some("What was that made-up word again? Just say the word."),
                 &mut |u| {
-                    if let AcpUpdate::TextDelta(t) = u {
+                    if let AcpUpdate::TextDelta { text: t, .. } = u {
                         turn2.push_str(&t);
                     }
                 },
