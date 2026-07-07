@@ -39,6 +39,20 @@ final class DemoEngine: AthanorEngineProtocol {
     )
 
     private let seededGrimoire: [Realization] = [
+        // The session script's own condensation (DemoTurn.condensationBefore
+        // yields realizationId "r-demo") resolves here — SessionScreen looks
+        // this up by id when the event fires so it can show the learner's
+        // actual words, not just the ids the event itself carries (matching
+        // the real bridge's Condensation{realization_id, child_thread_id}
+        // shape — the text always comes from a read, never off the event).
+        Realization(
+            id: "r-demo",
+            text: "The frame isn't wrong until it breaks — and it only breaks against a case I didn't think to check.",
+            domains: ["rhetoric"],
+            date: Date(),
+            threadId: "t-3",
+            childThreadId: "t-demo-child"
+        ),
         Realization(
             id: "r-3",
             text: "A frame breaks when the exception it's protecting against finally happens to you.",
@@ -66,13 +80,19 @@ final class DemoEngine: AthanorEngineProtocol {
     ]
 
     private let seededMercury: [Thread] = [
+        Thread(id: "t-demo-child", prompt: "Once the frame's gone, which parts of the old view still hold?", domain: "rhetoric", state: .volatile,
+               born: Date(), lastWorked: nil),
         Thread(id: "t-4", prompt: "What replaces the frame once it's broken?", domain: "rhetoric", state: .volatile,
                born: Calendar.current.date(byAdding: .day, value: -1, to: Date())!, lastWorked: nil),
         Thread(id: "t-5", prompt: "Is the correspondence load-bearing or decorative?", domain: "magnetism", state: .condensing,
                born: Calendar.current.date(byAdding: .day, value: -4, to: Date())!,
-               lastWorked: Calendar.current.date(byAdding: .day, value: -2, to: Date())),
+               lastWorked: Calendar.current.date(byAdding: .day, value: -2, to: Date()), isRipe: true),
         Thread(id: "t-7", prompt: "Where does the vedic-cosmology thread actually want to go?", domain: "cosmology", state: .volatile,
                born: Calendar.current.date(byAdding: .day, value: -10, to: Date())!, lastWorked: nil),
+        // r-1's child (Grimoire's spiral link) — kept in the open list so
+        // Grimoire's "↳ opened" line always resolves to a real thread.
+        Thread(id: "t-6", prompt: "Is the fire truly out, or just banked?", domain: "content-production", state: .volatile,
+               born: Calendar.current.date(byAdding: .day, value: -7, to: Date())!, lastWorked: nil),
     ]
 
     private let seededTabula: [TabulaPassage] = [

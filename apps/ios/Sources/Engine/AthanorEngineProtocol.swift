@@ -40,6 +40,11 @@ struct Thread: Identifiable, Equatable {
     var state: ThreadState
     var born: Date
     var lastWorked: Date?
+    /// Mirrors the plan's B2 `ripe_threads` read — "one thread of mercury
+    /// judged ripe" for the next session (spec: "The Mystagogue conducts
+    /// each session"). Not derived from `state`; the core decides ripeness
+    /// independently of the volatile/condensing/fixed/evaporated lifecycle.
+    var isRipe: Bool = false
 }
 
 struct TabulaPassage: Identifiable, Equatable {
