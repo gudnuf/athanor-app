@@ -18,6 +18,7 @@ use athanor_core::engine::{AcpUpdate, MockEngine, MystagogueEngine};
 use athanor_core::{Conductor, ConductorOutcome, Store};
 
 pub mod script;
+pub mod seed;
 
 /// Minutes recorded against today's tending when a session lands. The engine
 /// (core-identity §5) targets ~15-minute sessions; the dev harness records that

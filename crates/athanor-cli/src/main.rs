@@ -16,8 +16,9 @@ athanor-cli — dev harness over athanor-core
 
 USAGE:
     athanor-cli session [OPTIONS]
+    athanor-cli seed --from <ACADEMY_DIR> --db <PATH>
 
-OPTIONS:
+SESSION OPTIONS:
     --mask <MASK>     philosophus | adamas | solve   (default: philosophus)
     --mode <MODE>     trace | explain | predict | challenge | design  (default: explain)
     --thread <ID>     focal thread id (optional)
@@ -25,6 +26,11 @@ OPTIONS:
     --db <PATH>       sqlite path (default: in-memory)
     --goose           use the real engine (build with --features goose; reads
                       ANTHROPIC_API_KEY from the environment at runtime)
+
+SEED OPTIONS (lived-in demo — reads real academy markdown, writes a private db):
+    --from <DIR>      academy directory (domains/, grimoire/, STATE.md, profile/)
+    --db <PATH>       sqlite path to write (git-ignored; never commit it)
+
     -h, --help        print this help
 ";
 
@@ -59,6 +65,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     if command == "-h" || command == "--help" {
         print!("{USAGE}");
         return Ok(());
+    }
+    if command == "seed" {
+        return run_seed(args);
     }
     if command != "session" {
         return Err(format!("unknown command '{command}'\n\n{USAGE}").into());
@@ -109,6 +118,54 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!(
         "\n[session {} landed={} tools={:?}]",
         outcome.session_id, outcome.landed, outcome.tools_called
+    );
+    Ok(())
+}
+
+/// `athanor-cli seed --from <academy> --db <path>` — build the lived-in demo
+/// db. Winds a `SeedClock` back to each entry's date so history lands in the
+/// past, then translates the real academy markdown through the store APIs.
+/// Prints COUNTS ONLY (no personal content) so the output is safe to log.
+fn run_seed(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
+    use athanor_cli::seed::{seed_from, SeedClock};
+
+    let mut from: Option<String> = None;
+    let mut db_path: Option<String> = None;
+    while let Some(flag) = args.next() {
+        match flag.as_str() {
+            "--from" => from = Some(next_value(&mut args, "--from")?),
+            "--db" => db_path = Some(next_value(&mut args, "--db")?),
+            "-h" | "--help" => {
+                print!("{USAGE}");
+                return Ok(());
+            }
+            other => return Err(format!("unknown seed option '{other}'\n\n{USAGE}").into()),
+        }
+    }
+    let from = from.ok_or("seed requires --from <ACADEMY_DIR>")?;
+    let db_path = db_path.ok_or("seed requires --db <PATH>")?;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let clock = SeedClock::new(now);
+    let store = Store::open(&db_path, "seed")?.with_clock(clock.clock());
+
+    let report = seed_from(&store, &clock, std::path::Path::new(&from))?;
+    println!(
+        "seeded {db_path}:\n  domains={} realizations={} spiral_children={} \
+open_threads={} condensing={} correspondences={} tending_days={} \
+profile_sections={} skipped={}",
+        report.domains,
+        report.realizations,
+        report.spiral_children,
+        report.open_threads,
+        report.condensing_promoted,
+        report.correspondences,
+        report.tending_days,
+        report.profile_sections,
+        report.skipped,
     );
     Ok(())
 }
