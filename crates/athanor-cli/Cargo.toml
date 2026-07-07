@@ -1,0 +1,29 @@
+[package]
+name = "athanor-cli"
+version = "0.1.0"
+edition = "2021"
+
+# lib + bin split: all orchestration lives in the lib (testable, shell-thin);
+# the bin is argument parsing + a call into the lib. Business logic stays in
+# athanor-core (the rmp invariant).
+[lib]
+name = "athanor_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "athanor-cli"
+path = "src/main.rs"
+
+[features]
+default = []
+# Forwards to athanor-core's real engine embed; drives ANTHROPIC_API_KEY from
+# the environment at runtime. Off by default keeps the CLI hermetic.
+goose = ["athanor-core/goose"]
+
+[dependencies]
+athanor-core = { path = "../athanor-core" }
+tokio = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

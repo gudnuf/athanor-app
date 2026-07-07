@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/athanor-core", "crates/evals", "crates/ffi", "crates/stt"]
+members = ["crates/athanor-cli", "crates/athanor-core", "crates/evals", "crates/ffi", "crates/stt"]
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

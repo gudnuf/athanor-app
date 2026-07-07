@@ -443,6 +443,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "athanor-cli"
+version = "0.1.0"
+dependencies = [
+ "athanor-core",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "athanor-core"
 version = "0.1.0"
 dependencies = [
@@ -450,6 +459,7 @@ dependencies = [
  "futures",
  "goose",
  "goose-providers",
+ "parking_lot",
  "rmcp",
  "rusqlite",
  "serde",
