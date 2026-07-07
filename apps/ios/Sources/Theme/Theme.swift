@@ -75,17 +75,43 @@ enum Ember {
 
     // MARK: - Motion budget
     //
-    // Spent on exactly three things (rmp invariant — see the design spec's
-    // "Aesthetic" section). Everything else on screen is still. These are
-    // named constants so screens reach for a name, not a magic number; the
-    // actual animation curves land with the screens that use them (E2/E4/E5).
+    // Spent on EXACTLY three things (rmp invariant — see the design spec's
+    // "Aesthetic" section): the furnace fire, the bellows embers, and the
+    // condensation moment. Everything else is calm and instant — no chrome
+    // transitions, no tab-switch animation, no streaming-text fades. Screens
+    // compose from this vocabulary rather than inventing their own curves;
+    // if a screen wants motion for anything not named here, that's a design
+    // question to raise, not a curve to write inline.
     enum Motion {
+        /// Named durations — the only numbers screens should reach for.
+        enum Duration {
+            static let quick: Double = 0.12    // bellows embers reacting to live amplitude
+            static let slow: Double = 0.9      // condensation settling into salt
+            static let ambient: Double = 2.4   // furnace idle-breathing half-cycle
+        }
+
+        /// One spring family. Every discrete (non-ambient) motion in the
+        /// budget is this same curve at a different duration, so nothing
+        /// reads as a one-off. `dampingFraction` is fixed; only `duration`
+        /// varies per named use.
+        static func spring(_ duration: Double) -> Animation {
+            .spring(response: duration, dampingFraction: 0.86, blendDuration: 0)
+        }
+
         /// The Furnace screen's ember bed reflecting held heat (idle breathing).
-        static let furnaceFire = Animation.easeInOut(duration: 2.4).repeatForever(autoreverses: true)
+        /// Ambient and continuous, so it stays ease-based rather than spring —
+        /// springs don't loop cleanly; this is the one exception to the
+        /// "one spring family" rule, and it's a loop, not a transition.
+        static let furnaceFire = Animation.easeInOut(duration: Duration.ambient).repeatForever(autoreverses: true)
         /// The Bellows ember bed responding to live voice amplitude in a session.
-        static let bellowsEmbers = Animation.easeOut(duration: 0.12)
+        static let bellowsEmbers = spring(Duration.quick)
         /// The condensation moment — mercury fixing into salt (gold, once, on `fix_salt`).
-        static let condensation = Animation.easeInOut(duration: 0.9)
+        static let condensation = spring(Duration.slow)
+
+        /// Explicit "no animation" — reach for this everywhere else (tab
+        /// switches, streaming text appends, sheet content swaps). Naming it
+        /// makes the restraint a decision, not an oversight.
+        static let none: Animation? = nil
     }
 }
 
