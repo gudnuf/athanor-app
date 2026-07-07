@@ -40,10 +40,10 @@ struct InitiationScreen: View {
                 .foregroundStyle(Ember.C.heat)
             VStack(spacing: 16) {
                 ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                    initiationLine(line)
+                    initiationLine(line, formatted: true) // settled — render markdown
                 }
                 if let streaming {
-                    initiationLine(streaming)
+                    initiationLine(streaming, formatted: false) // in-flight — raw, no reflow
                 }
             }
             .padding(.horizontal, Ember.S.screenPad)
@@ -169,8 +169,10 @@ struct InitiationScreen: View {
         model.engine.sendTurn(trimmed)
     }
 
-    private func initiationLine(_ text: String) -> some View {
-        Text(text)
+    // Settled lines render the Mystagogue's inline markdown; the in-flight
+    // streaming line stays raw (same no-reflow reasoning as `StreamingText`).
+    private func initiationLine(_ text: String, formatted: Bool) -> some View {
+        Text(formatted ? .mystagogueInline(text) : AttributedString(text))
             .font(Ember.F.serif(21))
             .foregroundStyle(Ember.C.ink)
             .multilineTextAlignment(.center)

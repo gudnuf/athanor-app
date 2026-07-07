@@ -199,8 +199,11 @@ struct SessionScreen: View {
     private func messageView(_ message: SessionMessage) -> some View {
         switch message {
         case .teacher(_, let text, let register):
-            StreamingText(text: text, register: register)
+            // Settled reply — render the Mystagogue's markdown. The in-flight
+            // copy (the `"streaming"` id above) stays raw until this moment.
+            StreamingText(text: text, register: register, formatted: true)
         case .learner(_, let text):
+            // The learner's own words, always plain (whisper emits no markdown).
             Text(text)
                 .font(Ember.F.sans(15))
                 .foregroundStyle(Ember.C.muted)
