@@ -17,6 +17,11 @@ struct FurnaceShell: View {
     @State private var surface: FurnaceSurface
     @State private var showTabula = false
     @State private var sessionActive: Bool
+    /// Bumped when a session closes so the read surfaces re-fetch. The engine
+    /// reads (`furnaceState`/`mercury`/`grimoire`) aren't `@Observable`, so a
+    /// salt fixed or thread opened this session wouldn't otherwise show until a
+    /// relaunch — returning from a session must reflect what just changed.
+    @State private var readEpoch = 0
 
     init(model: AppModel) {
         self.model = model
@@ -38,6 +43,7 @@ struct FurnaceShell: View {
         TabView(selection: $surface) {
             GrimoireScreen(model: model)
                 .overlay(alignment: .topTrailing) { HomeMark(onHome: turnHome) }
+                .id(readEpoch)
                 .tag(FurnaceSurface.grimoire)
 
             FurnaceScreen(
@@ -47,13 +53,20 @@ struct FurnaceShell: View {
                 onGrimoire: { turn(to: .grimoire) },
                 onMercury: { turn(to: .mercury) }
             )
+            .id(readEpoch)
             .tag(FurnaceSurface.furnace)
 
             MercuryScreen(model: model)
                 .overlay(alignment: .topTrailing) { HomeMark(onHome: turnHome) }
+                .id(readEpoch)
                 .tag(FurnaceSurface.mercury)
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
+        // A closed session may have fixed salt / opened a thread — re-fetch the
+        // read surfaces so the change shows without a relaunch.
+        .onChange(of: sessionActive) { _, active in
+            if !active { readEpoch += 1 }
+        }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Ember.C.ground.ignoresSafeArea())
         .fullScreenCover(isPresented: $sessionActive) {
@@ -72,6 +85,31 @@ struct FurnaceShell: View {
                 try? await Task.sleep(for: .milliseconds(1100))
                 turn(to: next)
             }
+        }
+        .task {
+            // Recording QA hook only (`demo-arc=1`): drives the whole demo arc
+            // hands-free for one continuous screen recording — Furnace → turn to
+            // Mercury and back → the Tabula scroll → Tend the fire (the session's
+            // own `debug-turn=`/`debug-turn2=` inject Sam's live exchange, whose
+            // climax is a real fix_salt firing the gold condensation) → close →
+            // Grimoire with the new grain on top. Timings are generous so a live
+            // turn has room to stream. Never fires on a normal launch.
+            guard ProcessInfo.processInfo.arguments.contains("demo-arc=1") else { return }
+            func beat(_ ms: UInt64) async { try? await Task.sleep(for: .milliseconds(ms)) }
+            await beat(3800)
+            turn(to: .mercury)     // swipe to Sam's open questions
+            await beat(4200)
+            turn(to: .furnace)     // turn home
+            await beat(1800)
+            showTabula = true      // pull up the kindled scroll
+            await beat(4200)
+            showTabula = false
+            await beat(1600)
+            sessionActive = true   // Tend the fire → the live session + condensation
+            await beat(34000)      // room for the 2-turn live exchange to land salt
+            sessionActive = false  // close
+            await beat(2200)
+            turn(to: .grimoire)    // the new grain sits at the top
         }
     }
 
