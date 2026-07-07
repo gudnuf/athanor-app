@@ -96,6 +96,16 @@ impl Store {
         })
     }
 
+    /// Every tended day (`YYYY-MM-DD`), ascending. Read-only projection used to
+    /// make re-seeding idempotent (skip a day already recorded); the app reads
+    /// its recency window via `fire_state` instead.
+    pub fn tending_days(&self) -> Result<Vec<String>, CoreError> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare("SELECT day FROM tending ORDER BY day ASC")?;
+        let rows = stmt.query_map([], |r| r.get(0))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(CoreError::from)
+    }
+
     /// The most recent `limit` tended days, most-recent-first (`day DESC` —
     /// the `YYYY-MM-DD` format sorts lexicographically = chronologically).
     fn recent_tending(&self, limit: usize) -> Result<Vec<Tending>, CoreError> {
@@ -187,6 +197,19 @@ mod tests {
             .unwrap();
         let ids: Vec<String> = serde_json::from_str(&ids_json).unwrap();
         assert_eq!(ids, vec!["t1".to_string(), "t2".to_string()]);
+    }
+
+    #[test]
+    fn tending_days_lists_every_day_ascending() {
+        let store = Store::open_in_memory("d").unwrap();
+        assert!(store.tending_days().unwrap().is_empty());
+        store.record_tending("2026-07-06", 5, &[]).unwrap();
+        store.record_tending("2026-07-04", 5, &[]).unwrap();
+        store.record_tending("2026-07-06", 3, &[]).unwrap(); // same day merges
+        assert_eq!(
+            store.tending_days().unwrap(),
+            vec!["2026-07-04".to_string(), "2026-07-06".to_string()]
+        );
     }
 
     #[test]
