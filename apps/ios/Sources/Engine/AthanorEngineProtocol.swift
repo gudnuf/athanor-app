@@ -45,6 +45,22 @@ struct Thread: Identifiable, Equatable {
     /// each session"). Not derived from `state`; the core decides ripeness
     /// independently of the volatile/condensing/fixed/evaporated lifecycle.
     var isRipe: Bool = false
+    /// The realization this thread spiralled from, if it was born of a
+    /// `fix_salt` (the spiral back-link). Lets a surface show what a thread
+    /// opened from when its own prompt is still the bare placeholder.
+    var parentRealizationId: String? = nil
+
+    /// The core's default child-question (`DEFAULT_CHILD_QUESTION` in
+    /// athanor-core). A spiral child still carrying this hasn't been given a
+    /// real next-question yet, so surfaces show what it spiralled FROM instead
+    /// of a wall of identical placeholders. Kept in sync with core by hand —
+    /// it's a display heuristic, not a contract.
+    static let defaultChildQuestion = "what does this open?"
+
+    /// True when this is a spiral child still on the placeholder prompt.
+    var isPlaceholderSpiral: Bool {
+        prompt == Thread.defaultChildQuestion && parentRealizationId != nil
+    }
 }
 
 struct TabulaPassage: Identifiable, Equatable {

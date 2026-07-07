@@ -159,10 +159,14 @@ pub fn seed_from(
     // ── journal → realizations with spiral children (salt + mercury) ─────
     if let Some(journal) = read_opt(&academy_dir.join("grimoire").join("journal.md"))? {
         for entry in parse::parse_journal(&journal) {
-            if entry.body.is_empty() {
+            // The fixed salt is the entry prose WITHOUT its authored `opens:`
+            // spiral question (that becomes the child thread's prompt, not part
+            // of the salt text). Bodies with no `opens:` line are unchanged.
+            let salt_text = parse::strip_next_question(&entry.body);
+            if salt_text.is_empty() {
                 continue;
             }
-            if existing_realization_texts.contains(&entry.body) {
+            if existing_realization_texts.contains(&salt_text) {
                 report.skipped += 1;
                 continue;
             }
@@ -191,10 +195,15 @@ pub fn seed_from(
             let parent = store.open_thread(&parent_prompt, domain_id.as_deref(), None)?;
             existing_thread_prompts.insert(parent_prompt);
 
-            let child_q = parse::entry_open_questions(&entry.body);
-            let child_question = child_q.first().map(String::as_str);
+            // The spiral child's question: the entry's explicit `opens:` line if
+            // authored, else a legacy `open:` bullet, else `fix_salt`'s default.
+            let next_q = parse::entry_next_question(&entry.body);
+            let legacy_q = parse::entry_open_questions(&entry.body);
+            let child_question = next_q
+                .as_deref()
+                .or_else(|| legacy_q.first().map(String::as_str));
 
-            store.fix_salt(&parent.id, &entry.body, &domains, child_question)?;
+            store.fix_salt(&parent.id, &salt_text, &domains, child_question)?;
             report.realizations += 1;
             report.spiral_children += 1; // fix_salt always births exactly one
         }
@@ -540,6 +549,21 @@ mod tests {
         assert!(report.open_threads >= 5, "Sam's plain-language questions");
         assert!(report.tending_days >= 10, "~three weeks of sessions");
         assert!(report.correspondences >= 1, "cross-domain links");
+
+        // No wall of default child-questions: every spiral child carries an
+        // authored `opens:` question, and the salt never contains the line.
+        for t in store.open_threads().unwrap() {
+            assert_ne!(
+                t.prompt, "what does this open?",
+                "authored spiral questions"
+            );
+        }
+        for g in store.list_realizations().unwrap() {
+            assert!(
+                !g.realization.text.to_lowercase().contains("opens:"),
+                "the opens: line is stripped from the fixed salt"
+            );
+        }
 
         // The SAME parity kindles as the lived seed light Tabula I–V.
         let by_key = |k: &str| {

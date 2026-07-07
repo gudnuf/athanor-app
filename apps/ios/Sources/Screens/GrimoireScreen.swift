@@ -37,8 +37,13 @@ struct GrimoireScreen: View {
     }
 
     private func childPrompt(for realization: Realization) -> String? {
-        guard let childId = realization.childThreadId else { return nil }
-        return model.engine.mercury().first { $0.id == childId }?.prompt
+        guard let childId = realization.childThreadId,
+              let prompt = model.engine.mercury().first(where: { $0.id == childId })?.prompt
+        else { return nil }
+        // Hide the bare default placeholder — the grain already IS what it
+        // opened from, so "opened: what does this open?" is just noise. Once
+        // the Mystagogue gives the child a real question, it shows.
+        return prompt == Thread.defaultChildQuestion ? nil : prompt
     }
 }
 

@@ -169,6 +169,40 @@ pub fn entry_open_questions(body: &str) -> Vec<String> {
     collect_open_bullets(body)
 }
 
+/// An entry's explicit spiral follow-up: a single `opens: <question>` line
+/// (case-insensitive). This is the authored next-question for the child thread
+/// fix_salt births — distinct from, and preferred over, the older `open:`
+/// bullet block. `None` when the entry has no such line (e.g. the operator's
+/// real academy journal, whose children then fall back to the default). The
+/// line is stripped from the fixed salt by `strip_next_question`.
+pub fn entry_next_question(body: &str) -> Option<String> {
+    for line in body.lines() {
+        let t = line.trim();
+        if t.len() >= 6 && t[..6].eq_ignore_ascii_case("opens:") {
+            let q = strip_emphasis(t[6..].trim());
+            if !q.is_empty() {
+                return Some(q);
+            }
+        }
+    }
+    None
+}
+
+/// The entry body with any `opens:` line removed, so an authored spiral
+/// question never also appears inside the fixed salt text. Bodies without an
+/// `opens:` line come back unchanged (trimmed).
+pub fn strip_next_question(body: &str) -> String {
+    body.lines()
+        .filter(|l| {
+            let t = l.trim();
+            !(t.len() >= 6 && t[..6].eq_ignore_ascii_case("opens:"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
+}
+
 /// Correspondence links from a domain's correspondences.md. Each `## To <X>`
 /// block yields one link; `<X>` is cleaned of a leading "The " and any
 /// `(parenthetical)`; the note is the block's first non-empty prose paragraph.
@@ -409,6 +443,24 @@ mod tests {
                 "which face is north?".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn entry_next_question_reads_and_strips_the_opens_line() {
+        let body = "the loaf came out flat. the starter was asleep.\n\nopens: okay but how do I actually tell when it's awake enough?";
+        assert_eq!(
+            entry_next_question(body).as_deref(),
+            Some("okay but how do I actually tell when it's awake enough?")
+        );
+        let salt = strip_next_question(body);
+        assert!(salt.contains("the starter was asleep."));
+        assert!(
+            !salt.to_lowercase().contains("opens:"),
+            "salt is clean: {salt:?}"
+        );
+        // No opens: line -> body comes back unchanged (trimmed).
+        assert_eq!(entry_next_question("just prose."), None);
+        assert_eq!(strip_next_question("just prose.\n"), "just prose.");
     }
 
     #[test]

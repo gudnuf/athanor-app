@@ -15,6 +15,22 @@ struct MercuryScreen: View {
             .sorted { ($0.isRipe ? 0 : 1, $0.born) < ($1.isRipe ? 0 : 1, $1.born) }
     }
 
+    /// Realization id → its salt text, for showing what a placeholder spiral
+    /// child opened FROM instead of a wall of identical default questions.
+    private var salts: [String: String] {
+        Dictionary(
+            model.engine.grimoire().map { ($0.id, $0.text) },
+            uniquingKeysWith: { first, _ in first }
+        )
+    }
+
+    /// The salt a thread spiralled from — only when its own prompt is still the
+    /// bare placeholder (a real, authored question is shown as itself).
+    private func spiraledFrom(_ thread: Thread) -> String? {
+        guard thread.isPlaceholderSpiral, let pid = thread.parentRealizationId else { return nil }
+        return salts[pid]
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 3) {
@@ -33,7 +49,7 @@ struct MercuryScreen: View {
 
             List {
                 ForEach(threads) { thread in
-                    ThreadRow(thread: thread)
+                    ThreadRow(thread: thread, spiraledFrom: spiraledFrom(thread))
                         .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
                         .listRowBackground(Ember.C.ground)
                         .listRowSeparatorTint(Ember.C.hairline)
@@ -57,6 +73,9 @@ struct MercuryScreen: View {
 
 private struct ThreadRow: View {
     var thread: Thread
+    /// Set only for a placeholder spiral child: the salt it opened from. When
+    /// present, the row shows that lineage instead of the bare default question.
+    var spiraledFrom: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
@@ -69,9 +88,21 @@ private struct ThreadRow: View {
                     .textCase(.uppercase)
                     .foregroundStyle(Ember.C.mutedDim)
             }
-            Text(thread.prompt)
-                .font(Ember.F.serif(16.5))
-                .foregroundStyle(Ember.C.ink)
+            if let spiraledFrom {
+                // A thread the Mystagogue hasn't renamed yet — show its lineage
+                // (the salt it spiralled from) rather than a wall of identical
+                // "what does this open?" placeholders.
+                (Text("\(Ember.Glyph.grimoire)  opened from  ")
+                    .foregroundStyle(Ember.C.mutedDim)
+                    + Text("\u{201C}\(Self.excerpt(spiraledFrom))\u{201D}")
+                    .foregroundStyle(Ember.C.muted))
+                    .font(Ember.F.serif(15, italic: true))
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text(thread.prompt)
+                    .font(Ember.F.serif(16.5))
+                    .foregroundStyle(Ember.C.ink)
+            }
             Text(ageLabel)
                 .font(Ember.F.sans(12))
                 .foregroundStyle(Ember.C.mutedDim)
@@ -80,6 +111,17 @@ private struct ThreadRow: View {
         .padding(.horizontal, Ember.S.screenPad)
         .padding(.vertical, 18)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// A one-line excerpt of the parent salt: whitespace-collapsed, cut on a
+    /// word boundary near ~72 chars with an ellipsis, so the lineage reads as a
+    /// glance, not a paragraph.
+    private static func excerpt(_ text: String, limit: Int = 72) -> String {
+        let collapsed = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        if collapsed.count <= limit { return collapsed }
+        let clipped = collapsed.prefix(limit)
+        let body = clipped.lastIndex(of: " ").map { String(clipped[..<$0]) } ?? String(clipped)
+        return body.trimmingCharacters(in: .whitespaces) + "…"
     }
 
     private var ageLabel: String {

@@ -267,7 +267,8 @@ final class AthanorCoreEngine: AthanorEngineProtocol {
                 domain: t.domainName ?? "",
                 state: ThreadState(rawValue: t.state) ?? .volatile,
                 born: Date(timeIntervalSince1970: Double(t.born)),
-                lastWorked: t.lastWorked.map { Date(timeIntervalSince1970: Double($0)) }
+                lastWorked: t.lastWorked.map { Date(timeIntervalSince1970: Double($0)) },
+                parentRealizationId: t.parentRealizationId
             )
         }
     }
