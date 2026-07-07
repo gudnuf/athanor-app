@@ -100,7 +100,8 @@ impl Store {
     /// Mercury shows the whole open-question pool, not just the next ones to
     /// pick up.
     pub fn open_threads(&self) -> Result<Vec<Thread>, CoreError> {
-        let mut stmt = self.conn.prepare(&format!(
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&format!(
             "SELECT {THREAD_COLS} FROM threads
              WHERE deleted_at IS NULL AND state IN ('volatile', 'condensing')
              ORDER BY last_worked IS NOT NULL, last_worked ASC"
@@ -235,7 +236,7 @@ mod tests {
         let never_worked = store.open_thread("never", None, None).unwrap();
         let worked_recently = store.open_thread("recent", None, None).unwrap();
         store
-            .conn
+            .conn()
             .execute(
                 "UPDATE threads SET last_worked = 200 WHERE id = ?1",
                 rusqlite::params![worked_recently.id],
@@ -243,7 +244,7 @@ mod tests {
             .unwrap();
         let worked_long_ago = store.open_thread("long-ago", None, None).unwrap();
         store
-            .conn
+            .conn()
             .execute(
                 "UPDATE threads SET last_worked = 100 WHERE id = ?1",
                 rusqlite::params![worked_long_ago.id],

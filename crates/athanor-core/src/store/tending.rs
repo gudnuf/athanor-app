@@ -78,7 +78,7 @@ impl Store {
     pub fn fire_state(&self) -> Result<FireState, CoreError> {
         let wisdom_days = self.wisdom_days()?;
         let last_tended_day: Option<String> = self
-            .conn
+            .conn()
             .query_row(
                 "SELECT day FROM tending ORDER BY day DESC LIMIT 1",
                 [],
@@ -99,7 +99,8 @@ impl Store {
     /// The most recent `limit` tended days, most-recent-first (`day DESC` —
     /// the `YYYY-MM-DD` format sorts lexicographically = chronologically).
     fn recent_tending(&self, limit: usize) -> Result<Vec<Tending>, CoreError> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
             "SELECT day, minutes, thread_ids, created_at, device_id
              FROM tending ORDER BY day DESC LIMIT ?1",
         )?;

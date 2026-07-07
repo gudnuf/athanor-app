@@ -196,7 +196,8 @@ impl Store {
     /// `realization_domains` -> `domains`). Read-only helper for
     /// `list_realizations`.
     fn realization_domain_names(&self, id: &str) -> Result<Vec<String>, CoreError> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
             "SELECT d.name FROM realization_domains rd
              JOIN domains d ON d.id = rd.domain_id
              WHERE rd.realization_id = ?1 ORDER BY rd.rowid",
@@ -211,7 +212,8 @@ impl Store {
     /// Read-only projection — realizations are append-only/immutable, so this
     /// never races a writer.
     pub fn list_realizations(&self) -> Result<Vec<GrimoireEntry>, CoreError> {
-        let mut stmt = self.conn.prepare(&format!(
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&format!(
             "SELECT {REALIZATION_COLS} FROM realizations ORDER BY date ASC, created_at ASC"
         ))?;
         let rows = stmt.query_map([], realization_from_row)?;
