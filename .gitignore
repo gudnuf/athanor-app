@@ -38,3 +38,17 @@ apps/ios/project.local.yml
 
 # evals example output
 report.json
+
+# lived-in demo seed — generated from private ~/athanor material at runtime.
+# The DATA (SQLite db) is NEVER committed; only the translation script is
+# (which lives in crates/athanor-cli/src/seed/ — a SOURCE dir, NOT matched
+# here). Patterns target the generated artifact by anchored path and by
+# extension (see docs/research/lived-seed-mapping.md).
+/seeds/
+*.seed.sqlite
+*.seed.db
+*.seed.sqlite-journal
+lived-seed.sqlite
+lived-seed.sqlite-journal
+lived-seed.db
+athanor-seed.*
