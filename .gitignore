@@ -31,3 +31,6 @@ apps/ios/project.local.yml
 
 # simulator/QA capture evidence
 /screenshots/
+
+# evals example output
+report.json
