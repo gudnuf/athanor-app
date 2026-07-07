@@ -16,10 +16,18 @@ pub struct WhisperDecoder {
 impl WhisperDecoder {
     pub fn open(model: &Path, language: &str) -> Result<Self, SttError> {
         let mut params = WhisperContextParameters::default();
-        // Redundant with the `metal` cargo feature (default is already GPU-on when
-        // built with metal — the spike used bare defaults and Metal engaged); kept
-        // as an explicit, harmless assertion of intent, not a load-bearing call.
-        params.use_gpu(true);
+        // GPU (Metal) everywhere EXCEPT the iOS Simulator target. Factory
+        // evidence (E4 sim-unblock, confirmed reproducible 3/3): on the
+        // Simulator, ggml-metal's buffer allocation traps with
+        // EXC_BREAKPOINT/SIGTRAP inside `MTLSimDevice
+        // newBufferWithLength:options:pointer:copyBytes:deallocator:` —
+        // before any audio capture even starts. `target_abi = "sim"` is the
+        // aarch64-apple-ios-sim discriminator; real DEVICE Metal is a
+        // different code path and is not expected to hit this (confirmed by
+        // G2/G3 on-device gates, not this crate). CPU whisper on sim is
+        // dev-only — RTF is irrelevant there; the <0.5 RTF bar only applies
+        // on-device.
+        params.use_gpu(!cfg!(target_abi = "sim"));
         let ctx = WhisperContext::new_with_params(
             model
                 .to_str()
