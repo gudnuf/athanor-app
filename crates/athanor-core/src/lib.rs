@@ -12,6 +12,7 @@
 pub mod domain;
 pub mod error;
 pub mod ids;
+pub mod prompt;
 pub mod session;
 pub mod store;
 
