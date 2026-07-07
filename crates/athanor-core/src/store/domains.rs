@@ -25,7 +25,7 @@ impl Store {
     /// Upserts a domain by name, case-insensitively. Returns the existing row
     /// if a domain with that name (any case) already exists, else creates one.
     pub fn upsert_domain(&self, name: &str) -> Result<Domain, CoreError> {
-        if let Ok(existing) = self.conn.query_row(
+        if let Ok(existing) = self.conn().query_row(
             &format!(
                 "SELECT {DOMAIN_COLS} FROM domains WHERE name = ?1 COLLATE NOCASE AND deleted_at IS NULL"
             ),
@@ -36,7 +36,7 @@ impl Store {
         }
         let id = new_id();
         let now = self.now();
-        self.conn.execute(
+        self.conn().execute(
             "INSERT INTO domains (id, name, created_at, updated_at, device_id) VALUES (?1, ?2, ?3, ?3, ?4)",
             params![id, name, now, self.device_id],
         )?;
@@ -57,7 +57,7 @@ impl Store {
     ) -> Result<PullNote, CoreError> {
         let id = new_id();
         let now = self.now();
-        self.conn.execute(
+        self.conn().execute(
             "INSERT INTO pull_notes (id, domain_id, text, created_at, device_id) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![id, domain_id, text, now, self.device_id],
         )?;
@@ -71,7 +71,8 @@ impl Store {
     }
 
     pub fn list_domains(&self) -> Result<Vec<Domain>, CoreError> {
-        let mut stmt = self.conn.prepare(&format!(
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&format!(
             "SELECT {DOMAIN_COLS} FROM domains WHERE deleted_at IS NULL ORDER BY name COLLATE NOCASE"
         ))?;
         let rows = stmt.query_map([], domain_from_row)?;

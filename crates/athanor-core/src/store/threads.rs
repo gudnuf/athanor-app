@@ -41,7 +41,7 @@ impl Store {
     ) -> Result<Thread, CoreError> {
         let id = new_id();
         let now = self.now();
-        self.conn.execute(
+        self.conn().execute(
             "INSERT INTO threads (id, prompt, domain_id, state, born, last_worked, parent_realization_id, created_at, updated_at, device_id)
              VALUES (?1, ?2, ?3, 'volatile', ?4, NULL, ?5, ?4, ?4, ?6)",
             params![id, prompt, domain_id, now, parent_realization_id, self.device_id],
@@ -62,7 +62,7 @@ impl Store {
             )));
         }
         let now = self.now();
-        let changed = self.conn.execute(
+        let changed = self.conn().execute(
             "UPDATE threads SET state = ?1, updated_at = ?2 WHERE id = ?3 AND deleted_at IS NULL",
             params![state.as_str(), now, id],
         )?;
@@ -83,7 +83,8 @@ impl Store {
     /// single-user DB with a lifetime-of-one-person dataset size — see the
     /// note beside MIGRATIONS in migrations.rs.
     pub fn ripe_threads(&self, limit: usize) -> Result<Vec<Thread>, CoreError> {
-        let mut stmt = self.conn.prepare(&format!(
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&format!(
             "SELECT {THREAD_COLS} FROM threads
              WHERE deleted_at IS NULL AND state IN ('volatile', 'condensing')
              ORDER BY last_worked IS NOT NULL, last_worked ASC
@@ -94,7 +95,7 @@ impl Store {
     }
 
     pub fn get_thread(&self, id: &str) -> Result<Thread, CoreError> {
-        self.conn
+        self.conn()
             .query_row(
                 &format!("SELECT {THREAD_COLS} FROM threads WHERE id = ?1"),
                 params![id],

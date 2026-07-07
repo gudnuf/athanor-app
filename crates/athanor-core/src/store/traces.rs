@@ -11,7 +11,7 @@ impl Store {
     pub fn add_trace(&self, session_id: &str, text: &str) -> Result<(), CoreError> {
         let id = new_id();
         let now = self.now();
-        self.conn.execute(
+        self.conn().execute(
             "INSERT INTO traces (id, session_id, text, created_at, device_id) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![id, session_id, text, now, self.device_id],
         )?;
@@ -20,7 +20,7 @@ impl Store {
 
     /// Most recently created trace's text, or None if no traces yet.
     pub fn last_trace(&self) -> Result<Option<String>, CoreError> {
-        self.conn
+        self.conn()
             .query_row(
                 "SELECT text FROM traces ORDER BY created_at DESC, id DESC LIMIT 1",
                 [],

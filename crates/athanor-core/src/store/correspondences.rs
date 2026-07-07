@@ -12,7 +12,7 @@ impl Store {
     pub fn weave_domains(&self, a: &str, b: &str, note: &str) -> Result<Correspondence, CoreError> {
         let id = new_id();
         let now = self.now();
-        self.conn.execute(
+        self.conn().execute(
             "INSERT INTO correspondences (id, domain_a, domain_b, note, created_at, device_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![id, a, b, note, now, self.device_id],
         )?;

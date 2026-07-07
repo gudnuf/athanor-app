@@ -47,8 +47,8 @@ impl Store {
     /// A read-only helper (the immutable `realizations` writer, `fix_salt`, is
     /// the Task 9 extension lane; this only reads).
     fn recent_salt_texts(&self, limit: usize) -> Vec<(u64, String)> {
-        let mut stmt = match self
-            .conn
+        let conn = self.conn();
+        let mut stmt = match conn
             .prepare("SELECT date, text FROM realizations ORDER BY date DESC, id DESC LIMIT ?1")
         {
             Ok(s) => s,
@@ -162,7 +162,7 @@ fn profile_injection(store: &Store, focal_thread: Option<&str>, budget_min: u32)
 fn tool_availability_line() -> String {
     format!(
         "Tools available this session: {}.",
-        assets::TOOL_NAMES.join(", ")
+        assets::tool_names().join(", ")
     )
 }
 

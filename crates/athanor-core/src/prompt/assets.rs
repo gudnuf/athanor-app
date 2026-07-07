@@ -26,19 +26,15 @@ pub const MASK_IDS: [&str; 3] = ["philosophus", "adamas", "solve"];
 /// The five work modes.
 pub const MODE_IDS: [&str; 5] = ["trace", "explain", "predict", "challenge", "design"];
 
-/// The six Mystagogue tools the engine exposes for a session (Task 9 lane).
-/// Rendered as an availability line so the model knows its verbs. Kept as a
-/// local constant rather than importing `Mystagogue::tool_specs()` so this lane
-/// stays decoupled from the extension lane; the two lists are asserted equal
-/// where they meet.
-pub const TOOL_NAMES: [&str; 6] = [
-    "fix_salt",
-    "open_thread",
-    "evaporate_thread",
-    "kindle_passage",
-    "weave_domains",
-    "update_memory",
-];
+/// The Mystagogue tool names, in order, derived from the extension's real
+/// specs. Deriving (rather than a local const) means the assembled
+/// tool-availability line can never drift from the tools actually dispatched.
+pub fn tool_names() -> Vec<String> {
+    crate::Mystagogue::tool_specs()
+        .into_iter()
+        .map(|spec| spec.name)
+        .collect()
+}
 
 /// Returns the mask asset for a mask id, or `None` if unknown.
 pub fn mask_asset(mask: &str) -> Option<&'static str> {

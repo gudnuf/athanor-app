@@ -9,7 +9,7 @@ use super::Store;
 impl Store {
     pub fn get_profile_section(&self, section: &str) -> Result<String, CoreError> {
         let content: Option<String> = self
-            .conn
+            .conn()
             .query_row(
                 "SELECT content FROM profile WHERE section = ?1",
                 params![section],
@@ -21,7 +21,7 @@ impl Store {
 
     pub fn set_profile_section(&self, section: &str, content: &str) -> Result<(), CoreError> {
         let now = self.now();
-        self.conn.execute(
+        self.conn().execute(
             "INSERT INTO profile (section, content, updated_at) VALUES (?1, ?2, ?3)
              ON CONFLICT(section) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at",
             params![section, content, now],

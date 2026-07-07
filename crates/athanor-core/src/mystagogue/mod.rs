@@ -16,9 +16,7 @@
 //! realization AND its child thread, or neither). The model speaks in domain
 //! NAMES; the tools upsert names → ids at the boundary.
 
-mod acp;
-
-pub use acp::{AcpToolCall, AcpToolResult, AcpToolSpec, ToolDispatch};
+pub use crate::engine::{AcpToolCall, AcpToolResult, AcpToolSpec, ToolDispatch};
 
 use std::sync::Arc;
 
@@ -170,7 +168,7 @@ impl Mystagogue {
     }
 }
 
-#[async_trait::async_trait(?Send)]
+#[async_trait::async_trait]
 impl ToolDispatch for Mystagogue {
     async fn dispatch(&self, call: AcpToolCall) -> AcpToolResult {
         let value = match self.run(&call.name, call.args) {
@@ -226,10 +224,9 @@ mod tests {
     use super::*;
     use crate::domain::ThreadState;
 
-    // `Arc<Store>` is intentional per the plan's `Mystagogue::new` signature;
-    // `Store` is `!Sync` (single rusqlite `Connection`) and the dispatcher is
-    // single-threaded — see the INTEGRATION NOTE in acp.rs.
-    #[allow(clippy::arc_with_non_send_sync)]
+    // `Arc<Store>` per the plan's `Mystagogue::new` signature. `Store` is now
+    // `Send + Sync` (its `Connection` sits behind a `ReentrantMutex`), so the
+    // dispatcher satisfies the engine seam's `ToolDispatch: Send + Sync`.
     fn store_arc(store: Store) -> Arc<Store> {
         Arc::new(store)
     }

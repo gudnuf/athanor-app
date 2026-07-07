@@ -38,7 +38,7 @@ impl Store {
     ) -> Result<Session, CoreError> {
         let id = new_id();
         let now = self.now();
-        self.conn.execute(
+        self.conn().execute(
             "INSERT INTO sessions (id, thread_id, mask, mode, state, transcript, started_at, created_at, updated_at, device_id)
              VALUES (?1, ?2, ?3, ?4, 'open', '', ?5, ?5, ?5, ?6)",
             params![id, thread_id, mask, mode, now, self.device_id],
@@ -48,7 +48,7 @@ impl Store {
 
     pub fn append_transcript(&self, session_id: &str, chunk: &str) -> Result<(), CoreError> {
         let now = self.now();
-        let changed = self.conn.execute(
+        let changed = self.conn().execute(
             "UPDATE sessions SET transcript = transcript || ?1, updated_at = ?2 WHERE id = ?3",
             params![chunk, now, session_id],
         )?;
@@ -72,7 +72,7 @@ impl Store {
 
     fn mark_session_ended(&self, id: &str, state: &str) -> Result<Session, CoreError> {
         let now = self.now();
-        let changed = self.conn.execute(
+        let changed = self.conn().execute(
             "UPDATE sessions SET state = ?1, ended_at = ?2, updated_at = ?2 WHERE id = ?3",
             params![state, now, id],
         )?;
@@ -83,7 +83,7 @@ impl Store {
     }
 
     pub(crate) fn get_session(&self, id: &str) -> Result<Session, CoreError> {
-        self.conn
+        self.conn()
             .query_row(
                 &format!("SELECT {SESSION_COLS} FROM sessions WHERE id = ?1"),
                 params![id],

@@ -16,7 +16,7 @@ impl Store {
         source_id: Option<&str>,
     ) -> Result<bool, CoreError> {
         let now = self.now();
-        let changed = self.conn.execute(
+        let changed = self.conn().execute(
             "INSERT OR IGNORE INTO kindling (passage_key, first_kindled_at, source_id) VALUES (?1, ?2, ?3)",
             params![passage_key, now, source_id],
         )?;
@@ -24,9 +24,9 @@ impl Store {
     }
 
     pub fn kindled(&self) -> Result<Vec<String>, CoreError> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT passage_key FROM kindling ORDER BY first_kindled_at ASC")?;
+        let conn = self.conn();
+        let mut stmt =
+            conn.prepare("SELECT passage_key FROM kindling ORDER BY first_kindled_at ASC")?;
         let rows = stmt.query_map([], |r| r.get(0))?;
         rows.collect::<Result<Vec<_>, _>>().map_err(CoreError::from)
     }

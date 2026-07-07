@@ -20,7 +20,7 @@ impl Store {
     ) -> Result<(), CoreError> {
         let now = self.now();
         let existing: Option<(u32, String)> = self
-            .conn
+            .conn()
             .query_row(
                 "SELECT minutes, thread_ids FROM tending WHERE day = ?1",
                 params![day],
@@ -37,14 +37,14 @@ impl Store {
                     }
                 }
                 let ids_json = serde_json::to_string(&ids)?;
-                self.conn.execute(
+                self.conn().execute(
                     "UPDATE tending SET minutes = ?1, thread_ids = ?2 WHERE day = ?3",
                     params![prev_minutes + minutes, ids_json, day],
                 )?;
             }
             None => {
                 let ids_json = serde_json::to_string(thread_ids)?;
-                self.conn.execute(
+                self.conn().execute(
                     "INSERT INTO tending (day, minutes, thread_ids, created_at, device_id) VALUES (?1, ?2, ?3, ?4, ?5)",
                     params![day, minutes, ids_json, now, self.device_id],
                 )?;
@@ -57,7 +57,7 @@ impl Store {
     /// up today," not "how many minutes total."
     pub fn wisdom_days(&self) -> Result<u64, CoreError> {
         let count: i64 = self
-            .conn
+            .conn()
             .query_row("SELECT count(*) FROM tending", [], |r| r.get(0))?;
         Ok(count as u64)
     }
@@ -77,7 +77,7 @@ mod tests {
             .record_tending("2026-07-06", 5, &["t2".to_string()])
             .unwrap();
         let minutes: u32 = store
-            .conn
+            .conn()
             .query_row(
                 "SELECT minutes FROM tending WHERE day = '2026-07-06'",
                 [],
@@ -106,7 +106,7 @@ mod tests {
             .record_tending("2026-07-06", 1, &["t1".to_string(), "t2".to_string()])
             .unwrap();
         let ids_json: String = store
-            .conn
+            .conn()
             .query_row(
                 "SELECT thread_ids FROM tending WHERE day = '2026-07-06'",
                 [],

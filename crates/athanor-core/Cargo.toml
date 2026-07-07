@@ -10,6 +10,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
 async-trait = { workspace = true }
+parking_lot = { workspace = true }
 
 # Real goose embed, pulled in only behind `feature = "goose"` — see
 # src/engine/goose.rs and forge/athanor-app/spike-goose-ios-report.md (Gate 1).

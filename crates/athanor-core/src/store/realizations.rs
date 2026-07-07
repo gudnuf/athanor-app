@@ -64,7 +64,16 @@ impl Store {
         domain_names: &[String],
         child_question: Option<&str>,
     ) -> Result<Realization, CoreError> {
-        let tx = self.conn.unchecked_transaction()?;
+        // Hold the reentrant guard for the whole transaction. The nested `Store`
+        // calls below (get_thread, upsert_domain, open_thread, set_thread_state,
+        // kindle_passage) and the `self.conn()` statements re-lock reentrantly on
+        // this same thread and connection, so they participate in this one
+        // transaction. Binding the guard (rather than a temporary from
+        // `self.conn().unchecked_transaction()`) keeps `tx`'s borrow of the
+        // connection alive until `commit`; a plain non-reentrant `Mutex` would
+        // deadlock on the first nested lock.
+        let conn = self.conn();
+        let tx = conn.unchecked_transaction()?;
 
         // Parent must exist; the child thread inherits its domain.
         let parent = self.get_thread(thread_id)?;
@@ -83,7 +92,7 @@ impl Store {
         let now = self.now();
 
         // (a) the immutable realization row — child_thread_id NULL for now.
-        self.conn.execute(
+        self.conn().execute(
             "INSERT INTO realizations (id, text, date, thread_id, child_thread_id, created_at, device_id)
              VALUES (?1, ?2, ?3, ?4, NULL, ?3, ?5)",
             params![rid, text, now, thread_id, self.device_id],
@@ -92,7 +101,7 @@ impl Store {
         // Link domains (upsert names → ids so the model can speak in names).
         for name in domain_names {
             let domain = self.upsert_domain(name)?;
-            self.conn.execute(
+            self.conn().execute(
                 "INSERT OR IGNORE INTO realization_domains (realization_id, domain_id) VALUES (?1, ?2)",
                 params![rid, domain.id],
             )?;
@@ -106,7 +115,7 @@ impl Store {
         let child = self.open_thread(question, parent.domain_id.as_deref(), Some(&rid))?;
 
         // (c) close the spiral: back-link the realization to its child.
-        self.conn.execute(
+        self.conn().execute(
             "UPDATE realizations SET child_thread_id = ?1 WHERE id = ?2",
             params![child.id, rid],
         )?;
@@ -130,7 +139,7 @@ impl Store {
     }
 
     pub fn get_realization(&self, id: &str) -> Result<Realization, CoreError> {
-        self.conn
+        self.conn()
             .query_row(
                 &format!("SELECT {REALIZATION_COLS} FROM realizations WHERE id = ?1"),
                 params![id],
@@ -147,7 +156,7 @@ impl Store {
     /// The thread this realization gave birth to (the spiral's next question).
     pub fn realization_child_thread(&self, id: &str) -> Result<Thread, CoreError> {
         let child_id: Option<String> = self
-            .conn
+            .conn()
             .query_row(
                 "SELECT child_thread_id FROM realizations WHERE id = ?1",
                 params![id],
@@ -175,7 +184,8 @@ impl Store {
 
     /// Domain ids linked to a realization, in insertion order.
     pub fn realization_domains(&self, id: &str) -> Result<Vec<String>, CoreError> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
             "SELECT domain_id FROM realization_domains WHERE realization_id = ?1 ORDER BY rowid",
         )?;
         let rows = stmt.query_map(params![id], |r| r.get(0))?;
@@ -272,12 +282,12 @@ mod tests {
         assert!(matches!(err, CoreError::NotFound(_)));
         // neither a realization nor a stray child thread was left behind.
         let realization_count: i64 = store
-            .conn
+            .conn()
             .query_row("SELECT count(*) FROM realizations", [], |r| r.get(0))
             .unwrap();
         assert_eq!(realization_count, 0, "no realization row on rollback");
         let thread_count: i64 = store
-            .conn
+            .conn()
             .query_row("SELECT count(*) FROM threads", [], |r| r.get(0))
             .unwrap();
         assert_eq!(thread_count, 0, "no child thread on rollback");
@@ -320,7 +330,7 @@ mod tests {
         assert!(matches!(err, CoreError::BadState(_)));
         // exactly one realization, and no orphaned child from the rejected call.
         let realization_count: i64 = store
-            .conn
+            .conn()
             .query_row("SELECT count(*) FROM realizations", [], |r| r.get(0))
             .unwrap();
         assert_eq!(realization_count, 1, "the rejected call wrote nothing");
@@ -336,7 +346,7 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, CoreError::BadState(_)));
         let realization_count: i64 = store
-            .conn
+            .conn()
             .query_row("SELECT count(*) FROM realizations", [], |r| r.get(0))
             .unwrap();
         assert_eq!(
