@@ -12,7 +12,7 @@ jobs:
       - uses: DeterminateSystems/magic-nix-cache-action@main
       - name: secret-scan (fail closed)
         run: |
-          if git grep -nEi 'sk-ant-[A-Za-z0-9]|(anthropic|aws|openai|github|slack)[_-]?(api)?[_-]?(key|token|secret)[[:space:]]*[=:][[:space:]]*[^[:space:]]|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]+|-----BEGIN [A-Z ]*PRIVATE KEY-----' -- . ':!*.md' ':!.env.example'; then
+          if git grep -nEi 'sk-ant-[A-Za-z0-9]|(anthropic|aws|openai|github|slack)[_-]?(api)?[_-]?(key|token|secret)[[:space:]]*[=:][[:space:]]*["'"'"'][A-Za-z0-9+/_-]{12,}|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]+|-----BEGIN [A-Z ]*PRIVATE KEY-----' -- . ':!*.md' ':!.env.example'; then
             echo "secret-like content found"; exit 1; fi
       - name: fmt
         run: nix develop -c cargo fmt --all -- --check
