@@ -16,24 +16,42 @@ import SwiftUI
 // Both DemoEngine (today) and the real engine (post-D2) hand this view
 // accumulated text one delta at a time; this view doesn't know or care which
 // one is behind it.
+//
+// Register also carries visual shape (mockups-v2.html `.say-teacher` /
+// `.say-quick`): `serif` is the full-width reading voice (a lesson);
+// `quick` is a left-bordered, heat-tinted note (a conversational aside).
+// The register switch itself is instant — it's a style choice per message,
+// not a motion-budget item.
 struct StreamingText: View {
     let text: String
     let register: ReplyRegister
 
     var body: some View {
-        Text(text)
-            .font(font)
-            .foregroundStyle(Ember.C.ink)
-            .multilineTextAlignment(.leading)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .fixedSize(horizontal: false, vertical: true)
-            .animation(Ember.Motion.none, value: text)
-    }
-
-    private var font: Font {
-        switch register {
-        case .quick: return Ember.F.sans(15, weight: .medium)
-        case .serif: return Ember.F.serif(19)
+        Group {
+            switch register {
+            case .serif:
+                Text(text)
+                    .font(Ember.F.serif(19))
+                    .foregroundStyle(Ember.C.ink)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            case .quick:
+                Text(text)
+                    .font(Ember.F.sans(15, weight: .medium))
+                    .foregroundStyle(Ember.C.heatHot)
+                    .padding(.vertical, 9)
+                    .padding(.horizontal, 14)
+                    .background(Ember.C.heat.opacity(0.07))
+                    .overlay(alignment: .leading) {
+                        Rectangle().fill(Ember.C.heat.opacity(0.5)).frame(width: 2)
+                    }
+                    .clipShape(
+                        UnevenRoundedRectangle(topLeadingRadius: 0, bottomLeadingRadius: 0, bottomTrailingRadius: 10, topTrailingRadius: 10)
+                    )
+                    .frame(maxWidth: 280, alignment: .leading)
+            }
         }
+        .multilineTextAlignment(.leading)
+        .fixedSize(horizontal: false, vertical: true)
+        .animation(Ember.Motion.none, value: text)
     }
 }
