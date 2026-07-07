@@ -17,6 +17,10 @@ certs/
 # nix
 .direnv/
 
+# whisper model blobs (downloaded by shell/spike, never committed)
+*.bin
+spikes/whisper-ios/models/
+
 # iOS build artifacts
 apps/ios/build/
 apps/ios/DerivedData/
