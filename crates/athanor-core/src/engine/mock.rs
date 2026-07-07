@@ -47,7 +47,7 @@ impl MystagogueEngine for MockEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::{AcpToolResult, AcpToolSpec};
+    use crate::engine::{AcpRole, AcpToolResult, AcpToolSpec, AcpTurn};
     use std::sync::Mutex as StdMutex;
 
     #[derive(Default)]
@@ -75,7 +75,10 @@ mod tests {
     fn demo_prompt() -> AcpPrompt {
         AcpPrompt {
             system: "sys".into(),
-            user_turns: vec!["hi".into()],
+            turns: vec![AcpTurn {
+                role: AcpRole::Learner,
+                text: "hi".into(),
+            }],
             tools: vec![AcpToolSpec {
                 name: "open_thread".into(),
                 json_schema: serde_json::json!({}),

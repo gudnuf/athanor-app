@@ -22,7 +22,7 @@
 
 use std::sync::Arc;
 
-use crate::engine::{AcpPrompt, AcpUpdate, EngineError, MystagogueEngine};
+use crate::engine::{AcpPrompt, AcpRole, AcpTurn, AcpUpdate, EngineError, MystagogueEngine};
 use crate::error::CoreError;
 use crate::mystagogue::Mystagogue;
 use crate::prompt;
@@ -72,11 +72,13 @@ pub struct Conductor {
     mask: String,
     mode: String,
     thread_id: Option<String>,
-    /// Learner turns accumulated so far, oldest first — re-sent (via a
+    /// The full dialogue so far, oldest first, both sides — re-sent (via a
     /// freshly-assembled prompt) on every subsequent `run_turn` so a
     /// multi-turn session's prompt deterministically includes everything said
-    /// so far.
-    user_turns: Vec<String>,
+    /// so far, by BOTH the learner and the Mystagogue (SHOULD-FIX-4: without
+    /// the engine's own prior replies in here, turn 3 of a live session can
+    /// repeat or contradict turn 1's framing, because it never saw it).
+    turns: Vec<AcpTurn>,
     transcript: String,
     tools_called: Vec<String>,
     landed: bool,
@@ -129,7 +131,7 @@ impl Conductor {
             mask,
             mode,
             thread_id,
-            user_turns: Vec::new(),
+            turns: Vec::new(),
             transcript: String::new(),
             tools_called: Vec::new(),
             landed: false,
@@ -163,11 +165,12 @@ impl Conductor {
         self.mask == INITIATION_MASK && self.mode == INITIATION_MODE
     }
 
-    /// Assembles the prompt fresh from current store state + accumulated
-    /// learner turns. Called at the top of every `run_turn` so later turns
-    /// see whatever the session (or a prior turn's tool calls) has changed —
-    /// `assemble`/`assemble_initiation` are pure over store state, so this
-    /// stays deterministic given a fixed store + turn history.
+    /// Assembles the prompt fresh from current store state + the accumulated
+    /// dialogue history (both sides — see `turns`). Called at the top of
+    /// every `run_turn`/`open_turn` so later turns see whatever the session
+    /// (or a prior turn's tool calls) has changed — `assemble`/
+    /// `assemble_initiation` are pure over store state, so this stays
+    /// deterministic given a fixed store + turn history.
     fn assemble_prompt(&self) -> AcpPrompt {
         let plan = if self.is_initiation() {
             prompt::assemble_initiation(&self.store)
@@ -181,30 +184,30 @@ impl Conductor {
         };
         AcpPrompt {
             system: plan.system_prompt,
-            user_turns: self.user_turns.clone(),
+            turns: self.turns.clone(),
             tools: Mystagogue::tool_specs(),
         }
     }
 
-    /// Runs one turn: optionally appends `learner_turn` to the accumulated
-    /// turn history, re-assembles the prompt (so it includes that turn and
-    /// everything before it), then drives `engine.run_turn` against the
-    /// Mystagogue's tool dispatch, streaming every `AcpUpdate` to `sink` as it
-    /// arrives. Assistant text is appended to the store's transcript column
-    /// and to the conductor's own accumulator; tool names and the landed flag
-    /// accumulate across calls (`tools_called`/`landed` reflect the whole
-    /// session, not just this turn).
-    ///
-    /// Call this once for a single-turn session, or repeatedly — passing the
-    /// next learner turn each time — for a multi-turn one.
-    pub async fn run_turn(
+    /// Runs one turn: appends `incoming` (if any) to the accumulated turn
+    /// history, re-assembles the prompt (so it includes that turn and
+    /// everything before it, on both sides), then drives `engine.run_turn`
+    /// against the Mystagogue's tool dispatch, streaming every `AcpUpdate` to
+    /// `sink` as it arrives. Assistant text is appended to the store's
+    /// transcript column, to the conductor's own accumulator, AND to `turns`
+    /// (as a `Mystagogue` turn) so the *next* `run_turn` re-seeds it — this is
+    /// the SHOULD-FIX-4 fix: the engine sees its own prior replies, not just
+    /// the learner's turns. Tool names and the landed flag accumulate across
+    /// calls (`tools_called`/`landed` reflect the whole session, not just
+    /// this turn).
+    async fn run_turn_inner(
         &mut self,
         engine: &dyn MystagogueEngine,
-        learner_turn: Option<&str>,
+        incoming: Option<AcpTurn>,
         sink: &mut (dyn FnMut(AcpUpdate) + Send),
     ) -> Result<(), ConductorError> {
-        if let Some(turn) = learner_turn {
-            self.user_turns.push(turn.to_string());
+        if let Some(turn) = incoming {
+            self.turns.push(turn);
         }
         let acp_prompt = self.assemble_prompt();
 
@@ -225,11 +228,65 @@ impl Conductor {
 
         if !turn_text.is_empty() {
             self.store.append_transcript(&self.session_id, &turn_text)?;
+            self.turns.push(AcpTurn {
+                role: AcpRole::Mystagogue,
+                text: turn_text.clone(),
+            });
         }
         self.transcript.push_str(&turn_text);
         self.landed = turn_landed;
 
         Ok(())
+    }
+
+    /// Runs one turn from the learner's side: appends `learner_turn` (if any)
+    /// to the accumulated turn history, then drives it through the engine —
+    /// see `run_turn_inner` for the shared mechanics.
+    ///
+    /// Call this once for a single-turn session, or repeatedly — passing the
+    /// next learner turn each time — for a multi-turn one. Passing `None` is
+    /// only meaningful when `turns` is already non-empty (re-running against
+    /// accumulated history with no new learner input); an ordinary cold
+    /// open with nothing said yet should use `open_turn` instead, since the
+    /// `GooseEngine` requires the prompt to end on a learner turn.
+    pub async fn run_turn(
+        &mut self,
+        engine: &dyn MystagogueEngine,
+        learner_turn: Option<&str>,
+        sink: &mut (dyn FnMut(AcpUpdate) + Send),
+    ) -> Result<(), ConductorError> {
+        let incoming = learner_turn.map(|text| AcpTurn {
+            role: AcpRole::Learner,
+            text: text.to_string(),
+        });
+        self.run_turn_inner(engine, incoming, sink).await
+    }
+
+    /// Runs the ritual opening turn (BLOCKER-1 deep fix): the Mystagogue
+    /// speaks first, with no real learner utterance yet to answer. Initiation
+    /// is the one flow with no first-speaker channel otherwise — a real
+    /// session would just sit silent until the learner broke the ice, and the
+    /// `GooseEngine` errors on an empty turn history regardless (`agent.reply`
+    /// only accepts a user-authored message).
+    ///
+    /// The fix is honest about what's actually happening: rather than inject
+    /// a hardcoded string here, this seeds the ONE synthesized turn defined in
+    /// the versioned prompt pack itself (`initiation.md`'s
+    /// `<!-- ritual-opening-turn: ... -->` marker, `prompt::assets::
+    /// initiation_opening_turn`) — visible to anyone reading the prompt pack,
+    /// and exercisable by the eval personas the same way any other turn is.
+    /// Call this once, before any `run_turn`, when opening a session with
+    /// nothing said yet (in practice: `begin_initiation`).
+    pub async fn open_turn(
+        &mut self,
+        engine: &dyn MystagogueEngine,
+        sink: &mut (dyn FnMut(AcpUpdate) + Send),
+    ) -> Result<(), ConductorError> {
+        let opening = AcpTurn {
+            role: AcpRole::Learner,
+            text: prompt::assets::initiation_opening_turn().to_string(),
+        };
+        self.run_turn_inner(engine, Some(opening), sink).await
     }
 
     /// Synthesizes the one-line trace future sessions read (`Store::
@@ -438,15 +495,26 @@ mod tests {
             .run_turn(&e1, Some("first learner turn"), &mut |_| {})
             .await
             .unwrap();
-        assert_eq!(conductor.user_turns, vec!["first learner turn".to_string()]);
+        assert_eq!(
+            conductor.turns,
+            vec![
+                AcpTurn {
+                    role: AcpRole::Learner,
+                    text: "first learner turn".to_string()
+                },
+                AcpTurn {
+                    role: AcpRole::Mystagogue,
+                    text: "first reply".to_string()
+                },
+            ],
+            "the Mystagogue's own reply must be accumulated alongside the learner's turn \
+             (SHOULD-FIX-4) so the next run_turn re-seeds both"
+        );
 
         // Re-assembling now (before the second run_turn call) must already
-        // reflect the first accumulated turn.
+        // reflect the first accumulated exchange, both sides.
         let prompt_after_one = conductor.assemble_prompt();
-        assert_eq!(
-            prompt_after_one.user_turns,
-            vec!["first learner turn".to_string()]
-        );
+        assert_eq!(prompt_after_one.turns, conductor.turns);
 
         let e2 = MockEngine::new(vec![AcpUpdate::TextDelta("second reply".into())]);
         conductor
@@ -456,10 +524,24 @@ mod tests {
 
         let prompt_after_two = conductor.assemble_prompt();
         assert_eq!(
-            prompt_after_two.user_turns,
+            prompt_after_two.turns,
             vec![
-                "first learner turn".to_string(),
-                "second learner turn".to_string()
+                AcpTurn {
+                    role: AcpRole::Learner,
+                    text: "first learner turn".to_string()
+                },
+                AcpTurn {
+                    role: AcpRole::Mystagogue,
+                    text: "first reply".to_string()
+                },
+                AcpTurn {
+                    role: AcpRole::Learner,
+                    text: "second learner turn".to_string()
+                },
+                AcpTurn {
+                    role: AcpRole::Mystagogue,
+                    text: "second reply".to_string()
+                },
             ]
         );
         // deterministic: re-assembling again without a new turn is identical.
@@ -472,17 +554,153 @@ mod tests {
         let mut conductor = Conductor::begin_initiation(Arc::clone(&store)).unwrap();
         let prompt = conductor.assemble_prompt();
         assert!(prompt.system.contains("Initiation — the First Session"));
+        assert!(
+            prompt.turns.is_empty(),
+            "no turn has run yet — open_turn is what seeds the ritual opening"
+        );
 
         let engine = MockEngine::new(vec![
             AcpUpdate::TextDelta("Welcome.".into()),
             AcpUpdate::TurnComplete,
         ]);
-        conductor
-            .run_turn(&engine, None, &mut |_| {})
-            .await
-            .unwrap();
+        conductor.open_turn(&engine, &mut |_| {}).await.unwrap();
         assert!(conductor.landed());
+        assert_eq!(
+            conductor.turns,
+            vec![
+                AcpTurn {
+                    role: AcpRole::Learner,
+                    text: prompt::assets::initiation_opening_turn().to_string(),
+                },
+                AcpTurn {
+                    role: AcpRole::Mystagogue,
+                    text: "Welcome.".to_string(),
+                },
+            ],
+            "open_turn should seed the versioned ritual-opening marker as the driving \
+             turn, then accumulate the Mystagogue's reply alongside it"
+        );
         let outcome = conductor.close(DEFAULT_SESSION_MINUTES).unwrap();
         assert!(outcome.transcript.contains("Welcome."));
+    }
+
+    /// A second `run_turn` after `open_turn` must re-seed the ritual opening
+    /// AND the Mystagogue's first reply — a real initiation is a multi-turn
+    /// dialogue, and this is exactly the SHOULD-FIX-4 path applied to it.
+    #[tokio::test]
+    async fn open_turn_then_run_turn_accumulates_both_sides() {
+        let store = store_arc();
+        let mut conductor = Conductor::begin_initiation(Arc::clone(&store)).unwrap();
+
+        let opening_engine = MockEngine::new(vec![
+            AcpUpdate::TextDelta("What's been pulling at you?".into()),
+            AcpUpdate::TurnComplete,
+        ]);
+        conductor
+            .open_turn(&opening_engine, &mut |_| {})
+            .await
+            .unwrap();
+
+        let reply_engine = MockEngine::new(vec![
+            AcpUpdate::TextDelta("Say more about that.".into()),
+            AcpUpdate::TurnComplete,
+        ]);
+        conductor
+            .run_turn(&reply_engine, Some("I keep circling back to why iron forgets."), &mut |_| {})
+            .await
+            .unwrap();
+
+        assert_eq!(
+            conductor.turns,
+            vec![
+                AcpTurn {
+                    role: AcpRole::Learner,
+                    text: prompt::assets::initiation_opening_turn().to_string(),
+                },
+                AcpTurn {
+                    role: AcpRole::Mystagogue,
+                    text: "What's been pulling at you?".to_string(),
+                },
+                AcpTurn {
+                    role: AcpRole::Learner,
+                    text: "I keep circling back to why iron forgets.".to_string(),
+                },
+                AcpTurn {
+                    role: AcpRole::Mystagogue,
+                    text: "Say more about that.".to_string(),
+                },
+            ]
+        );
+    }
+
+    /// Live coherence check (SHOULD-FIX-4's real proof): a real 2-turn
+    /// session through the actual `GooseEngine`. Ignored by default; run
+    /// explicitly with a key:
+    /// `ANTHROPIC_API_KEY=… cargo test -p athanor-core --features goose -- --ignored`.
+    /// Skips gracefully (passes) when the key is unset. This does not assert
+    /// on the second reply's content (no LLM judge) — it prints the full
+    /// transcript so a human can eyeball whether turn 2 is contextually
+    /// continuous with turn 1, which `cargo test -- --ignored --nocapture`
+    /// surfaces directly.
+    #[cfg(feature = "goose")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore]
+    async fn live_two_turn_session_stays_coherent_across_turns() {
+        let Ok(key) = std::env::var("ANTHROPIC_API_KEY") else {
+            eprintln!("ANTHROPIC_API_KEY unset — skipping live test");
+            return;
+        };
+
+        let store = store_arc();
+        let mut conductor =
+            Conductor::begin(Arc::clone(&store), "philosophus", "explain", None).unwrap();
+        let engine = crate::engine::GooseEngine::new(key, None);
+
+        let mut turn1 = String::new();
+        conductor
+            .run_turn(
+                &engine,
+                Some(
+                    "Remember this exact detail for later: my favorite made-up word for \
+                     entropy is 'grumblewarp'. Just acknowledge it in one short sentence.",
+                ),
+                &mut |u| {
+                    if let AcpUpdate::TextDelta(t) = u {
+                        turn1.push_str(&t);
+                    }
+                },
+            )
+            .await
+            .expect("turn 1 should succeed");
+        println!("--- turn 1 (Mystagogue) ---\n{turn1}");
+        assert!(!turn1.is_empty(), "turn 1 must stream some reply text");
+
+        let mut turn2 = String::new();
+        conductor
+            .run_turn(
+                &engine,
+                Some("What was that made-up word again? Just say the word."),
+                &mut |u| {
+                    if let AcpUpdate::TextDelta(t) = u {
+                        turn2.push_str(&t);
+                    }
+                },
+            )
+            .await
+            .expect("turn 2 should succeed");
+        println!("--- turn 2 (Mystagogue) ---\n{turn2}");
+
+        // The real proof: turn 2 must reference what was established in turn
+        // 1 — before this fix, the engine never saw its own turn-1 reply, so
+        // the ONLY way it could get this right is if the coined word also
+        // happens to still be in the learner-turns-only history (it is, in
+        // the learner's own turn 1 — so this assertion is a floor, not a
+        // ceiling; the real proof is in the printed transcript above:
+        // turn 1 should show the Mystagogue actually engaging with/echoing
+        // 'grumblewarp' in its own words, which requires assistant history).
+        assert!(
+            turn2.to_lowercase().contains("grumblewarp"),
+            "turn 2 should recall the coined word from the exchange: {turn2:?}"
+        );
     }
 }

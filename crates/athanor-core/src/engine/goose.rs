@@ -21,7 +21,9 @@
 //! `fn`-pointer bridge, no child process — exactly the in-process seam the
 //! spike proved, mapped 1:1 onto our own `ToolDispatch` trait.
 
-use super::{AcpPrompt, AcpToolCall, AcpUpdate, EngineError, MystagogueEngine, ToolDispatch};
+use super::{
+    AcpPrompt, AcpRole, AcpToolCall, AcpUpdate, EngineError, MystagogueEngine, ToolDispatch,
+};
 use async_trait::async_trait;
 use std::sync::Arc;
 
@@ -139,18 +141,32 @@ impl GooseEngine {
                 .map_err(|e| EngineError::Other(format!("add_extension: {e}")))?;
         }
 
-        // Map the ACP prompt's user turns onto the session: everything before
-        // the last is prior history (seeded without inference); the last drives
-        // this turn. `AcpPrompt` carries no assistant history, so we seed the
-        // user turns only — the best faithful reconstruction available at the
-        // seam.
+        // Map the ACP prompt's full dialogue history onto the session:
+        // everything before the last turn is prior history, seeded onto the
+        // goose session with role preserved (SHOULD-FIX-4 — `AcpPrompt` now
+        // carries the Mystagogue's own prior replies, not just the learner's
+        // turns, so a live multi-turn session sees what it already said);
+        // the last turn drives this call to `agent.reply`. `reply` only
+        // accepts a user-authored message, so the prompt must end on a
+        // `Learner` turn — the Conductor guarantees this (every ordinary
+        // `run_turn` appends the learner's turn last; `open_turn` seeds a
+        // synthesized learner-arrival marker for the case where there is no
+        // real learner utterance yet, e.g. initiation's cold open).
         let (last_turn, prior_turns) = prompt
-            .user_turns
+            .turns
             .split_last()
-            .ok_or_else(|| EngineError::Other("run_turn: user_turns is empty".into()))?;
+            .ok_or_else(|| EngineError::Other("run_turn: turns is empty".into()))?;
+        if !matches!(last_turn.role, AcpRole::Learner) {
+            return Err(EngineError::Other(
+                "run_turn: the last turn must be from the learner".into(),
+            ));
+        }
 
         for turn in prior_turns {
-            let msg = Message::user().with_text(turn.clone());
+            let msg = match turn.role {
+                AcpRole::Learner => Message::user().with_text(turn.text.clone()),
+                AcpRole::Mystagogue => Message::assistant().with_text(turn.text.clone()),
+            };
             agent
                 .config
                 .session_manager
@@ -165,7 +181,7 @@ impl GooseEngine {
             max_turns: Some(50),
             retry_config: None,
         };
-        let user = Message::user().with_text(last_turn.clone());
+        let user = Message::user().with_text(last_turn.text.clone());
 
         // `reply` borrows `&agent` for the stream's lifetime; `handle_tool_result`
         // also takes `&self`, so both coexist as shared borrows — we can answer a
@@ -249,7 +265,7 @@ impl MystagogueEngine for GooseEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::{AcpToolResult, AcpToolSpec};
+    use crate::engine::{AcpToolResult, AcpToolSpec, AcpTurn};
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use async_trait::async_trait as async_trait_macro;
@@ -258,6 +274,7 @@ mod tests {
         stream_from_single_message, MessageStream, Provider, ProviderUsage, Usage,
     };
     use goose_providers::errors::ProviderError;
+    use rmcp::model::Role;
 
     // A ToolDispatch that records whether it was invoked and with what name,
     // and returns a canned value — our stand-in for Task 9's Mystagogue.
@@ -331,7 +348,10 @@ mod tests {
     fn salt_prompt() -> AcpPrompt {
         AcpPrompt {
             system: "You are the Mystagogue.".into(),
-            user_turns: vec!["I think I finally get it about heat.".into()],
+            turns: vec![AcpTurn {
+                role: AcpRole::Learner,
+                text: "I think I finally get it about heat.".into(),
+            }],
             tools: vec![AcpToolSpec {
                 name: "fix_salt".into(),
                 json_schema: serde_json::json!({
@@ -391,6 +411,161 @@ mod tests {
         );
     }
 
+    /// A provider that records the `messages` array from EVERY call it
+    /// receives and replies with fixed terminal text — for asserting what
+    /// history the engine seeded onto the goose session. Records every call,
+    /// not just the first, because `agent.reply` also issues an internal
+    /// title-generation call against the same provider; the test picks out
+    /// the actual chat-turn call by content rather than assuming call order.
+    #[derive(Default)]
+    struct RecordingProvider {
+        calls: std::sync::Mutex<Vec<Vec<Message>>>,
+    }
+
+    #[async_trait_macro]
+    impl Provider for RecordingProvider {
+        fn get_name(&self) -> &str {
+            "recording"
+        }
+
+        async fn stream(
+            &self,
+            model_config: &ModelConfig,
+            _system: &str,
+            messages: &[Message],
+            _tools: &[rmcp::model::Tool],
+        ) -> Result<MessageStream, ProviderError> {
+            self.calls.lock().unwrap().push(messages.to_vec());
+            let usage = ProviderUsage::new(model_config.model_name.clone(), Usage::default());
+            let msg = Message::assistant().with_text("acknowledged.");
+            Ok(stream_from_single_message(msg, usage))
+        }
+    }
+
+    /// SHOULD-FIX-4: a prompt whose history includes the Mystagogue's own
+    /// prior reply must seed that reply back onto the goose session as an
+    /// **assistant**-authored message (not folded into the user turns), so a
+    /// live multi-turn session sees what it already said.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn goose_engine_seeds_prior_turns_with_roles_preserved() {
+        let engine = GooseEngine::new("unused-in-canned-path".into(), Some("canned-model".into()));
+        let provider = Arc::new(RecordingProvider::default());
+        let dispatch = RecordingDispatch::default();
+
+        let prompt = AcpPrompt {
+            system: "sys".into(),
+            turns: vec![
+                AcpTurn {
+                    role: AcpRole::Learner,
+                    text: "first learner turn".into(),
+                },
+                AcpTurn {
+                    role: AcpRole::Mystagogue,
+                    text: "first mystagogue reply".into(),
+                },
+                AcpTurn {
+                    role: AcpRole::Learner,
+                    text: "second learner turn".into(),
+                },
+            ],
+            tools: vec![],
+        };
+
+        engine
+            .drive(
+                provider.clone(),
+                ModelConfig::new("canned-model"),
+                prompt,
+                &dispatch,
+                &mut |_| {},
+            )
+            .await
+            .expect("history-seeded round-trip should succeed");
+
+        let calls = provider.calls.lock().unwrap().clone();
+        assert!(!calls.is_empty(), "provider must have been invoked");
+        // The actual chat-turn call is whichever one carries the driving
+        // message ("second learner turn") — `agent.reply` also fires an
+        // internal title-generation call against the same provider, which
+        // this must not be confused with.
+        let chat_call = calls
+            .iter()
+            .find(|msgs| {
+                msgs.iter().any(|m| {
+                    m.content.iter().any(|c| {
+                        matches!(c, MessageContent::Text(t) if t.text == "second learner turn")
+                    })
+                })
+            })
+            .expect("one call should carry the driving user turn");
+
+        // goose's own agent loop appends extra content blocks to a message
+        // (e.g. a `<turn-context>` system-injected block alongside the real
+        // text) — collect every text block per message rather than assuming
+        // there's exactly one, and check membership rather than exact
+        // message-level equality.
+        let role_for_text = |wanted: &str| -> Option<Role> {
+            chat_call.iter().find_map(|m| {
+                let has_it = m.content.iter().any(
+                    |c| matches!(c, MessageContent::Text(t) if t.text == wanted),
+                );
+                has_it.then(|| m.role.clone())
+            })
+        };
+
+        assert_eq!(
+            role_for_text("first learner turn"),
+            Some(Role::User),
+            "learner turn should seed as a user message"
+        );
+        assert_eq!(
+            role_for_text("first mystagogue reply"),
+            Some(Role::Assistant),
+            "the Mystagogue's own prior reply should seed as an ASSISTANT message, not a \
+             user message — that's the whole point of the fix"
+        );
+        assert_eq!(
+            role_for_text("second learner turn"),
+            Some(Role::User),
+            "the final learner turn should drive the reply as a user message"
+        );
+    }
+
+    /// A prompt that ends on the Mystagogue's own turn (no trailing learner
+    /// turn) cannot drive `agent.reply` (which only accepts a user-authored
+    /// message) — the engine must reject it rather than silently mis-attribute
+    /// the turn.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn goose_engine_errors_when_prompt_does_not_end_on_a_learner_turn() {
+        let engine = GooseEngine::new("unused-in-canned-path".into(), Some("canned-model".into()));
+        let provider: Arc<dyn Provider> = Arc::new(RecordingProvider::default());
+        let dispatch = RecordingDispatch::default();
+
+        let prompt = AcpPrompt {
+            system: "sys".into(),
+            turns: vec![AcpTurn {
+                role: AcpRole::Mystagogue,
+                text: "an opening the learner never got to answer".into(),
+            }],
+            tools: vec![],
+        };
+
+        let result = engine
+            .drive(
+                provider,
+                ModelConfig::new("canned-model"),
+                prompt,
+                &dispatch,
+                &mut |_| {},
+            )
+            .await;
+
+        assert!(
+            result.is_err(),
+            "a prompt ending on a Mystagogue turn must be rejected, not silently misrouted"
+        );
+    }
+
     /// Live Anthropic round-trip. Ignored by default; run explicitly with a key:
     /// `ANTHROPIC_API_KEY=… cargo test -p athanor-core --features goose -- --ignored`.
     /// Skips gracefully (passes) when the key is unset.
@@ -406,7 +581,10 @@ mod tests {
         let dispatch = RecordingDispatch::default();
         let prompt = AcpPrompt {
             system: "You are a terse assistant. Answer in one short sentence.".into(),
-            user_turns: vec!["Say the single word: ready.".into()],
+            turns: vec![AcpTurn {
+                role: AcpRole::Learner,
+                text: "Say the single word: ready.".into(),
+            }],
             tools: vec![],
         };
 

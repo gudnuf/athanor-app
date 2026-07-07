@@ -155,6 +155,40 @@ async fn scripted_turn_fixes_salt_streams_condensation_then_reads_round_trip() {
     );
 }
 
+/// BLOCKER-1 deep fix: `begin_initiation` + `open()` runs the ritual opening
+/// turn — the Mystagogue speaks first, streaming a reply before any
+/// `send_turn` call, with no demo-string or tap-triggered kickoff involved.
+#[tokio::test]
+async fn begin_initiation_open_streams_the_mystagogues_first_reply_with_no_learner_input() {
+    let store = Arc::new(Store::open_in_memory("dev").unwrap());
+
+    let mock = MockEngine::new(vec![
+        AcpUpdate::TextDelta("Before anything else — what's been pulling at you?".into()),
+        AcpUpdate::TurnComplete,
+    ]);
+    let engine = AthanorEngine::with_engine(Arc::clone(&store), Arc::new(mock));
+
+    let session = engine.begin_initiation().unwrap();
+    let collector = Arc::new(Collector(Mutex::new(Vec::new())));
+    session.set_listener(collector.clone());
+
+    // No send_turn call happens before this — open() is the ONLY thing that
+    // drives the first turn.
+    session.open().await;
+
+    let events = collector.0.lock().unwrap().clone();
+    assert_eq!(events.len(), 2, "delta, complete: {events:?}");
+    assert!(
+        matches!(&events[0], SessionEvent::TextDelta { text, .. }
+            if text.contains("pulling at you")),
+        "the Mystagogue's opening line streams with no learner turn preceding it: {:?}",
+        events[0]
+    );
+    assert!(matches!(events[1], SessionEvent::TurnComplete));
+
+    session.close(15).await.unwrap();
+}
+
 #[tokio::test]
 async fn abandon_returns_the_thread_to_volatile() {
     let store = Arc::new(Store::open_in_memory("dev").unwrap());

@@ -1262,6 +1262,18 @@ public protocol SessionHandleProtocol: AnyObject, Sendable {
     func close(minutes: UInt32) async throws 
     
     /**
+     * Runs the ritual opening turn (BLOCKER-1 deep fix): the Mystagogue
+     * speaks first, primed by the versioned prompt pack's synthesized
+     * learner-arrival marker rather than any real learner utterance. Call
+     * once, right after `set_listener`, before any `send_turn` — in
+     * practice, only meaningful for a session opened via `begin_initiation`
+     * (initiation is the one flow with no other first-speaker channel; see
+     * `Conductor::open_turn`). Never panics across FFI: a failed turn (or a
+     * call after the session ended) surfaces as a `SessionEvent::Error`.
+     */
+    func `open`() async 
+    
+    /**
      * Drives one learner turn through the `Conductor`, streaming projected
      * `SessionEvent`s to the listener as `AcpUpdate`s arrive. Never panics
      * across FFI: a failed turn (or a call after the session ended) surfaces
@@ -1373,6 +1385,34 @@ open func close(minutes: UInt32)async throws   {
             freeFunc: ffi_ffi_rust_future_free_void,
             liftFunc: { $0 },
             errorHandler: FfiConverterTypeEngineError_lift
+        )
+}
+    
+    /**
+     * Runs the ritual opening turn (BLOCKER-1 deep fix): the Mystagogue
+     * speaks first, primed by the versioned prompt pack's synthesized
+     * learner-arrival marker rather than any real learner utterance. Call
+     * once, right after `set_listener`, before any `send_turn` — in
+     * practice, only meaningful for a session opened via `begin_initiation`
+     * (initiation is the one flow with no other first-speaker channel; see
+     * `Conductor::open_turn`). Never panics across FFI: a failed turn (or a
+     * call after the session ended) surfaces as a `SessionEvent::Error`.
+     */
+open func `open`()async   {
+    return
+        try!  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_ffi_fn_method_sessionhandle_open(
+                    self.uniffiCloneHandle()
+                    
+                )
+            },
+            pollFunc: ffi_ffi_rust_future_poll_void,
+            completeFunc: ffi_ffi_rust_future_complete_void,
+            freeFunc: ffi_ffi_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: nil
+            
         )
 }
     
@@ -2635,6 +2675,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_ffi_checksum_method_sessionhandle_close() != 51915) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ffi_checksum_method_sessionhandle_open() != 13903) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_ffi_checksum_method_sessionhandle_send_turn() != 12653) {

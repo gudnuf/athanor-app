@@ -87,7 +87,7 @@ pub async fn run_persona(persona: &Persona) -> ScenarioReport {
                 // everything); we still hand it the real tool specs.
                 let prompt = AcpPrompt {
                     system: String::new(),
-                    user_turns: Vec::new(),
+                    turns: Vec::new(),
                     tools: Mystagogue::tool_specs(),
                 };
 

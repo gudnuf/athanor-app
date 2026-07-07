@@ -14,6 +14,33 @@ pub const MASK_PHILOSOPHUS: &str = include_str!("../../prompts/masks/philosophus
 pub const MASK_ADAMAS: &str = include_str!("../../prompts/masks/adamas.md");
 pub const MASK_SOLVE: &str = include_str!("../../prompts/masks/solve.md");
 
+/// The delimiter `initiation.md` wraps its ritual-opening-turn marker in
+/// (`<!-- ritual-opening-turn: ... -->`). Kept as a parsing convention here so
+/// the marker's actual *content* — what the engine seeds as the synthesized
+/// learner-arrival turn — lives entirely in the versioned prompt pack, not as
+/// a string hardcoded in Rust (BLOCKER-1 deep fix: initiation has no other
+/// first-speaker channel, so the Conductor's `open_turn` needs *something* to
+/// seed as the driving turn; this is that something).
+const RITUAL_OPENING_MARKER_PREFIX: &str = "<!-- ritual-opening-turn: ";
+const RITUAL_OPENING_MARKER_SUFFIX: &str = " -->";
+
+/// Extracts the ritual-opening-turn marker text from `initiation.md`. Panics
+/// if the marker is missing or malformed — this is compiled-in prompt-pack
+/// content, not user input, so a missing marker is a build-time authoring bug
+/// that should fail loudly (mirrors the rest of this module's total-over-
+/// compiled-assets discipline).
+pub fn initiation_opening_turn() -> &'static str {
+    let start = INITIATION
+        .find(RITUAL_OPENING_MARKER_PREFIX)
+        .expect("initiation.md must define a <!-- ritual-opening-turn: ... --> marker")
+        + RITUAL_OPENING_MARKER_PREFIX.len();
+    let rest = &INITIATION[start..];
+    let end = rest
+        .find(RITUAL_OPENING_MARKER_SUFFIX)
+        .expect("initiation.md's ritual-opening-turn marker must be closed with ` -->`");
+    &rest[..end]
+}
+
 pub const MODE_TRACE: &str = include_str!("../../prompts/modes/trace.md");
 pub const MODE_EXPLAIN: &str = include_str!("../../prompts/modes/explain.md");
 pub const MODE_PREDICT: &str = include_str!("../../prompts/modes/predict.md");
@@ -55,5 +82,21 @@ pub fn mode_asset(mode: &str) -> Option<&'static str> {
         "challenge" => Some(MODE_CHALLENGE),
         "design" => Some(MODE_DESIGN),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn initiation_opening_turn_is_defined_and_nonempty() {
+        let marker = initiation_opening_turn();
+        assert!(!marker.trim().is_empty());
+        assert_eq!(marker, "[the learner arrives]");
+        // the marker text is also visible in the assembled asset verbatim
+        // (not just parsed out of it) — anyone reading initiation.md sees
+        // exactly what the engine seeds.
+        assert!(INITIATION.contains(marker));
     }
 }

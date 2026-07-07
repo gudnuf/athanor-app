@@ -119,56 +119,46 @@ impl SessionHandle {
 
         let store = Arc::clone(&self.store);
         let mut saw_fix_salt = false;
-
         let result = conductor
             .run_turn(
                 self.engine.as_ref(),
                 Some(&text),
-                &mut |update| match update {
-                    AcpUpdate::TextDelta(t) => emit(
-                        &listener,
-                        SessionEvent::TextDelta {
-                            text: t,
-                            register: DEFAULT_REGISTER.to_string(),
-                        },
-                    ),
-                    AcpUpdate::ToolCall(call) => {
-                        if call.name == "fix_salt" {
-                            saw_fix_salt = true;
-                        }
-                        emit(&listener, SessionEvent::ToolCall { kind: call.name });
-                    }
-                    AcpUpdate::TurnComplete => {
-                        // fix_salt's dispatch has landed by the time TurnComplete
-                        // streams (the engine awaits tool dispatch before it) — the
-                        // realization is readable. Emit Condensation ahead of the
-                        // TurnComplete so the ordering is delta*/toolcall/
-                        // condensation/complete.
-                        if saw_fix_salt {
-                            emit_condensation(&listener, &store);
-                            saw_fix_salt = false;
-                        }
-                        emit(&listener, SessionEvent::TurnComplete);
-                    }
-                },
+                &mut update_sink(&listener, &store, &mut saw_fix_salt),
             )
             .await;
+        finish(&listener, &store, saw_fix_salt, result);
+    }
 
-        match result {
-            // Degraded path: a fix_salt with no trailing TurnComplete still
-            // gets its Condensation (the dispatch landed regardless).
-            Ok(()) => {
-                if saw_fix_salt {
-                    emit_condensation(&listener, &store);
-                }
-            }
-            Err(e) => emit(
+    /// Runs the ritual opening turn (BLOCKER-1 deep fix): the Mystagogue
+    /// speaks first, primed by the versioned prompt pack's synthesized
+    /// learner-arrival marker rather than any real learner utterance. Call
+    /// once, right after `set_listener`, before any `send_turn` — in
+    /// practice, only meaningful for a session opened via `begin_initiation`
+    /// (initiation is the one flow with no other first-speaker channel; see
+    /// `Conductor::open_turn`). Never panics across FFI: a failed turn (or a
+    /// call after the session ended) surfaces as a `SessionEvent::Error`.
+    pub async fn open(&self) {
+        let listener = self.listener.lock().unwrap().clone();
+        let mut guard = self.conductor.lock().await;
+        let Some(conductor) = guard.as_mut() else {
+            emit(
                 &listener,
                 SessionEvent::Error {
-                    message: e.to_string(),
+                    message: "session already ended".to_string(),
                 },
-            ),
-        }
+            );
+            return;
+        };
+
+        let store = Arc::clone(&self.store);
+        let mut saw_fix_salt = false;
+        let result = conductor
+            .open_turn(
+                self.engine.as_ref(),
+                &mut update_sink(&listener, &store, &mut saw_fix_salt),
+            )
+            .await;
+        finish(&listener, &store, saw_fix_salt, result);
     }
 
     /// Lands the session: `close_session` (records tending — the only place
@@ -208,6 +198,68 @@ impl SessionHandle {
 fn emit(listener: &Option<Arc<dyn SessionEventListener>>, event: SessionEvent) {
     if let Some(l) = listener {
         l.on_event(event);
+    }
+}
+
+/// Builds the per-turn `AcpUpdate` sink shared by `send_turn` and `open`:
+/// projects deltas/tool-calls/completion to `SessionEvent`s. Emits the turn's
+/// `Condensation` ahead of `TurnComplete` (the ordering is delta*/toolcall/
+/// condensation/complete — the engine awaits tool dispatch before it streams
+/// `TurnComplete`, so the realization is already readable), tracking whether
+/// a `fix_salt` landed via `saw_fix_salt` so the caller's degraded-path check
+/// (a `fix_salt` with no trailing `TurnComplete`) knows whether it already
+/// fired.
+fn update_sink<'a>(
+    listener: &'a Option<Arc<dyn SessionEventListener>>,
+    store: &'a Store,
+    saw_fix_salt: &'a mut bool,
+) -> impl FnMut(AcpUpdate) + Send + 'a {
+    move |update| match update {
+        AcpUpdate::TextDelta(t) => emit(
+            listener,
+            SessionEvent::TextDelta {
+                text: t,
+                register: DEFAULT_REGISTER.to_string(),
+            },
+        ),
+        AcpUpdate::ToolCall(call) => {
+            if call.name == "fix_salt" {
+                *saw_fix_salt = true;
+            }
+            emit(listener, SessionEvent::ToolCall { kind: call.name });
+        }
+        AcpUpdate::TurnComplete => {
+            if *saw_fix_salt {
+                emit_condensation(listener, store);
+                *saw_fix_salt = false;
+            }
+            emit(listener, SessionEvent::TurnComplete);
+        }
+    }
+}
+
+/// Shared tail of `send_turn`/`open`: emits the turn's `Condensation` (if a
+/// `fix_salt` landed and `TurnComplete` never streamed — the degraded path,
+/// dispatch still landed regardless) or an `Error` event, given the
+/// `Conductor::run_turn`/`open_turn` result.
+fn finish(
+    listener: &Option<Arc<dyn SessionEventListener>>,
+    store: &Store,
+    saw_fix_salt: bool,
+    result: Result<(), athanor_core::conductor::ConductorError>,
+) {
+    match result {
+        Ok(()) => {
+            if saw_fix_salt {
+                emit_condensation(listener, store);
+            }
+        }
+        Err(e) => emit(
+            listener,
+            SessionEvent::Error {
+                message: e.to_string(),
+            },
+        ),
     }
 }
 

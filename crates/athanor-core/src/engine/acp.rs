@@ -10,12 +10,32 @@
 
 use serde_json::Value;
 
-/// One turn's worth of input to the engine: system prompt, the user-visible
-/// turns so far, and the tools available for this turn.
+/// Who spoke a given [`AcpTurn`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AcpRole {
+    /// The human on the other end of the session.
+    Learner,
+    /// The engine's own prior reply, fed back so a multi-turn session can
+    /// see what it already said (SHOULD-FIX-4: without this, the model
+    /// re-derives each turn from the learner's turns + store state alone,
+    /// and can repeat or contradict its own earlier framing).
+    Mystagogue,
+}
+
+/// One turn of dialogue, tagged with who said it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AcpTurn {
+    pub role: AcpRole,
+    pub text: String,
+}
+
+/// One turn's worth of input to the engine: system prompt, the full dialogue
+/// history so far (both sides — see [`AcpRole`]), and the tools available for
+/// this turn.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AcpPrompt {
     pub system: String,
-    pub user_turns: Vec<String>,
+    pub turns: Vec<AcpTurn>,
     pub tools: Vec<AcpToolSpec>,
 }
 

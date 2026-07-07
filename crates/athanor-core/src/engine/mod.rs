@@ -10,7 +10,7 @@ mod mock;
 #[cfg(feature = "goose")]
 mod goose;
 
-pub use acp::{AcpPrompt, AcpToolCall, AcpToolResult, AcpToolSpec, AcpUpdate};
+pub use acp::{AcpPrompt, AcpRole, AcpToolCall, AcpToolResult, AcpToolSpec, AcpTurn, AcpUpdate};
 pub use mock::MockEngine;
 
 #[cfg(feature = "goose")]

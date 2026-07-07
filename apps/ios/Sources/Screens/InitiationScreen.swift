@@ -55,15 +55,13 @@ struct InitiationScreen: View {
             if canFinish {
                 enterFurnaceButton
             } else if model.engine.isReal {
-                // TODO(core, queued with the assistant-history work): the
-                // Mystagogue should speak first here (a real cold-open turn
-                // the Conductor injects), so the learner never has to be the
-                // one to break the silence. Not attempted in this fix —
-                // it needs an AcpPrompt/Conductor change (core-side), out of
-                // scope for a Swift fix lane. Until then: the learner must
-                // proactively type/speak, and that's the honest state of the
-                // real path — better than the alternative (a demo string
-                // masquerading as their first words to a live model).
+                // The Mystagogue now speaks first on its own (BLOCKER-1 deep
+                // fix): `beginInitiation()` fires the Conductor's ritual
+                // opening turn before this screen ever renders `realInput`,
+                // so by the time the learner sees this affordance, the
+                // silence has already been broken from the other side.
+                // `realInput` is still what lets THEM respond — typed/voice,
+                // never a synthetic kickoff string.
                 realInput
             } else {
                 demoBeginButton

@@ -108,8 +108,18 @@ final class AthanorCoreEngine: AthanorEngineProtocol {
         attach(try engine.beginSession(mask: nil, mode: nil, threadId: threadId))
     }
 
+    // BLOCKER-1 deep fix: initiation has no other first-speaker channel — the
+    // Mystagogue must open the exchange itself. `open()` runs the Conductor's
+    // ritual-opening turn (core-side: `Conductor::open_turn`, seeded from the
+    // versioned prompt pack, never a hardcoded Swift string) and streams its
+    // reply through the same listener `attach` just wired up. Fire-and-forget,
+    // mirroring `sendTurn`'s own Task pattern — the screen just observes the
+    // stream; it never has to tap anything to make the Mystagogue speak.
     func beginInitiation() throws -> AsyncStream<SessionEvent> {
-        attach(try engine.beginInitiation())
+        let handle = try engine.beginInitiation()
+        let stream = attach(handle)
+        Task { await handle.open() }
+        return stream
     }
 
     private func attach(_ handle: AthanorCoreFFI.SessionHandle) -> AsyncStream<SessionEvent> {
