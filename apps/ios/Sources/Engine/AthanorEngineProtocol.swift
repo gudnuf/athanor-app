@@ -94,6 +94,10 @@ enum ReplyRegister: Equatable {
 enum SessionEvent: Equatable {
     case textDelta(String, register: ReplyRegister)
     case toolCall(kind: String)
+    /// The session's current `(mask, mode)` register (lane 13) — surfaced at the
+    /// top of a turn when it changes (the opening pair, or the new pair after a
+    /// quiet mid-session shift or a learner pin). Drives the honest header.
+    case maskShifted(mask: String, mode: String)
     case condensation(realizationId: String, childThreadId: String, text: String)
     case turnComplete
     case error(message: String)
@@ -119,6 +123,16 @@ protocol AthanorEngineProtocol: AnyObject {
 
     /// Send one learner turn (voice-finalized text or typed fallback).
     func sendTurn(_ text: String)
+
+    /// The session's opening register — for the header's first, truthful paint
+    /// before any `maskShifted` event arrives. `("philosophus", "explain")` by
+    /// default (what a nil-mask session opens under).
+    func currentMask() -> String
+    func currentMode() -> String
+
+    /// The escape hatch (lane 13): the learner pins a mask for the rest of the
+    /// session. The Mystagogue's `shift_mask` then no-ops until the session ends.
+    func pinMask(_ mask: String)
 
     /// Close the session cleanly (persists transcript, closes/abandons thread).
     func endSession(abandon: Bool) async

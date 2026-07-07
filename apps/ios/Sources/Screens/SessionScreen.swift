@@ -15,6 +15,15 @@ struct SessionScreen: View {
     @State private var streamingText = ""
     @State private var streamingRegister: ReplyRegister = .quick
     @State private var isStreaming = false
+
+    /// The session's live register (lane 13) — the honest header. Seeded from the
+    /// engine's opening pair, then moved by `.maskShifted` events as the
+    /// Mystagogue shifts (or the learner pins). Never a hardcoded placeholder.
+    @State private var currentMask = "philosophus"
+    @State private var currentMode = "explain"
+    /// The subtle escape hatch: tapping the mask name opens a small picker that
+    /// pins a mask for the rest of the session.
+    @State private var showMaskPicker = false
     @State private var listening = true
     @State private var showKeyboard = false
     @State private var typedText = ""
@@ -128,8 +137,21 @@ struct SessionScreen: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Ember.C.ground.ignoresSafeArea())
+        .sheet(isPresented: $showMaskPicker) {
+            MaskPicker(current: currentMask, onChoose: pinMask)
+                .presentationDetents([.height(280)])
+                .presentationBackground(Ember.C.ground)
+        }
         .task { await begin() }
         .task { await beginRealBellows() }
+        .task {
+            // QA/screenshot hook only (same launch-arg family as `screen=` /
+            // `autoplay=`): open the mask picker after a beat so the escape
+            // hatch can be captured. Never fires on a normal launch.
+            guard ProcessInfo.processInfo.arguments.contains("mask-picker=1") else { return }
+            try? await Task.sleep(for: .milliseconds(900))
+            showMaskPicker = true
+        }
         .task {
             // Screenshot/QA automation hook only (mirrors the same pattern in
             // InitiationScreen) — taps the bed on a timer so the full script,
@@ -172,13 +194,17 @@ struct SessionScreen: View {
     private var header: some View {
         VStack(spacing: 10) {
             HStack(spacing: 9) {
-                // Placeholder mask/mode indicator — the real session's
-                // SessionPlan{mask,mode} hasn't surfaced through the engine
-                // seam yet (lands with C1/C2); this is cosmetic chrome only.
+                // The honest register (lane 13): the mask the Mystagogue is
+                // actually wearing, moved live by shift_mask. The mask NAME is a
+                // subtle escape hatch — tap to pin one for the session. Nothing
+                // else advertises the mechanism.
                 Text(Ember.Glyph.fireMask).foregroundStyle(Ember.C.heat)
-                Text("ADAMAS").foregroundStyle(Ember.C.ink)
+                Button { showMaskPicker = true } label: {
+                    Text(currentMask).foregroundStyle(Ember.C.ink)
+                }
+                .buttonStyle(.plain)
                 Text("·").foregroundStyle(Ember.C.mutedDim)
-                Text("challenge").foregroundStyle(Ember.C.muted)
+                Text(currentMode).foregroundStyle(Ember.C.muted)
                 Spacer()
                 Button("Close", action: close)
                     .foregroundStyle(Ember.C.heat)
@@ -235,6 +261,15 @@ struct SessionScreen: View {
         model.engine.sendTurn("(bellows: demo utterance)")
     }
 
+    /// The escape hatch chose a mask: pin it on the engine (the Mystagogue's
+    /// shift_mask no-ops for the rest of the session) and reflect it in the
+    /// header at once. Closing the picker is the sheet's own dismissal.
+    private func pinMask(_ mask: String) {
+        model.engine.pinMask(mask)
+        currentMask = mask
+        showMaskPicker = false
+    }
+
     private func submitTyped() {
         let trimmed = typedText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -283,6 +318,10 @@ struct SessionScreen: View {
             sessionError = "The fire wouldn't catch just now. Close and try again."
             return
         }
+        // Seed the header with the session's opening register so it's truthful
+        // from the first paint; `.maskShifted` events move it from here.
+        currentMask = model.engine.currentMask()
+        currentMode = model.engine.currentMode()
         // DemoEngine's canned script only advances on a `sendTurn` call, so a
         // synthetic kickoff plays its opening line with no real interaction
         // yet. The REAL engine's Conductor opens the Socratic turn itself
@@ -344,6 +383,11 @@ struct SessionScreen: View {
                 isStreaming = false
                 streamingText = ""
                 sessionError = "The Mystagogue lost the thread for a moment. Say it again when you're ready."
+            case .maskShifted(let mask, let mode):
+                // The register moved — update the header quietly. No motion
+                // beyond the plain text transition (the shift is the signal).
+                currentMask = mask
+                currentMode = mode
             case .toolCall:
                 break
             }
@@ -578,6 +622,72 @@ private struct SaltCard: View {
         .padding(16)
         .background(Ember.C.raised, in: RoundedRectangle(cornerRadius: 14))
         .overlay(RoundedRectangle(cornerRadius: 14).stroke(Ember.C.gold.opacity(0.3), lineWidth: 1))
+    }
+}
+
+// MARK: - The mask escape hatch
+
+/// The subtle escape hatch (lane 13): a calm, ceremony-free picker of the three
+/// masks. Choosing one PINS it — the Mystagogue stops shifting the register on
+/// its own for the rest of the session. The mechanism is otherwise unadvertised;
+/// you reach this only by tapping the header's mask name.
+private struct MaskPicker: View {
+    /// One row per mask: the id the engine pins on, and a one-line gloss.
+    private static let masks: [(id: String, gloss: String)] = [
+        ("philosophus", "The midwife — only asks."),
+        ("adamas", "The diamond — presses, holds rigor."),
+        ("solve", "The frame-breaker — enters when stuck."),
+    ]
+
+    let current: String
+    let onChoose: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Choose a voice")
+                .font(Ember.F.sans(11, weight: .bold))
+                .tracking(1.2)
+                .textCase(.uppercase)
+                .foregroundStyle(Ember.C.mutedDim)
+                .padding(.bottom, 4)
+
+            ForEach(Self.masks, id: \.id) { mask in
+                Button {
+                    onChoose(mask.id)
+                } label: {
+                    HStack(spacing: 10) {
+                        Text(Ember.Glyph.fireMask)
+                            .foregroundStyle(mask.id == current ? Ember.C.heat : Ember.C.mutedDim)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(mask.id)
+                                .font(Ember.F.sans(15, weight: .semibold))
+                                .textCase(.uppercase)
+                                .tracking(0.8)
+                                .foregroundStyle(Ember.C.ink)
+                            Text(mask.gloss)
+                                .font(Ember.F.serif(13))
+                                .italic()
+                                .foregroundStyle(Ember.C.muted)
+                        }
+                        Spacer()
+                        if mask.id == current {
+                            Text("current")
+                                .font(Ember.F.sans(10, weight: .bold))
+                                .tracking(1)
+                                .textCase(.uppercase)
+                                .foregroundStyle(Ember.C.heat)
+                        }
+                    }
+                    .padding(.vertical, 10)
+                    .padding(.horizontal, 12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Ember.C.raised, in: RoundedRectangle(cornerRadius: 12))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 }
 

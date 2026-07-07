@@ -27,6 +27,13 @@ final class DemoEngine: AthanorEngineProtocol {
     private var scriptedInitiation = false
     private var streamTask: Task<Void, Never>?
 
+    // Lane 13: the session's live register. Opens on the honest default and
+    // moves once, quietly, mid-session (a scripted `shiftTo` beat). `pinned`
+    // freezes it — the learner's escape hatch.
+    private var currentMaskId = "philosophus"
+    private var currentModeId = "explain"
+    private var pinned = false
+
     // MARK: Seeded read data
 
     private let seededFire = FireState(
@@ -139,13 +146,19 @@ final class DemoEngine: AthanorEngineProtocol {
         let reply: String
         let register: ReplyRegister
         var condensationBefore: (realizationId: String, childThreadId: String)? = nil
+        /// Lane 13: a quiet mid-session mask shift emitted BEFORE this turn's
+        /// reply streams — the register changes as fitting, never announced.
+        var shiftTo: (mask: String, mode: String)? = nil
     }
 
     private static let turns: [DemoTurn] = [
         DemoTurn(reply: "What's the thread you keep circling back to?", register: .quick),
         DemoTurn(
             reply: "Here is the distinction worth setting down. Heat is not the enemy of what you're making — it is the making. The furnace doesn't destroy the metal; it lets the metal become something it could not be while cold. Hold that: the discomfort you keep circling is the work itself, not a sign you've taken a wrong turn.",
-            register: .serif
+            register: .serif,
+            // The moment turns from drawing-out to pressing — the Mystagogue
+            // shifts to the diamond, quietly. The header changes; nothing is said.
+            shiftTo: (mask: "adamas", mode: "challenge")
         ),
         DemoTurn(
             reply: "Salt fixed. That's dated, and it's yours now.",
@@ -184,6 +197,13 @@ final class DemoEngine: AthanorEngineProtocol {
         // token-by-token below.
         let turn = script[turnIndex]
         turnIndex += 1
+        // A scripted mid-session shift takes effect before the reply streams —
+        // unless the learner has pinned the mask (then it's honored silently).
+        if let shift = turn.shiftTo, !pinned {
+            currentMaskId = shift.mask
+            currentModeId = shift.mode
+            continuation?.yield(.maskShifted(mask: shift.mask, mode: shift.mode))
+        }
         streamTask?.cancel()
         streamTask = Task { [weak self] in
             guard let self else { return }
@@ -198,6 +218,19 @@ final class DemoEngine: AthanorEngineProtocol {
             guard !Task.isCancelled else { return }
             self.continuation?.yield(.turnComplete)
         }
+    }
+
+    // MARK: Mask register (lane 13)
+
+    func currentMask() -> String { currentMaskId }
+    func currentMode() -> String { currentModeId }
+
+    /// The escape hatch: pin the learner's chosen mask. Freezes the register (the
+    /// scripted shift then honors it) and surfaces it so the header updates now.
+    func pinMask(_ mask: String) {
+        pinned = true
+        currentMaskId = mask
+        continuation?.yield(.maskShifted(mask: mask, mode: currentModeId))
     }
 
     /// Streams `text` as word-level deltas with jittered pacing — a stand-in

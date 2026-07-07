@@ -1268,6 +1268,16 @@ public protocol SessionHandleProtocol: AnyObject, Sendable {
     func close(minutes: UInt32) async throws 
     
     /**
+     * The session's current mask id — for the honest header (lane 13).
+     */
+    func currentMask()  -> String
+    
+    /**
+     * The session's current mode id — for the honest header (lane 13).
+     */
+    func currentMode()  -> String
+    
+    /**
      * Runs the ritual opening turn (BLOCKER-1 deep fix): the Mystagogue
      * speaks first, primed by the versioned prompt pack's synthesized
      * learner-arrival marker rather than any real learner utterance. Call
@@ -1278,6 +1288,14 @@ public protocol SessionHandleProtocol: AnyObject, Sendable {
      * call after the session ended) surfaces as a `SessionEvent::Error`.
      */
     func `open`() async 
+    
+    /**
+     * The escape hatch: the learner pins a mask (header tap → picker). Pins the
+     * shared cell (so `shift_mask` no-ops for the rest of the session), persists
+     * it to the session row, and surfaces the choice to the listener as a
+     * `MaskShifted` so the header reflects it at once.
+     */
+    func pinMask(chosen: String) 
     
     /**
      * Drives one learner turn through the `Conductor`, streaming projected
@@ -1395,6 +1413,28 @@ open func close(minutes: UInt32)async throws   {
 }
     
     /**
+     * The session's current mask id — for the honest header (lane 13).
+     */
+open func currentMask() -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_ffi_fn_method_sessionhandle_current_mask(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+    
+    /**
+     * The session's current mode id — for the honest header (lane 13).
+     */
+open func currentMode() -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_ffi_fn_method_sessionhandle_current_mode(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+    
+    /**
      * Runs the ritual opening turn (BLOCKER-1 deep fix): the Mystagogue
      * speaks first, primed by the versioned prompt pack's synthesized
      * learner-arrival marker rather than any real learner utterance. Call
@@ -1420,6 +1460,20 @@ open func `open`()async   {
             errorHandler: nil
             
         )
+}
+    
+    /**
+     * The escape hatch: the learner pins a mask (header tap → picker). Pins the
+     * shared cell (so `shift_mask` no-ops for the rest of the session), persists
+     * it to the session row, and surfaces the choice to the listener as a
+     * `MaskShifted` so the header reflects it at once.
+     */
+open func pinMask(chosen: String)  {try! rustCall() {
+    uniffi_ffi_fn_method_sessionhandle_pin_mask(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(chosen),$0
+    )
+}
 }
     
     /**
@@ -2443,6 +2497,15 @@ public enum SessionEvent: Equatable, Hashable {
     case toolCall(kind: String
     )
     /**
+     * **Bridge-synthesized.** The session's current `(mask, mode)` register
+     * (lane 13) — emitted at the top of a turn whenever it differs from what was
+     * last surfaced: the opening pair on the first turn, and the new pair on the
+     * first turn after a `shift_mask` (or a learner pin). Drives the honest
+     * Session-screen header.
+     */
+    case maskShifted(mask: String, mode: String
+    )
+    /**
      * A salt was fixed this turn — the condensation moment. Derived from the
      * `fix_salt` tool's own `AcpUpdate::ToolResult` (its real `realization_id`
      * and spiral `child_thread_id`), and carrying the fixed salt's TEXT so the
@@ -2488,12 +2551,15 @@ public struct FfiConverterTypeSessionEvent: FfiConverterRustBuffer {
         case 2: return .toolCall(kind: try FfiConverterString.read(from: &buf)
         )
         
-        case 3: return .condensation(realizationId: try FfiConverterString.read(from: &buf), childThreadId: try FfiConverterOptionString.read(from: &buf), text: try FfiConverterString.read(from: &buf)
+        case 3: return .maskShifted(mask: try FfiConverterString.read(from: &buf), mode: try FfiConverterString.read(from: &buf)
         )
         
-        case 4: return .turnComplete
+        case 4: return .condensation(realizationId: try FfiConverterString.read(from: &buf), childThreadId: try FfiConverterOptionString.read(from: &buf), text: try FfiConverterString.read(from: &buf)
+        )
         
-        case 5: return .error(message: try FfiConverterString.read(from: &buf)
+        case 5: return .turnComplete
+        
+        case 6: return .error(message: try FfiConverterString.read(from: &buf)
         )
         
         default: throw UniffiInternalError.unexpectedEnumCase
@@ -2515,19 +2581,25 @@ public struct FfiConverterTypeSessionEvent: FfiConverterRustBuffer {
             FfiConverterString.write(kind, into: &buf)
             
         
-        case let .condensation(realizationId,childThreadId,text):
+        case let .maskShifted(mask,mode):
             writeInt(&buf, Int32(3))
+            FfiConverterString.write(mask, into: &buf)
+            FfiConverterString.write(mode, into: &buf)
+            
+        
+        case let .condensation(realizationId,childThreadId,text):
+            writeInt(&buf, Int32(4))
             FfiConverterString.write(realizationId, into: &buf)
             FfiConverterOptionString.write(childThreadId, into: &buf)
             FfiConverterString.write(text, into: &buf)
             
         
         case .turnComplete:
-            writeInt(&buf, Int32(4))
+            writeInt(&buf, Int32(5))
         
         
         case let .error(message):
-            writeInt(&buf, Int32(5))
+            writeInt(&buf, Int32(6))
             FfiConverterString.write(message, into: &buf)
             
         }
@@ -2890,7 +2962,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_ffi_checksum_method_sessionhandle_close() != 51915) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_ffi_checksum_method_sessionhandle_current_mask() != 17534) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ffi_checksum_method_sessionhandle_current_mode() != 27638) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_ffi_checksum_method_sessionhandle_open() != 13903) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ffi_checksum_method_sessionhandle_pin_mask() != 52919) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_ffi_checksum_method_sessionhandle_send_turn() != 12653) {

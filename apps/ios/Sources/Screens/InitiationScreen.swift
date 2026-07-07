@@ -198,7 +198,9 @@ struct InitiationScreen: View {
                 if completedTurns >= 2 {
                     canFinish = true
                 }
-            case .condensation, .toolCall, .error:
+            // Initiation has no mask header, so the register signal is ignored
+            // here (it's honestly "initiation/initiation" anyway).
+            case .condensation, .toolCall, .error, .maskShifted:
                 break
             }
         }

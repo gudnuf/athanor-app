@@ -222,6 +222,18 @@ final class AthanorCoreEngine: AthanorEngineProtocol {
         Task { await handle.sendTurn(text: text) }
     }
 
+    // MARK: Mask register (lane 13)
+
+    func currentMask() -> String { currentHandle?.currentMask() ?? "philosophus" }
+    func currentMode() -> String { currentHandle?.currentMode() ?? "explain" }
+
+    /// The escape hatch: pin the learner's chosen mask on the live session (core
+    /// persists it and the Mystagogue's shift_mask no-ops for the rest of the
+    /// session). A no-op if no session is open.
+    func pinMask(_ mask: String) {
+        currentHandle?.pinMask(chosen: mask)
+    }
+
     func endSession(abandon: Bool) async {
         guard let handle = currentHandle else { return }
         // The app protocol carries no minutes; on-device tending-time capture is
@@ -333,6 +345,8 @@ private final class SessionEventBridge: AthanorCoreFFI.SessionEventListener, @un
             return .textDelta(text, register: register == .reading ? .serif : .quick)
         case let .toolCall(kind):
             return .toolCall(kind: kind)
+        case let .maskShifted(mask, mode):
+            return .maskShifted(mask: mask, mode: mode)
         case let .condensation(realizationId, childThreadId, text):
             return .condensation(realizationId: realizationId, childThreadId: childThreadId ?? "", text: text)
         case .turnComplete:
