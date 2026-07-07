@@ -11,3 +11,14 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 uuid = { version = "1", features = ["v7"] }
 parking_lot = "0.12"
+
+# ── LOCKFILE GUARD — DO NOT BUMP (Phase 4 plan §0 Pins) ──────────────────────
+# goose v1.41.0 does NOT compile against rmcp 1.8.0: goose's source calls
+# `.cloned()` on `Peer::peer_info()`, whose return type changed in 1.8.0. goose's
+# own Cargo.lock pins rmcp 1.7.0; a fresh/greedy resolve picks 1.8.0 and the
+# `goose` feature build breaks. Pinning `=1.7.0` here (the single workspace-level
+# source of truth, consumed by athanor-core behind `feature = "goose"`) forces the
+# committed Cargo.lock to 1.7.x. The transitive rmcp-ecosystem crates goose drags
+# in (agent-client-protocol 1.0.1, schemars 0.9.0/1.2.1) are held by the committed
+# lockfile — keep Cargo.lock committed and do not run a blanket `cargo update`.
+rmcp = { version = "=1.7.0", default-features = false }

@@ -30,7 +30,7 @@ parking_lot = { workspace = true }
 # behind `feature = "goose"`, OFF by default — the hermetic tier never compiles it.
 goose = { git = "https://github.com/aaif-goose/goose.git", tag = "v1.41.0", default-features = false, features = ["rustls-tls"], optional = true }
 goose-providers = { git = "https://github.com/aaif-goose/goose.git", tag = "v1.41.0", default-features = false, optional = true }
-rmcp = { version = "=1.7.0", default-features = false, optional = true }
+rmcp = { workspace = true, optional = true }
 futures = { version = "0.3", optional = true }
 
 [features]

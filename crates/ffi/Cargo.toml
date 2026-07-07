@@ -15,6 +15,10 @@ crate-type = ["cdylib", "staticlib", "lib"]
 uniffi = { version = "0.31", features = ["tokio"] }
 athanor-core = { path = "../athanor-core" }
 tokio = { workspace = true, features = ["sync"] }
+# STT is pulled in only behind `feature = "whisper"` for the C3 BellowsHandle
+# (wraps `stt::SttStream`). Optional so the default hermetic ffi build stays
+# lean and never touches the native whisper stack. C3 finishes the wrapper.
+stt = { path = "../stt", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
@@ -25,6 +29,13 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "ti
 # built for iOS.
 [features]
 uniffi-bindgen-cli = ["uniffi/cli"]
+# Passthrough feature flags that select the real backends for the iOS build.
+# `goose` turns on the embedded agent engine in athanor-core (Anthropic-backed
+# sessions); `whisper` turns on the native STT stack (whisper-rs + vendored
+# whisper.cpp + Metal) via the `stt` crate. Both are OFF by default so
+# `cargo test --workspace` and host builds stay hermetic. See Phase 4 plan D1.
+goose = ["athanor-core/goose"]
+whisper = ["dep:stt", "stt/whisper"]
 
 [[bin]]
 name = "uniffi-bindgen"

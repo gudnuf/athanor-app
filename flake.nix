@@ -19,6 +19,13 @@
         # --target aarch64-apple-ios{,-sim}` links against a real core/std.
         # rustup is NOT used; the overlay toolchain is the single source of
         # cargo/rustc/clippy/rustfmt for both host and iOS targets.
+        #
+        # Toolchain version: goose's own `rust-toolchain.toml` states 1.92 as its
+        # *minimum*, not a maximum. This flake pins stable 1.95.0, which builds
+        # `-p ffi --features goose --target aarch64-apple-ios-sim` cleanly (Phase 4
+        # D1 verified). 1.95 ≥ 1.92, so goose is satisfied — do NOT downgrade to
+        # 1.92 to match the plan's note; that note is goose's floor, and churning
+        # the toolchain down would only risk re-resolving the pinned lockfile.
         rustToolchain = pkgs.rust-bin.stable."1.95.0".default.override {
           extensions = [ "rust-src" "clippy" "rustfmt" ];
           targets = [
