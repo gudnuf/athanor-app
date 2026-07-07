@@ -21,3 +21,15 @@ targets:
   Athanor:
     dependencies:
       - package: AthanorCoreFFI
+    settings:
+      base:
+        # The AthanorCoreFFI xcframework's simulator slice is arm64-only
+        # (build-ffi.sh builds aarch64-apple-ios-sim). Exclude x86_64 for the
+        # simulator SDK so the generic `platform=iOS Simulator` destination —
+        # what CI and cold checkouts hit — doesn't try to link an absent
+        # x86_64 uniffi slice and fail. Apple-Silicon-only dev; Intel-Mac
+        # simulators are unsupported for the REAL build. (A fat x86_64 sim
+        # slice is possible later via a build-ffi.sh lipo step if ever needed —
+        # not built.) The demo build links no xcframework, so it is not
+        # constrained here.
+        EXCLUDED_ARCHS[sdk=iphonesimulator*]: x86_64
