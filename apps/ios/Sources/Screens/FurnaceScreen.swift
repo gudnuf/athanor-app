@@ -52,6 +52,12 @@ struct FurnaceScreen: View {
                 Text(fireCopy)
                     .font(Ember.F.serif(15, italic: true))
                     .foregroundStyle(Ember.C.muted)
+                if let recency = recencyLine {
+                    Text(recency)
+                        .font(Ember.F.sans(11.5))
+                        .foregroundStyle(Ember.C.mutedDim)
+                        .monospacedDigit()
+                }
             }
             .padding(.top, 10)
 
@@ -106,12 +112,39 @@ struct FurnaceScreen: View {
     private var fireCopy: String {
         if fire.tendedToday { return "the fire is warm" }
         guard let last = fire.lastTendedDay else { return "the fire is low" }
-        let days = Calendar.current.dateComponents([.day], from: last, to: Date()).day ?? 99
-        switch days {
+        switch daysSinceTended(last) {
         case ...1: return "the fire is warm"
         case 2...3: return "the fire is holding"
         default: return "the fire is low"
         }
+    }
+
+    /// A quiet, honest recency ground under the fire copy — "last tended
+    /// yesterday · 12 min" — from the recency window. Never gamified (no streak,
+    /// no shame): wisdom only comes from time, so this just names when the fire
+    /// was last fed, and for how long if that's known.
+    private var recencyLine: String? {
+        guard let last = fire.lastTendedDay else {
+            return fire.wisdomDays == 0 ? "not yet tended" : nil
+        }
+        let days = daysSinceTended(last)
+        let when: String
+        if fire.tendedToday || days <= 0 {
+            when = "tended today"
+        } else if days == 1 {
+            when = "last tended yesterday"
+        } else {
+            when = "last tended \(days) days ago"
+        }
+        // Minutes from the most-recent tending, when the window carries them.
+        if let minutes = fire.recent.first?.minutes, minutes > 0 {
+            return "\(when) · \(minutes) min"
+        }
+        return when
+    }
+
+    private func daysSinceTended(_ last: Date) -> Int {
+        Calendar.current.dateComponents([.day], from: last, to: Date()).day ?? 99
     }
 }
 

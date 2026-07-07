@@ -50,6 +50,14 @@ struct GrimoireScreen: View {
 private struct GrainRow: View {
     var realization: Realization
     var childPrompt: String?
+    @State private var expanded = false
+
+    /// A grain long enough to be worth folding — the operator's real seed maps
+    /// whole journal entries (many paragraphs) to grains. A concise grain — a
+    /// realization of a few sentences, like Sam's or a live-fixed salt — is
+    /// never folded, so it reads whole and never looks padded. Threshold set
+    /// above Sam's longest entry (~340 chars); real journal grains run 500+.
+    private var isLong: Bool { realization.text.count > 420 }
 
     private var dateLabel: String {
         let formatter = DateFormatter()
@@ -75,10 +83,27 @@ private struct GrainRow: View {
             Text(realization.text)
                 .font(Ember.F.serif(16.5))
                 .foregroundStyle(Ember.C.ink)
+                .lineLimit(isLong && !expanded ? 5 : nil)
                 .padding(.leading, 14)
                 .overlay(alignment: .leading) {
                     Rectangle().fill(Ember.C.gold.opacity(0.4)).frame(width: 2)
                 }
+            if isLong {
+                // Fold long grains to a few lines with a quiet way to unfold —
+                // the salt shelf stays scannable without hiding a grain's full
+                // words. The one spring family carries the height change.
+                Button {
+                    withAnimation(Ember.Motion.surfaceTurn) { expanded.toggle() }
+                } label: {
+                    Text(expanded ? "fold" : "unfold")
+                        .font(Ember.F.sans(11, weight: .semibold))
+                        .tracking(0.4)
+                        .foregroundStyle(Ember.C.muted)
+                }
+                .buttonStyle(.plain)
+                .padding(.leading, 14)
+                .accessibilityLabel(expanded ? "Fold this grain" : "Unfold the full grain")
+            }
             if let childPrompt {
                 Text("↳ opened: \(childPrompt)")
                     .font(Ember.F.serif(12.5, italic: true))

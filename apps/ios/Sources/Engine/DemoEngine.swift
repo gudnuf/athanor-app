@@ -33,10 +33,11 @@ final class DemoEngine: AthanorEngineProtocol {
         wisdomDays: 7,
         lastTendedDay: Calendar.current.date(byAdding: .day, value: -1, to: Date()),
         tendedToday: false,
+        // Most-recent first: yesterday's session, then earlier ones.
         recent: [
-            "you named the pull you couldn't put down",
-            "two domains rhymed, unprompted",
-            "you said \"I do not know\" and meant it",
+            TendedDay(day: Calendar.current.date(byAdding: .day, value: -1, to: Date())!, minutes: 12),
+            TendedDay(day: Calendar.current.date(byAdding: .day, value: -3, to: Date())!, minutes: 18),
+            TendedDay(day: Calendar.current.date(byAdding: .day, value: -4, to: Date())!, minutes: 9),
         ]
     )
 

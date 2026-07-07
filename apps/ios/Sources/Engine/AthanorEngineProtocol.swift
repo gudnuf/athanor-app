@@ -17,7 +17,16 @@ struct FireState: Equatable {
     var wisdomDays: Int
     var lastTendedDay: Date?
     var tendedToday: Bool
-    var recent: [String] // recent trace lines, most-recent first
+    /// The recent tended-days window (day + minutes), most-recent first — the
+    /// honest projection of core `Tending`. The Furnace grounds its recency
+    /// copy in the first (latest) entry.
+    var recent: [TendedDay]
+}
+
+/// One tended day: a UTC day and the minutes spent that day.
+struct TendedDay: Equatable {
+    var day: Date
+    var minutes: Int
 }
 
 struct Realization: Identifiable, Equatable {

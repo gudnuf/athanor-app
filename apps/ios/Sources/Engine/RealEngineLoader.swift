@@ -238,9 +238,11 @@ final class AthanorCoreEngine: AthanorEngineProtocol {
             wisdomDays: Int(f.wisdomDays),
             lastTendedDay: f.lastTendedDay.flatMap(Self.parseDay),
             tendedToday: f.tendedToday,
-            // FFI projects tended DAYS, not trace lines; surface the day strings
-            // until core projects recent trace text (coordination note for E2).
-            recent: f.recent.map(\.day)
+            // The recency window, day + minutes, most-recent first (core projects
+            // it as `Tending`). Malformed day strings are dropped, not faked.
+            recent: f.recent.compactMap { t in
+                Self.parseDay(t.day).map { TendedDay(day: $0, minutes: Int(t.minutes)) }
+            }
         )
     }
 
