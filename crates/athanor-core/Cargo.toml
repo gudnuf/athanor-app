@@ -12,27 +12,36 @@ uuid = { workspace = true }
 async-trait = { workspace = true }
 
 # Real goose embed, pulled in only behind `feature = "goose"` — see
-# src/engine/goose.rs. `agent-client-protocol{,-schema,-http}` pinned per the
-# Task-8 review's VERIFY #6 correction (agent-client-protocol 1.0 is stable;
-# `unstable` lives on -schema 1.1, not on the main crate) — these resolved
-# clean against crates.io. `goose-sdk-types` did NOT: the review's pin of
-# "1.41.0" does not exist on crates.io (only 0.1.0-alpha.0 is published as of
-# 2026-07-06 — verified via the crates.io API). Pinned to the real published
-# version instead of the review's guess; flagged as a deviation. NOT enabled
-# in default features — the hermetic tier must never compile these.
-agent-client-protocol = { version = "1.0", optional = true }
-agent-client-protocol-schema = { version = "1.1", optional = true, features = ["unstable"] }
-agent-client-protocol-http = { version = "1.0", optional = true }
-goose-sdk-types = { version = "0.1.0-alpha.0", optional = true }
+# src/engine/goose.rs and forge/athanor-app/spike-goose-ios-report.md (Gate 1).
+#
+# The `goose` crate is NOT usable from crates.io (the published `goose-sdk-types`
+# is a 0.1.0-alpha; the embed depends on internal `goose`/`goose-providers`
+# types). We consume it as a git dep hard-pinned to the stable tag `v1.41.0`,
+# library-only, with the portable feature set proven to cross-compile for iOS:
+# `--no-default-features --features rustls-tls` (drops llama/candle, V8/code-mode,
+# nostr, system-keyring, aws, otel).
+#
+# CRITICAL (spike finding): goose v1.41.0's source calls `.cloned()` on
+# `Peer::peer_info()`, whose return type changed in rmcp 1.8.0. goose's own
+# Cargo.lock pins rmcp 1.7.0. A fresh external resolve greedily picks 1.8.0 and
+# goose fails to compile. We depend on rmcp directly with `=1.7.0` so the whole
+# workspace lock is forced to 1.7.x, mirroring goose's lockfile. All of this is
+# behind `feature = "goose"`, OFF by default — the hermetic tier never compiles it.
+goose = { git = "https://github.com/aaif-goose/goose.git", tag = "v1.41.0", default-features = false, features = ["rustls-tls"], optional = true }
+goose-providers = { git = "https://github.com/aaif-goose/goose.git", tag = "v1.41.0", default-features = false, optional = true }
+rmcp = { version = "=1.7.0", default-features = false, optional = true }
+futures = { version = "0.3", optional = true }
 
 [features]
 default = []
 goose = [
-    "dep:agent-client-protocol",
-    "dep:agent-client-protocol-schema",
-    "dep:agent-client-protocol-http",
-    "dep:goose-sdk-types",
+    "dep:goose",
+    "dep:goose-providers",
+    "dep:rmcp",
+    "dep:futures",
 ]
 
 [dev-dependencies]
-tokio = { workspace = true }
+# `time`/`sync`/`io-util` drivers are required at test runtime by goose's agent
+# loop (timeouts, channels) when the `goose` feature is on; harmless otherwise.
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "io-util"] }

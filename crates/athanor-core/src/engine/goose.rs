@@ -1,44 +1,233 @@
-//! `GooseEngine`: the real, in-process (or `goosed`-over-tailnet, if Spike
-//! 1a came back RED) embed of the model-driving engine.
+//! `GooseEngine`: the real, in-process embed of the model-driving engine,
+//! built on the `goose` crate hard-pinned to tag `v1.41.0` (see
+//! `forge/athanor-app/spike-goose-ios-report.md`, Gate 1 — GREEN).
 //!
-//! This file is a **compile-gated stub**. It exists so the `MystagogueEngine`
-//! seam has a real second implementation to type-check against, but it does
-//! not — and must not, until the spike is confirmed GREEN — make any real
-//! goose call. The exact embed API (which goose types, which entry point,
-//! streaming shape) is still being spiked; see
-//! `forge/athanor-app/spike-goose-ios-report.md` in the athanor meta repo
-//! for the pinned tag and the confirmed (or refuted) in-process embed path.
-//! (That report may not exist yet at the time this stub is written — that's
-//! expected; it's produced by the Task 4 spike, not by this task.)
+//! This is the ONE file in the codebase that names a `goose` /
+//! `goose-providers` / `rmcp` type. Everything else talks to the seam types in
+//! `acp.rs` (`AcpPrompt`/`AcpUpdate`/`AcpToolCall`/`AcpToolResult`) and the
+//! `MystagogueEngine`/`ToolDispatch` traits in `mod.rs`. The whole module is
+//! gated behind `feature = "goose"`; the hermetic tier never compiles it.
 //!
-//! TODO(spike-goose-ios-report): once GREEN, replace this stub with the real
-//! conversion between `AcpPrompt`/`AcpUpdate`/`AcpToolCall`/`AcpToolResult`
-//! (this crate's own types, defined in `acp.rs`) and whatever the pinned
-//! `agent-client-protocol` / `goose-sdk-types` crates expose. No other module
-//! in this codebase should ever import those crates directly — only this
-//! file (or its `goosed_client.rs` replacement on the RED path) may.
+//! ## How tool dispatch bridges to `ToolDispatch`
+//!
+//! goose's builtin-extension registration is a bare `fn` pointer (no captures),
+//! so it can't carry a borrowed `&dyn ToolDispatch`. Instead we use goose's
+//! **frontend-tool** mechanism: the caller's tools are registered as an
+//! `ExtensionConfig::Frontend`, and when the model calls one, goose's `reply`
+//! stream yields a `FrontendToolRequest` and then *blocks* waiting for the
+//! frontend to answer via `agent.handle_tool_result(id, ...)`. We service that
+//! inline in the reply loop by routing the call through the caller's
+//! `ToolDispatch` and feeding the result straight back. No globals, no
+//! `fn`-pointer bridge, no child process — exactly the in-process seam the
+//! spike proved, mapped 1:1 onto our own `ToolDispatch` trait.
 
-use super::{AcpPrompt, AcpUpdate, EngineError, MystagogueEngine, ToolDispatch};
+use super::{AcpPrompt, AcpToolCall, AcpUpdate, EngineError, MystagogueEngine, ToolDispatch};
 use async_trait::async_trait;
+use std::sync::Arc;
 
-/// Holds the in-process agent from the pinned goose tag, once wired up.
-/// Presently empty — this is a stub.
+use futures::StreamExt;
+
+use goose::agents::{Agent, AgentEvent, ExtensionConfig, SessionConfig};
+use goose::config::GooseMode;
+use goose::conversation::message::{Message, MessageContent};
+use goose::providers::base::Provider;
+use goose::session::session_manager::SessionType;
+
+use goose_providers::anthropic::{
+    AnthropicProviderBuilder, ANTHROPIC_API_VERSION, ANTHROPIC_DEFAULT_MODEL,
+};
+use goose_providers::api_client::{ApiClient, AuthMethod};
+use goose_providers::model::ModelConfig;
+
+use rmcp::model::{CallToolResult, Content, Tool};
+
+const ANTHROPIC_API_HOST: &str = "https://api.anthropic.com";
+
+/// The real embedded engine. Holds the Anthropic API key (passed in by the
+/// caller — NEVER read from the environment or a `.env` inside this library)
+/// and the model id to drive.
 pub struct GooseEngine {
-    _private: (),
+    anthropic_api_key: String,
+    model: String,
 }
 
 impl GooseEngine {
-    /// Constructing a real `GooseEngine` is not yet possible: the embed API
-    /// is still being spiked. See the module doc for the pointer to the
-    /// spike report.
-    pub fn new() -> Self {
-        Self { _private: () }
+    /// Construct a `GooseEngine`. `anthropic_api_key` is injected by the caller;
+    /// `model` defaults to goose's Anthropic default (`claude-sonnet-4-5`) when
+    /// `None`.
+    pub fn new(anthropic_api_key: String, model: Option<String>) -> Self {
+        Self {
+            anthropic_api_key,
+            model: model.unwrap_or_else(|| ANTHROPIC_DEFAULT_MODEL.to_string()),
+        }
     }
-}
 
-impl Default for GooseEngine {
-    fn default() -> Self {
-        Self::new()
+    /// Build the Anthropic provider from the injected key. No environment reads.
+    fn build_provider(&self) -> Result<Arc<dyn Provider>, EngineError> {
+        let auth = AuthMethod::ApiKey {
+            header_name: "x-api-key".to_string(),
+            key: self.anthropic_api_key.clone(),
+        };
+        let api_client = ApiClient::new_with_tls(ANTHROPIC_API_HOST.to_string(), auth, None)
+            .and_then(|c| c.with_header("anthropic-version", ANTHROPIC_API_VERSION))
+            .map_err(|e| EngineError::Other(format!("anthropic api client: {e}")))?;
+        let provider = AnthropicProviderBuilder::new(api_client).build();
+        Ok(Arc::new(provider))
+    }
+
+    /// The engine core, factored out so tests can inject a canned, no-network
+    /// provider (mirroring the spike's round-trip) instead of hitting Anthropic.
+    async fn drive(
+        &self,
+        provider: Arc<dyn Provider>,
+        model_config: ModelConfig,
+        prompt: AcpPrompt,
+        tools: &dyn ToolDispatch,
+        sink: &mut (dyn FnMut(AcpUpdate) + Send),
+    ) -> Result<(), EngineError> {
+        let agent = Agent::new();
+
+        // A fresh, hidden session per turn. The working dir only matters for
+        // extensions that touch the filesystem; ours don't.
+        let session = agent
+            .config
+            .session_manager
+            .create_session(
+                std::env::temp_dir(),
+                "athanor-turn".to_string(),
+                SessionType::Hidden,
+                GooseMode::default(),
+            )
+            .await
+            .map_err(|e| EngineError::Other(format!("create_session: {e}")))?;
+
+        agent.override_system_prompt(prompt.system.clone()).await;
+
+        agent
+            .update_provider(provider, model_config, &session.id)
+            .await
+            .map_err(|e| EngineError::Other(format!("update_provider: {e}")))?;
+
+        // Register the caller's tools as frontend tools. When the model calls
+        // one, goose routes it back to us (see module docs) instead of an MCP
+        // extension.
+        if !prompt.tools.is_empty() {
+            let tool_specs: Vec<Tool> = prompt
+                .tools
+                .iter()
+                .map(|t| {
+                    let schema = match &t.json_schema {
+                        serde_json::Value::Object(m) => m.clone(),
+                        _ => serde_json::Map::new(),
+                    };
+                    Tool::new(t.name.clone(), t.name.clone(), schema)
+                })
+                .collect();
+            agent
+                .add_extension(
+                    ExtensionConfig::Frontend {
+                        name: "mystagogue".to_string(),
+                        description: "The Mystagogue's verbs.".to_string(),
+                        tools: tool_specs,
+                        instructions: None,
+                        bundled: Some(true),
+                        available_tools: vec![],
+                    },
+                    &session.id,
+                )
+                .await
+                .map_err(|e| EngineError::Other(format!("add_extension: {e}")))?;
+        }
+
+        // Map the ACP prompt's user turns onto the session: everything before
+        // the last is prior history (seeded without inference); the last drives
+        // this turn. `AcpPrompt` carries no assistant history, so we seed the
+        // user turns only — the best faithful reconstruction available at the
+        // seam.
+        let (last_turn, prior_turns) = prompt
+            .user_turns
+            .split_last()
+            .ok_or_else(|| EngineError::Other("run_turn: user_turns is empty".into()))?;
+
+        for turn in prior_turns {
+            let msg = Message::user().with_text(turn.clone());
+            agent
+                .config
+                .session_manager
+                .add_message(&session.id, &msg)
+                .await
+                .map_err(|e| EngineError::Other(format!("seed history: {e}")))?;
+        }
+
+        let session_config = SessionConfig {
+            id: session.id.clone(),
+            schedule_id: None,
+            max_turns: Some(50),
+            retry_config: None,
+        };
+        let user = Message::user().with_text(last_turn.clone());
+
+        // `reply` borrows `&agent` for the stream's lifetime; `handle_tool_result`
+        // also takes `&self`, so both coexist as shared borrows — we can answer a
+        // frontend tool call inline without cloning the agent into an Arc.
+        let mut stream = agent
+            .reply(user, session_config, None)
+            .await
+            .map_err(|e| EngineError::Other(format!("reply: {e}")))?;
+
+        while let Some(ev) = stream.next().await {
+            match ev {
+                Ok(AgentEvent::Message(message)) => {
+                    for content in &message.content {
+                        match content {
+                            MessageContent::Text(t) if !t.text.is_empty() => {
+                                sink(AcpUpdate::TextDelta(t.text.clone()));
+                            }
+                            MessageContent::FrontendToolRequest(req) => match &req.tool_call {
+                                Ok(params) => {
+                                    let args = params
+                                        .arguments
+                                        .clone()
+                                        .map(serde_json::Value::Object)
+                                        .unwrap_or(serde_json::Value::Null);
+                                    let call = AcpToolCall {
+                                        id: req.id.clone(),
+                                        name: params.name.to_string(),
+                                        args,
+                                    };
+                                    sink(AcpUpdate::ToolCall(call.clone()));
+
+                                    let result = tools.dispatch(call).await;
+                                    let payload = serde_json::to_string(&result.value)
+                                        .unwrap_or_else(|_| "{}".to_string());
+                                    agent
+                                        .handle_tool_result(
+                                            req.id.clone(),
+                                            Ok(CallToolResult::success(vec![Content::text(
+                                                payload,
+                                            )])),
+                                        )
+                                        .await;
+                                }
+                                Err(e) => {
+                                    // Model produced a malformed tool call; hand
+                                    // the error back so the agent loop unblocks.
+                                    agent
+                                        .handle_tool_result(req.id.clone(), Err(e.clone()))
+                                        .await;
+                                }
+                            },
+                            _ => {}
+                        }
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => return Err(EngineError::Other(format!("reply stream: {e}"))),
+            }
+        }
+
+        sink(AcpUpdate::TurnComplete);
+        Ok(())
     }
 }
 
@@ -46,56 +235,194 @@ impl Default for GooseEngine {
 impl MystagogueEngine for GooseEngine {
     async fn run_turn(
         &self,
-        _prompt: AcpPrompt,
-        _tools: &dyn ToolDispatch,
-        _sink: &mut (dyn FnMut(AcpUpdate) + Send),
+        prompt: AcpPrompt,
+        tools: &dyn ToolDispatch,
+        sink: &mut (dyn FnMut(AcpUpdate) + Send),
     ) -> Result<(), EngineError> {
-        Err(EngineError::Other(
-            "GooseEngine is a stub — real embed not wired up yet; see \
-             forge/athanor-app/spike-goose-ios-report.md"
-                .into(),
-        ))
+        let provider = self.build_provider()?;
+        let model_config = ModelConfig::new(self.model.clone());
+        self.drive(provider, model_config, prompt, tools, sink)
+            .await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::{AcpToolResult, AcpToolSpec};
+    use std::sync::atomic::{AtomicBool, Ordering};
 
-    /// Mirrors the Task-4 spike's real-API round-trip. Gated behind
-    /// `feature = "goose"` (never compiled in the hermetic tier) AND
-    /// `#[ignore]` (never run by default even when the feature is on) —
-    /// run explicitly once the spike report confirms the embed API:
-    /// `cargo test -p athanor-core --features goose -- --ignored`.
-    #[tokio::test]
-    #[ignore]
-    async fn goose_engine_real_api_round_trip() {
-        let engine = GooseEngine::new();
-        let prompt = AcpPrompt {
-            system: "you are the mystagogue".into(),
-            user_turns: vec!["what is entropy?".into()],
-            tools: vec![],
-        };
-        struct NoTools;
-        #[async_trait]
-        impl ToolDispatch for NoTools {
-            async fn dispatch(
-                &self,
-                call: super::super::AcpToolCall,
-            ) -> super::super::AcpToolResult {
-                super::super::AcpToolResult {
-                    id: call.id,
-                    value: serde_json::json!({}),
-                }
+    use async_trait::async_trait as async_trait_macro;
+
+    use goose::providers::base::{
+        stream_from_single_message, MessageStream, Provider, ProviderUsage, Usage,
+    };
+    use goose_providers::errors::ProviderError;
+
+    // A ToolDispatch that records whether it was invoked and with what name,
+    // and returns a canned value — our stand-in for Task 9's Mystagogue.
+    #[derive(Default)]
+    struct RecordingDispatch {
+        called: AtomicBool,
+        last_name: std::sync::Mutex<Option<String>>,
+    }
+
+    #[async_trait]
+    impl ToolDispatch for RecordingDispatch {
+        async fn dispatch(&self, call: AcpToolCall) -> AcpToolResult {
+            self.called.store(true, Ordering::SeqCst);
+            *self.last_name.lock().unwrap() = Some(call.name.clone());
+            AcpToolResult {
+                id: call.id,
+                value: serde_json::json!({ "ok": true, "note": "salt fixed" }),
             }
         }
-        let mut updates = Vec::new();
-        // TODO: once the spike report lands, this should succeed; today the
-        // stub always errors, so this assertion documents the gate rather
-        // than exercising a real embed.
-        let result = engine
-            .run_turn(prompt, &NoTools, &mut |u| updates.push(u))
-            .await;
-        assert!(result.is_err(), "stub must not silently succeed");
+    }
+
+    /// Canned in-process provider — no network, no API key. First turn: request
+    /// the frontend tool the agent offered (name ends in `fix_salt`). After the
+    /// tool response returns: emit terminal text so the loop ends. This is the
+    /// spike's `CannedProvider`, retargeted at the frontend-tool path.
+    struct CannedProvider;
+
+    #[async_trait_macro]
+    impl Provider for CannedProvider {
+        fn get_name(&self) -> &str {
+            "canned"
+        }
+
+        async fn stream(
+            &self,
+            model_config: &ModelConfig,
+            _system: &str,
+            messages: &[Message],
+            tools: &[rmcp::model::Tool],
+        ) -> Result<MessageStream, ProviderError> {
+            let usage = ProviderUsage::new(model_config.model_name.clone(), Usage::default());
+
+            let already_responded = messages.iter().any(|m| {
+                m.content
+                    .iter()
+                    .any(|c| matches!(c, MessageContent::ToolResponse(_)))
+            });
+
+            let fix_salt_tool = tools
+                .iter()
+                .map(|t| t.name.to_string())
+                .find(|n| n.ends_with("fix_salt"));
+
+            let msg = match fix_salt_tool {
+                Some(tool_name) if !already_responded => {
+                    let mut params = rmcp::model::CallToolRequestParams::new(tool_name);
+                    params.arguments = serde_json::json!({
+                        "realization": "heat is transformation, not destruction"
+                    })
+                    .as_object()
+                    .cloned();
+                    Message::assistant().with_tool_request("call_1", Ok(params))
+                }
+                _ => Message::assistant().with_text("The salt is fixed. Well drawn."),
+            };
+
+            Ok(stream_from_single_message(msg, usage))
+        }
+    }
+
+    fn salt_prompt() -> AcpPrompt {
+        AcpPrompt {
+            system: "You are the Mystagogue.".into(),
+            user_turns: vec!["I think I finally get it about heat.".into()],
+            tools: vec![AcpToolSpec {
+                name: "fix_salt".into(),
+                json_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "realization": { "type": "string" }
+                    },
+                    "required": ["realization"]
+                }),
+            }],
+        }
+    }
+
+    /// Ports the spike's round-trip into the real engine: canned provider →
+    /// frontend tool request → our `ToolDispatch` executes → result flows back →
+    /// terminal text → `TurnComplete`. No network.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn goose_engine_frontend_tool_round_trip() {
+        let engine = GooseEngine::new("unused-in-canned-path".into(), Some("canned-model".into()));
+        let provider: Arc<dyn Provider> = Arc::new(CannedProvider);
+        let dispatch = RecordingDispatch::default();
+
+        let mut updates: Vec<AcpUpdate> = Vec::new();
+        engine
+            .drive(
+                provider,
+                ModelConfig::new("canned-model"),
+                salt_prompt(),
+                &dispatch,
+                &mut |u| updates.push(u),
+            )
+            .await
+            .expect("canned round-trip should succeed");
+
+        assert!(
+            dispatch.called.load(Ordering::SeqCst),
+            "ToolDispatch must have executed"
+        );
+        assert_eq!(
+            dispatch.last_name.lock().unwrap().as_deref(),
+            Some("fix_salt"),
+            "dispatched tool name should be the frontend tool"
+        );
+        assert!(
+            updates
+                .iter()
+                .any(|u| matches!(u, AcpUpdate::ToolCall(c) if c.name == "fix_salt")),
+            "engine must surface the tool call: {updates:?}"
+        );
+        assert!(
+            updates.iter().any(|u| matches!(u, AcpUpdate::TextDelta(_))),
+            "engine must stream terminal text: {updates:?}"
+        );
+        assert!(
+            matches!(updates.last(), Some(AcpUpdate::TurnComplete)),
+            "engine must end with TurnComplete: {updates:?}"
+        );
+    }
+
+    /// Live Anthropic round-trip. Ignored by default; run explicitly with a key:
+    /// `ANTHROPIC_API_KEY=… cargo test -p athanor-core --features goose -- --ignored`.
+    /// Skips gracefully (passes) when the key is unset.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore]
+    async fn goose_engine_live_anthropic_round_trip() {
+        let Ok(key) = std::env::var("ANTHROPIC_API_KEY") else {
+            eprintln!("ANTHROPIC_API_KEY unset — skipping live test");
+            return;
+        };
+
+        let engine = GooseEngine::new(key, None);
+        let dispatch = RecordingDispatch::default();
+        let prompt = AcpPrompt {
+            system: "You are a terse assistant. Answer in one short sentence.".into(),
+            user_turns: vec!["Say the single word: ready.".into()],
+            tools: vec![],
+        };
+
+        let mut updates: Vec<AcpUpdate> = Vec::new();
+        engine
+            .run_turn(prompt, &dispatch, &mut |u| updates.push(u))
+            .await
+            .expect("live round-trip should succeed");
+
+        assert!(
+            updates.iter().any(|u| matches!(u, AcpUpdate::TextDelta(_))),
+            "live turn must stream text: {updates:?}"
+        );
+        assert!(
+            matches!(updates.last(), Some(AcpUpdate::TurnComplete)),
+            "live turn must end with TurnComplete: {updates:?}"
+        );
     }
 }
