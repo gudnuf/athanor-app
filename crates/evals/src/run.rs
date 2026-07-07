@@ -3,167 +3,25 @@
 //! `SessionTrace` with every Task-13 grader plus two small runner-level
 //! checks (mask selection, session close), and assembles a `SuiteReport`.
 //!
-//! ## The dispatch adapter, and why it exists (a real deviation — read this)
+//! ## Dispatch: the real Mystagogue
 //!
-//! `engine::ToolDispatch` (Task 8) is declared `Send + Sync` — the natural
-//! bound for a trait object handed across an async engine call. `Mystagogue`
-//! (Task 9) cannot satisfy it: it holds `Arc<Store>`, and `Store` wraps a
-//! single `rusqlite::Connection`, which is `Send` but not `Sync` — so
-//! `Arc<Store>` is neither `Send` nor `Sync` (both of `Arc<T>`'s marker impls
-//! require `T: Send + Sync` *together*; `Store` only has the first half).
-//! `mystagogue/acp.rs`'s own INTEGRATION NOTE flags exactly this gap and
-//! recommends relaxing `engine::ToolDispatch` to `?Send` at integration time
-//! (the turn is single-threaded, so the bound was never load-bearing) — but
-//! that is a change to `athanor-core` src, out of scope for this evals-only
-//! task.
-//!
-//! Until that lands, `StoreDispatch` below is a small Send+Sync-safe
-//! stand-in: it holds `Arc<Mutex<Store>>` (`Mutex<T>` is `Sync` whenever
-//! `T: Send`, which `Store` is) and dispatches the same six tools directly
-//! against `Store`'s public API — the exact calls `Mystagogue::run` makes,
-//! just not routed through that struct, since a `Mutex<Store>` can't be
-//! threaded through `Mystagogue::new`'s `Arc<Store>` parameter without
-//! changing its signature. This is flagged as a deviation in the task
-//! report, not silently worked around: the real fix is relaxing
-//! `engine::ToolDispatch`'s bound so `evals` can consume `Mystagogue`
-//! directly, as Task 9 intended.
+//! Tool calls are dispatched through the real [`Mystagogue`] extension. After
+//! the engine-seam unification (`Store` is now `Send + Sync` — its
+//! `rusqlite::Connection` sits behind a reentrant mutex), `Mystagogue`
+//! implements `engine::ToolDispatch` directly, so the persona runner drives the
+//! exact same six-tool code path the app uses. (An earlier `StoreDispatch`
+//! stand-in existed only because `Mystagogue` couldn't satisfy the Send+Sync
+//! bound; it's gone now.)
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use athanor_core::engine::{
-    AcpPrompt, AcpToolCall, AcpToolResult, AcpUpdate, MockEngine, MystagogueEngine, ToolDispatch,
-};
+use athanor_core::engine::{AcpPrompt, AcpUpdate, MockEngine, MystagogueEngine};
 use athanor_core::store::Store;
-use athanor_core::{close_session, CoreError};
-use serde::Deserialize;
-use serde_json::{json, Value};
+use athanor_core::{close_session, Mystagogue};
 
 use crate::grade::{grade_mask_fidelity, grade_salt_refusal, grade_spiral, SessionTrace, Turn};
 use crate::personas::{Persona, Step};
 use crate::report::{CheckResult, ScenarioReport, SuiteReport};
-
-struct StoreDispatch {
-    store: Arc<Mutex<Store>>,
-}
-
-#[async_trait::async_trait]
-impl ToolDispatch for StoreDispatch {
-    async fn dispatch(&self, call: AcpToolCall) -> AcpToolResult {
-        let store = self.store.lock().expect("store mutex poisoned");
-        let value =
-            run_tool(&store, &call.name, call.args).unwrap_or_else(|e| json!({ "error": e }));
-        AcpToolResult { id: call.id, value }
-    }
-}
-
-// ---- tool dispatch, mirroring Mystagogue::run's match arms (see module
-// docs: Mystagogue itself can't be used here without relaxing
-// engine::ToolDispatch's Send+Sync bound) ----
-
-#[derive(Deserialize)]
-struct FixSaltArgs {
-    realization: String,
-    thread_id: String,
-    #[serde(default)]
-    domains: Vec<String>,
-    #[serde(default)]
-    child_question: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct OpenThreadArgs {
-    question: String,
-    #[serde(default)]
-    domain: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct EvaporateArgs {
-    id: String,
-}
-
-#[derive(Deserialize)]
-struct KindleArgs {
-    term: String,
-}
-
-#[derive(Deserialize)]
-struct WeaveArgs {
-    a: String,
-    b: String,
-    note: String,
-}
-
-#[derive(Deserialize)]
-struct UpdateMemoryArgs {
-    section: String,
-    content: String,
-}
-
-fn run_tool(store: &Store, name: &str, args: Value) -> Result<Value, String> {
-    let stringify = |e: CoreError| e.to_string();
-    match name {
-        "fix_salt" => {
-            let a: FixSaltArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let realization = store
-                .fix_salt(
-                    &a.thread_id,
-                    &a.realization,
-                    &a.domains,
-                    a.child_question.as_deref(),
-                )
-                .map_err(stringify)?;
-            Ok(json!({
-                "realization_id": realization.id,
-                "child_thread_id": realization.child_thread_id,
-            }))
-        }
-        "open_thread" => {
-            let a: OpenThreadArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let domain_id = match a.domain.as_deref() {
-                Some(name) if !name.trim().is_empty() => {
-                    Some(store.upsert_domain(name).map_err(stringify)?.id)
-                }
-                _ => None,
-            };
-            let thread = store
-                .open_thread(&a.question, domain_id.as_deref(), None)
-                .map_err(stringify)?;
-            Ok(json!({ "thread_id": thread.id }))
-        }
-        "evaporate_thread" => {
-            let a: EvaporateArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            store.evaporate_thread(&a.id).map_err(stringify)?;
-            Ok(json!({ "thread_id": a.id, "state": "evaporated" }))
-        }
-        "kindle_passage" => {
-            let a: KindleArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let kindled = store.kindle_passage(&a.term, None).map_err(stringify)?;
-            Ok(json!({ "term": a.term, "kindled": kindled }))
-        }
-        "weave_domains" => {
-            let a: WeaveArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            let corr = store
-                .weave_domains(&a.a, &a.b, &a.note)
-                .map_err(stringify)?;
-            store
-                .kindle_passage("CITRINITAS", Some(&corr.id))
-                .map_err(stringify)?;
-            store
-                .kindle_passage("AZOTH", Some(&corr.id))
-                .map_err(stringify)?;
-            Ok(json!({ "correspondence_id": corr.id }))
-        }
-        "update_memory" => {
-            let a: UpdateMemoryArgs = serde_json::from_value(args).map_err(|e| e.to_string())?;
-            store
-                .set_profile_section(&a.section, &a.content)
-                .map_err(stringify)?;
-            Ok(json!({ "section": a.section, "ok": true }))
-        }
-        other => Err(format!("unknown tool: {other}")),
-    }
-}
 
 // ---- runner-level checks (beyond the three Task-13 graders) ----
 
@@ -187,9 +45,8 @@ fn check_mask_selected(expected: &str, actual: &str) -> CheckResult {
 /// The session still lands and closes cleanly — the pacing/patience promise
 /// (most pointed for the silent one) is "the plane lands," not "the model
 /// fills silence with a lecture."
-fn check_session_lands(store: &Mutex<Store>, session_id: &str) -> CheckResult {
-    let guard = store.lock().expect("store mutex poisoned");
-    let result = close_session(&guard, session_id, 1, &[]);
+fn check_session_lands(store: &Store, session_id: &str) -> CheckResult {
+    let result = close_session(store, session_id, 1, &[]);
     CheckResult {
         name: "session_lands".into(),
         passed: result.is_ok(),
@@ -215,10 +72,8 @@ pub async fn run_persona(persona: &Persona) -> ScenarioReport {
         .create_session(Some(&thread.id), persona.mask, persona.mode)
         .expect("create session");
 
-    let store = Arc::new(Mutex::new(store));
-    let dispatch = StoreDispatch {
-        store: store.clone(),
-    };
+    let store = Arc::new(store);
+    let mystagogue = Mystagogue::new(Arc::clone(&store));
 
     let steps = (persona.build)(&thread.id);
     let mut turns: Vec<Turn> = Vec::new();
@@ -228,15 +83,12 @@ pub async fn run_persona(persona: &Persona) -> ScenarioReport {
             Step::Learner(text) => turns.push(Turn::LearnerText(text)),
             Step::Engine(script) => {
                 let engine = MockEngine::new(script);
-                // `MockEngine::run_turn` ignores the prompt entirely (the
-                // script drives everything), and `Mystagogue::tool_specs()`
-                // returns the *mystagogue-local* `AcpToolSpec` mirror (see
-                // module docs), not `engine::AcpToolSpec` — so there's
-                // nothing real to put here yet.
+                // `MockEngine::run_turn` ignores the prompt (the script drives
+                // everything); we still hand it the real tool specs.
                 let prompt = AcpPrompt {
                     system: String::new(),
                     user_turns: Vec::new(),
-                    tools: Vec::new(),
+                    tools: Mystagogue::tool_specs(),
                 };
 
                 // Coalesce contiguous TextDelta pieces into one Assistant
@@ -246,7 +98,7 @@ pub async fn run_persona(persona: &Persona) -> ScenarioReport {
                 let mut local_turns: Vec<Turn> = Vec::new();
                 let mut buffer = String::new();
                 engine
-                    .run_turn(prompt, &dispatch, &mut |update| match update {
+                    .run_turn(prompt, &mystagogue, &mut |update| match update {
                         AcpUpdate::TextDelta(delta) => buffer.push_str(&delta),
                         AcpUpdate::ToolCall(call) => {
                             if !buffer.is_empty() {
