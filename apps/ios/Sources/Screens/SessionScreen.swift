@@ -96,6 +96,22 @@ struct SessionScreen: View {
             try? await Task.sleep(for: .milliseconds(1800))
             sendDemoTurn()
         }
+        .task {
+            // QA hook only (same launch-arg pattern as `autoplay=1`/`screen=`)
+            // — submits a fixed turn as if typed, so the live-engine round
+            // trip is exercisable in environments with no real mic/speaker
+            // acoustic loopback (e.g. a headless sim host) and no UI-tap
+            // automation available. Real voice capture is verified
+            // separately (RealBellows genuinely decodes real PCM — see
+            // RealBellowsController); this hook only stands in for "a
+            // learner turn arrived," same as the typed keyboard fallback
+            // already does in the shipped UI. Never fires without the arg.
+            guard ProcessInfo.processInfo.arguments.contains("debug-send-turn=1") else { return }
+            try? await Task.sleep(for: .milliseconds(2500))
+            let text = "What's the thread I keep circling back to."
+            messages.append(.learner(id: UUID().uuidString, text: text))
+            model.engine.sendTurn(text)
+        }
     }
 
     private var header: some View {
