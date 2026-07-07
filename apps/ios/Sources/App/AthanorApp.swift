@@ -12,10 +12,11 @@ import SwiftUI
 // to change shape.
 @MainActor
 private func resolveEngine() -> any AthanorEngineProtocol {
-    // Read (not used yet): DemoEngine ignores it entirely; this only proves
-    // the Keychain round-trip works before the real engine needs it.
-    _ = KeychainKeyStore.load()
-    return DemoEngine()
+    // D3 seam: real athanor-core engine when the AthanorCoreFFI xcframework is
+    // linked AND a key is present; otherwise DemoEngine. All selection logic
+    // (incl. the first-launch Keychain seed) lives in RealEngineLoader so this
+    // stays a one-line swap.
+    RealEngineLoader.resolve()
 }
 
 @main

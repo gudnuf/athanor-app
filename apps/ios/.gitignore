@@ -1,1 +1,13 @@
 .screenshots/
+
+# Generated Xcode project (regenerate with ./generate.sh)
+*.xcodeproj
+build/
+xcuserdata/
+.DS_Store
+
+# Per-developer spec carrying the injected API key (see generate.sh) — never commit.
+project.local.yml
+
+# AthanorCoreFFI xcframework — large binaries, regenerate with build-ffi.sh.
+Packages/AthanorCoreFFI/Frameworks/

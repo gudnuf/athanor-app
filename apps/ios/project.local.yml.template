@@ -1,0 +1,11 @@
+# Copy to project.local.yml (gitignored) and fill in your value, OR just run
+# ./generate.sh — it writes project.local.yml for you from the repo-root .env.
+#
+# This file is merged into project.yml by xcodegen (via project-real.yml's
+# `include`). It supplies the ANTHROPIC_API_KEY build setting, which xcodebuild
+# expands into the built app's Info.plist as $(ANTHROPIC_API_KEY). Empty string
+# => the app runs the DemoEngine (no real LLM). ./generate.sh populates this
+# from ANTHROPIC_API_KEY in the repo-root .env.
+settings:
+  base:
+    ANTHROPIC_API_KEY: ""

@@ -23,6 +23,13 @@ targets:
     info:
       path: Sources/App/Info.plist
       properties:
+        # Literal build-variable reference — the real value is a build setting
+        # supplied by the gitignored project.local.yml (see project-real.yml /
+        # generate.sh) and expanded by xcodebuild into the built app's Info.plist.
+        # This tracked value never holds a secret; in the demo build the setting
+        # is undefined and expands to empty. RealEngineLoader reads it once at
+        # first launch and copies it to the Keychain.
+        ANTHROPIC_API_KEY: "$(ANTHROPIC_API_KEY)"
         CFBundleDisplayName: Athanor
         UILaunchScreen: {}
         NSMicrophoneUsageDescription: "Athanor listens to your Bellows so the Mystagogue can hear you tend your domains."
