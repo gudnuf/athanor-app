@@ -285,6 +285,13 @@ fn seed_now() -> u64 {
 
 /// Maps learner-profile prose to the store's five profile sections. Idempotent
 /// on its own (`set_profile_section` upserts by section).
+///
+/// The heading strings below ("How You Think", "The Throat", "Active Domains",
+/// …) are the academy profile TEMPLATE's structural labels — document
+/// *structure*, the same class as the journal's `## date — title` format or the
+/// correspondences' `## To X` blocks. They are not personal substance: the
+/// private prose lives only under those headings and is written solely to the
+/// git-ignored db, never to this code.
 fn seed_profile(store: &Store, academy_dir: &Path) -> Result<usize, SeedError> {
     let mut count = 0;
     if let Some(learner) = read_opt(&academy_dir.join("profile").join("learner.md"))? {

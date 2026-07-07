@@ -82,7 +82,7 @@ correspondences (profile sections are simply re-set, harmless).
   per-domain keyword set (the domain name plus synonyms). An entry that matches
   nothing gets no domain link (a realization with no domain is valid). This is
   deliberately conservative — better an unlinked realization than a wrong link.
-- **Correspondences to not-yet-domains.** A `## To Plasma Physics (not yet a
+- **Correspondences to not-yet-domains.** A `## To <Some Field> (not yet a
   domain)` block creates the "other" domain via `upsert_domain` and weaves to
   it. This faithfully represents a correspondence reaching toward an interest
   that hasn't been formalized — and is why the seeded domain count exceeds the

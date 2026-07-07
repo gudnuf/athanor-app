@@ -322,64 +322,36 @@ fn clean_domain_name(raw: &str) -> String {
     strip_emphasis(s.trim())
 }
 
-/// Classifies a journal entry to zero or more of the known domain names by
-/// keyword. Returns the matched domain names (as given in `known`), preserving
-/// `known`'s order. An entry that matches nothing gets no domain link.
+/// Classifies a journal entry to zero or more of the known domain names,
+/// matching purely on stems derived from each domain's own name at runtime —
+/// NO hardcoded vocabulary (privacy: nothing from the source material lives in
+/// this code). A hyphen/space/underscore-separated name contributes one stem
+/// per segment (its first up-to-6 chars, min length 4), so `magnetism` matches
+/// "magnet"/"magnetic" and `content-production` matches "content"/"production".
+/// Returns matched names in `known`'s order; an entry that matches nothing gets
+/// no domain link (deliberately conservative — better unlinked than wrong).
 pub fn classify_domains(title: &str, body: &str, known: &[String]) -> Vec<String> {
     let hay = format!("{} {}", title, body).to_lowercase();
     let mut out = Vec::new();
     for name in known {
-        let keys = domain_keywords(&name.to_lowercase());
-        if keys.iter().any(|k| hay.contains(k)) && !out.contains(name) {
+        if out.contains(name) {
+            continue;
+        }
+        if domain_stems(name).iter().any(|stem| hay.contains(stem)) {
             out.push(name.clone());
         }
     }
     out
 }
 
-/// Keyword sets per domain. The domain's own name is always a key; extra
-/// synonyms let free-form journal prose classify without exact-name mentions.
-fn domain_keywords(domain_lower: &str) -> Vec<&'static str> {
-    match domain_lower {
-        "magnetism" => vec![
-            "magnet",
-            "field",
-            "filings",
-            "copper pipe",
-            "electron spin",
-            "electromagnet",
-            "pole",
-        ],
-        "content-production" | "content production" => {
-            vec![
-                "content production",
-                "pipeline",
-                "openmontage",
-                "video",
-                "recording",
-                "diamond",
-                "edit",
-            ]
-        }
-        "rhetoric" => vec!["throat", "guard", "articulat", "slop", "speak", "rhetoric"],
-        "mysteries" => vec![
-            "yukteswar",
-            "mysteries",
-            "esoteric",
-            "cosmolog",
-            "synchronist",
-            "rung",
-        ],
-        "yoga" => vec!["yoga", "asana", "breath", "mat", "practice"],
-        other => {
-            // Unknown domain: fall back to matching its own name only. Leak the
-            // &'static requirement by matching just the literal via contains at
-            // call site is impossible here, so return empty and rely on the
-            // name being present through the generic path below.
-            let _ = other;
-            vec![]
-        }
-    }
+/// Stems derived from a domain name: one per segment, the first up-to-6 chars,
+/// for segments of length >= 4. Empty for very short names (they'd over-match).
+fn domain_stems(name: &str) -> Vec<String> {
+    name.to_lowercase()
+        .split(['-', ' ', '_'])
+        .filter(|seg| seg.len() >= 4)
+        .map(|seg| seg[..seg.len().min(6)].to_string())
+        .collect()
 }
 
 #[cfg(test)]
@@ -495,21 +467,27 @@ mod tests {
     }
 
     #[test]
-    fn classify_domains_matches_by_keyword() {
-        let known = vec![
-            "magnetism".to_string(),
-            "content-production".to_string(),
-            "rhetoric".to_string(),
-        ];
-        let d = classify_domains(
-            "the shape of the field",
-            "the filings stood up in spikes",
-            &known,
-        );
-        assert_eq!(d, vec!["magnetism".to_string()]);
-        let d = classify_domains("the guard", "there is a guard at my throat", &known);
-        assert_eq!(d, vec!["rhetoric".to_string()]);
-        let d = classify_domains("nothing", "unrelated prose", &known);
+    fn classify_domains_matches_on_name_stems() {
+        // Invented domains + prose; the contract is name-stem matching only.
+        let known = vec!["widgetry".to_string(), "gizmo-fabrication".to_string()];
+        // "widgetry" -> stem "widget"; prose says "widgets".
+        let d = classify_domains("shapes", "the widgets stood up straight", &known);
+        assert_eq!(d, vec!["widgetry".to_string()]);
+        // hyphenated name: either segment stem hits ("gizmos" -> "gizmo").
+        let d = classify_domains("turns", "the gizmos turned twice", &known);
+        assert_eq!(d, vec!["gizmo-fabrication".to_string()]);
+        // no stem present -> no link (conservative).
+        let d = classify_domains("nothing", "unrelated prose here", &known);
         assert!(d.is_empty());
+    }
+
+    #[test]
+    fn domain_stems_skips_short_segments() {
+        assert_eq!(domain_stems("yo"), Vec::<String>::new());
+        assert_eq!(domain_stems("widgetry"), vec!["widget".to_string()]);
+        assert_eq!(
+            domain_stems("gizmo-fabrication"),
+            vec!["gizmo".to_string(), "fabric".to_string()]
+        );
     }
 }
