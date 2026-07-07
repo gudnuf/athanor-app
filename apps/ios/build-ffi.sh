@@ -19,8 +19,19 @@
 # failing the final link ("building for iOS Simulator, but linking in .tbd built
 # for macOS"). Fix (murmur pattern): keep the nix toolchain for cargo/rustc, but
 # point CC/CXX/AR/LINKER at the *system* Xcode toolchain (/usr/bin/clang, ar)
-# and SDKROOT at the real iphoneos/iphonesimulator SDK via xcrun, unsetting the
-# NIX_*FLAGS.
+# and SDKROOT at the real iphoneos/iphonesimulator SDK via xcrun.
+#
+# --- Why there is NO `unset NIX_CFLAGS_COMPILE NIX_LDFLAGS …` here ---
+# murmur's script unset the NIX_* vars to keep them off the iOS link. We must
+# NOT: the per-target CC/CXX/AR/LINKER overrides above already point iOS builds
+# at system clang, which ignores NIX_* entirely — so the unsets protect nothing
+# on the iOS side. What they DO break is the HOST build-scripts (aws-lc-sys's and
+# ring's build.rs, compiled by the nix host toolchain for the build machine):
+# those need NIX_CFLAGS_COMPILE/NIX_LDFLAGS to find libiconv, and without them
+# the host link fails with `ld: library not found for -liconv` on a cold target
+# dir (a warm cache masks it — the earlier build.rs artifacts survive). The D1
+# verification build proved the per-target overrides link iOS correctly with the
+# NIX_* vars left intact. Do NOT "restore murmur parity" by re-adding the unsets.
 #
 # --- athanor-specific amendment (meta-verified 2026-07-06) ---
 # cc-rs (ring / aws-lc-sys under goose, and whisper-rs-sys's cmake) invokes a
@@ -94,7 +105,6 @@ build_target() {
     export CXX_'"$envprefix"'=/usr/bin/clang++
     export AR_'"$envprefix"'=/usr/bin/ar
     export CARGO_TARGET_'"$(echo "$envprefix" | tr '[:lower:]' '[:upper:]')"'_LINKER=/usr/bin/clang
-    unset NIX_CFLAGS_COMPILE NIX_LDFLAGS NIX_CFLAGS_COMPILE_FOR_BUILD NIX_LDFLAGS_FOR_BUILD
     cargo rustc -p ffi --release --features goose,whisper --target '"$triple"' --lib --crate-type staticlib
   '
 }
