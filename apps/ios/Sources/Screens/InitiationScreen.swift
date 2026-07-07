@@ -33,6 +33,9 @@ struct InitiationScreen: View {
             }
             .padding(.horizontal, Ember.S.screenPad)
             Spacer()
+            WarmingLine(state: model.modelDownloader.state)
+                .padding(.horizontal, Ember.S.screenPad)
+                .padding(.bottom, 4)
             Button {
                 if canFinish {
                     model.hasCompletedInitiation = true
@@ -94,6 +97,50 @@ struct InitiationScreen: View {
             case .condensation, .toolCall, .error:
                 break
             }
+        }
+    }
+}
+
+/// A quiet presence, not a loading screen (F1 brief: "it should feel
+/// incidental"). No spinner, no motion-budget animation — the bar's width
+/// just steps to the current fraction (`Ember.Motion.none`); the only
+/// screen-level motion here stays E3's (none) plus whatever Initiation
+/// itself already spends. Invisible once ready, and quietly honest on
+/// failure rather than stuck mid-progress forever.
+private struct WarmingLine: View {
+    var state: ModelDownloader.State
+
+    var body: some View {
+        switch state {
+        case .idle, .ready:
+            EmptyView()
+        case .downloading(let progress):
+            bar(label: "warming the ear", progress: progress)
+        case .verifying:
+            bar(label: "settling in", progress: 1)
+        case .failed:
+            Text("the ear stays cold for now — offline")
+                .font(Ember.F.sans(11))
+                .foregroundStyle(Ember.C.mutedDim)
+        }
+    }
+
+    private func bar(label: String, progress: Double) -> some View {
+        VStack(spacing: 6) {
+            Capsule()
+                .fill(Ember.C.raised2)
+                .frame(height: 2)
+                .overlay(alignment: .leading) {
+                    GeometryReader { geo in
+                        Capsule()
+                            .fill(Ember.C.heat.opacity(0.55))
+                            .frame(width: geo.size.width * progress)
+                    }
+                }
+                .animation(Ember.Motion.none, value: progress)
+            Text(label)
+                .font(Ember.F.sans(11))
+                .foregroundStyle(Ember.C.mutedDim)
         }
     }
 }
