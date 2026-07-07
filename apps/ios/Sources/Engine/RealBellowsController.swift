@@ -22,30 +22,37 @@ import AthanorCoreFFI
 //     second audio path (plan §2 "Ember amplitude").
 @MainActor
 final class RealBellowsController: BellowsController {
-    private let handle: AthanorCoreFFI.BellowsHandle
+    // `nonisolated` — read/called directly from the CoreAudio realtime tap
+    // callback (see `installTapAndStart`), which is not MainActor-isolated.
+    // Safe: `BellowsHandle` is `@unchecked Sendable` (uniffi-generated;
+    // internally synchronized in Rust — `SttStream` is `Send + Sync`), and
+    // `AsyncStream.Continuation.yield` is documented safe to call from any
+    // thread/task concurrently. `muted` is a benign-race plain `Bool` (a rare
+    // user-toggled flag read every tap callback; a torn/stale read costs at
+    // most one buffer's worth of latency in the mute state, never a crash or
+    // corrupted transcript) — deliberately `nonisolated(unsafe)` rather than
+    // adding lock overhead to the realtime path for a single flag.
+    nonisolated private let handle: AthanorCoreFFI.BellowsHandle
     private let engine = AVAudioEngine()
     private var converter: AVAudioConverter?
     private var pollTask: Task<Void, Never>?
     private var previewTask: Task<Void, Never>?
-    private var muted = false
+    nonisolated(unsafe) private var muted = false
     private var capturing = false
 
     let events: AsyncStream<BellowsEvent>
-    private let continuation: AsyncStream<BellowsEvent>.Continuation
+    nonisolated private let continuation: AsyncStream<BellowsEvent>.Continuation
 
-    // KNOWN SIMULATOR-ONLY RISK (E4 real-half verification, confirmed
-    // reproducible): `BellowsHandle.open` → `whisper_init_with_params_no_state`
-    // → ggml-metal buffer allocation traps with EXC_BREAKPOINT/SIGTRAP inside
-    // `MTLSimDevice newBufferWithLength:...` on the iOS Simulator's software
-    // Metal shim — before any audio capture starts. Root cause:
-    // `crates/stt/src/whisper.rs` hardcodes `params.use_gpu(true)`, and the
-    // Simulator's Metal translation layer chokes on ggml's buffer allocation
-    // pattern (a known class of ggml-metal/Simulator incompatibility — real
-    // device Metal is a different code path and is NOT expected to hit this).
-    // This is a native trap, not a Swift error — no `do/catch` here can shield
-    // it; it takes the whole process down. Fixing it means either giving
-    // `crates/stt` a CPU-fallback toggle or confirming (G2/G3, on-device) that
-    // real hardware never hits this — both out of E4's Swift-only scope.
+    // SIMULATOR NOTE (resolved 929432e): `BellowsHandle.open` used to trap
+    // with EXC_BREAKPOINT/SIGTRAP inside ggml-metal's buffer allocation on
+    // the Simulator's software Metal shim (`MTLSimDevice`) — root-caused to
+    // `crates/stt/src/whisper.rs` hardcoding `params.use_gpu(true)`. Fixed by
+    // gating Metal off on the sim target only
+    // (`params.use_gpu(!cfg!(target_abi = "sim"))`); real device Metal is an
+    // untouched, different code path. Proven live post-fix: the Simulator now
+    // runs CPU whisper end-to-end — real AVAudioEngine capture, real decode,
+    // real finalized segments, and a real turn reaching the live Anthropic
+    // engine, all exercised together with no crash (E4 sim-unblock report).
     init(modelPath: String, tier: ModelTier, biasTerms: [String]) throws {
         let ffiTier: AthanorCoreFFI.BellowsTier = tier == .small ? .smallEn : .baseEn
         self.handle = try AthanorCoreFFI.BellowsHandle.open(modelPath: modelPath, biasTerms: biasTerms, tier: ffiTier)
@@ -150,12 +157,22 @@ final class RealBellowsController: BellowsController {
             let samples = Array(UnsafeBufferPointer(start: channelData[0], count: frameCount))
             let rms = Self.rms(samples)
 
-            // Hop off the realtime thread for the FFI push + UI event (plan
-            // §2: "push ~100 ms chunks over FFI ... off the realtime thread").
+            guard !self.muted else { return }
+            // SYNCHRONOUS, in CoreAudio's own callback order (fixes a real
+            // ordering bug: an unstructured `Task {}` per buffer is not
+            // FIFO-ordered by the language, so consecutive buffers could
+            // reach `push_pcm` out of order and scramble the transcript
+            // window — plan risk #8). A ~1365-sample `Vec` copy is well
+            // within a tap callback's budget; `handle` is `nonisolated` +
+            // `@unchecked Sendable`, so this needs no actor hop.
+            self.handle.pushPcm(pcm: samples)
+
+            // Amplitude stays off the realtime thread (unlike the push
+            // above, ordering doesn't matter here — an occasionally
+            // reordered amplitude tick is imperceptible).
+            let amplitude = Double(min(rms * 5, 1.0))
             Task { [weak self] in
-                guard let self, !self.muted else { return }
-                self.handle.pushPcm(pcm: samples)
-                self.continuation.yield(.amplitude(Double(min(rms * 5, 1.0))))
+                self?.continuation.yield(.amplitude(amplitude))
             }
         }
 
@@ -172,7 +189,14 @@ final class RealBellowsController: BellowsController {
     // MARK: - Poll / preview loops (background — never the realtime thread)
 
     private func startPollLoop() {
-        pollTask = Task { [weak self] in
+        // `Task.detached`, NOT a plain `Task {}` — an unstructured `Task`
+        // created inside a `@MainActor` method inherits main-actor isolation,
+        // so `handle.poll()` (the synchronous whisper decode, ~0.4–0.5s
+        // wall on-device per plan §2) would otherwise run ON the UI thread,
+        // janking the app every ~250ms during a live session. `handle` and
+        // `continuation` are `nonisolated`, so the detached task can touch
+        // them without hopping back to Main at all.
+        pollTask = Task.detached { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
                 if let segments = try? self.handle.poll() {
