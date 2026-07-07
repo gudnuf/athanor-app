@@ -17,6 +17,21 @@ struct InitiationScreen: View {
     @State private var completedTurns = 0
     @State private var canFinish = false
 
+    // Real-path input (review BLOCKER-1): on a real build, the ONLY thing
+    // that may become the learner's first utterance to the live Mystagogue
+    // is something the learner actually said or typed — never a synthetic
+    // kickoff string. Mirrors SessionScreen's real-Bellows state; see
+    // `beginRealBellows()` below.
+    @State private var realBellows: (any BellowsController)?
+    @State private var realMuted = false
+    @State private var micDenied = false
+    @State private var amplitude: Double = 0
+    @State private var liveCooled = ""
+    @State private var livePreview = ""
+    @State private var typedText = ""
+    @State private var showKeyboard = false
+    @FocusState private var typedFieldFocused: Bool
+
     var body: some View {
         VStack(spacing: 24) {
             Spacer()
@@ -36,35 +51,124 @@ struct InitiationScreen: View {
             WarmingLine(state: model.modelDownloader.state)
                 .padding(.horizontal, Ember.S.screenPad)
                 .padding(.bottom, 4)
-            Button {
-                if canFinish {
-                    model.hasCompletedInitiation = true
-                } else {
-                    model.engine.sendTurn("(initiation demo tap)")
-                }
-            } label: {
-                Text(canFinish ? "Enter the Furnace" : "Begin")
-                    .font(Ember.F.sans(17, weight: .semibold))
-                    .foregroundStyle(Ember.C.ground)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: Ember.S.buttonHeight)
-                    .background(Ember.C.heat, in: Capsule())
+
+            if canFinish {
+                enterFurnaceButton
+            } else if model.engine.isReal {
+                // TODO(core, queued with the assistant-history work): the
+                // Mystagogue should speak first here (a real cold-open turn
+                // the Conductor injects), so the learner never has to be the
+                // one to break the silence. Not attempted in this fix —
+                // it needs an AcpPrompt/Conductor change (core-side), out of
+                // scope for a Swift fix lane. Until then: the learner must
+                // proactively type/speak, and that's the honest state of the
+                // real path — better than the alternative (a demo string
+                // masquerading as their first words to a live model).
+                realInput
+            } else {
+                demoBeginButton
             }
-            .padding(.horizontal, Ember.S.screenPad)
-            .padding(.bottom, 32)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Ember.C.ground.ignoresSafeArea())
         .task { await begin() }
+        .task { await beginRealBellows() }
         .task {
             // Screenshot/QA automation hook only (mirrors murmur-rmp's
             // `autoflow=` launch arg) — taps Begin automatically so the
             // word-by-word streaming path can be captured mid-flight without
-            // a real tap gesture. Never affects a normal launch.
-            guard ProcessInfo.processInfo.arguments.contains("autoplay=1") else { return }
+            // a real tap gesture. Never affects a normal launch. Demo-only:
+            // the real path has no fake-tap equivalent to fire (see BLOCKER-1
+            // fix above), so this hook is a no-op there.
+            guard ProcessInfo.processInfo.arguments.contains("autoplay=1"), !model.engine.isReal else { return }
             try? await Task.sleep(for: .milliseconds(300))
             model.engine.sendTurn("(autoplay)")
         }
+    }
+
+    private var enterFurnaceButton: some View {
+        Button {
+            model.hasCompletedInitiation = true
+        } label: {
+            Text("Enter the Furnace")
+                .font(Ember.F.sans(17, weight: .semibold))
+                .foregroundStyle(Ember.C.ground)
+                .frame(maxWidth: .infinity)
+                .frame(height: Ember.S.buttonHeight)
+                .background(Ember.C.heat, in: Capsule())
+        }
+        .padding(.horizontal, Ember.S.screenPad)
+        .padding(.bottom, 32)
+    }
+
+    /// Demo path only — `DemoEngine`'s canned script advances on any
+    /// `sendTurn` call, so a fixed tap string is a legitimate stand-in for
+    /// "the learner said something" (it's fed to a fixed script, not a live
+    /// model — see DemoEngine's own no-business-logic discipline). This is
+    /// NEVER reachable when `model.engine.isReal` (see `body`).
+    private var demoBeginButton: some View {
+        Button {
+            model.engine.sendTurn("(initiation demo tap)")
+        } label: {
+            Text("Begin")
+                .font(Ember.F.sans(17, weight: .semibold))
+                .foregroundStyle(Ember.C.ground)
+                .frame(maxWidth: .infinity)
+                .frame(height: Ember.S.buttonHeight)
+                .background(Ember.C.heat, in: Capsule())
+        }
+        .padding(.horizontal, Ember.S.screenPad)
+        .padding(.bottom, 32)
+    }
+
+    /// Real path (review BLOCKER-1 fix): the same input affordances a real
+    /// session has — typed field always available, the real Bellows (voice)
+    /// once the model's ready and the FFI is linked. Whatever the learner
+    /// actually says/types becomes their real first turn; nothing synthetic
+    /// is ever sent.
+    @ViewBuilder
+    private var realInput: some View {
+        if let realBellows {
+            RealBellows(
+                controller: realBellows,
+                amplitude: amplitude,
+                liveCooled: liveCooled,
+                livePreview: livePreview,
+                muted: $realMuted,
+                micDenied: micDenied,
+                showKeyboard: $showKeyboard,
+                typedText: $typedText,
+                fieldFocused: $typedFieldFocused,
+                onSendCooledNow: { realBellows.sendNow() },
+                onSubmitTyped: submitRealTyped
+            )
+        } else {
+            // Bellows not constructed yet (model still downloading, or this
+            // launch has no mic path) — typed is the minimum legitimate
+            // real-path affordance, always available.
+            HStack(spacing: 10) {
+                TextField("Say it your way…", text: $typedText, axis: .vertical)
+                    .focused($typedFieldFocused)
+                    .font(Ember.F.sans(15))
+                    .foregroundStyle(Ember.C.ink)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(Ember.C.raised2, in: RoundedRectangle(cornerRadius: 12))
+                Button("Send", action: submitRealTyped)
+                    .font(Ember.F.sans(14, weight: .semibold))
+                    .foregroundStyle(Ember.C.heat)
+            }
+            .padding(.horizontal, Ember.S.screenPad)
+            .padding(.bottom, 32)
+        }
+    }
+
+    private func submitRealTyped() {
+        let trimmed = typedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        typedText = ""
+        showKeyboard = false
+        model.engine.sendTurn(trimmed)
     }
 
     private func initiationLine(_ text: String) -> some View {
@@ -98,6 +202,52 @@ struct InitiationScreen: View {
                 break
             }
         }
+    }
+
+    /// Opens the Bellows against the model F1 already downloaded — mirrors
+    /// SessionScreen's `beginRealBellows()` exactly (same bounded wait, same
+    /// bias-term assembly, same event handling). Deliberately NOT gated on
+    /// `model.engine.isReal` for the same reason as SessionScreen: the
+    /// Bellows needs no Anthropic key, only the FFI build + a ready model.
+    private func beginRealBellows() async {
+        var modelPath = model.modelDownloader.readyPath
+        var attempts = 0
+        while modelPath == nil, attempts < 40 {
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            modelPath = model.modelDownloader.readyPath
+            attempts += 1
+        }
+        guard let modelPath else { return }
+        let bias = BellowsBias.terms(engine: model.engine)
+        guard let controller = BellowsFactory.makeRealController(
+            modelPath: modelPath, tier: model.modelTier, biasTerms: bias
+        ) else { return }
+        realBellows = controller
+        controller.start()
+        for await event in controller.events {
+            switch event {
+            case .amplitude(let level):
+                withAnimation(Ember.Motion.bellowsEmbers) { amplitude = level }
+            case .previewTail(let text):
+                livePreview = text
+            case .finalizedAppend(let text):
+                liveCooled = liveCooled.isEmpty ? text : liveCooled + " " + text
+                livePreview = ""
+            case .utteranceEnded:
+                sendLiveUtterance()
+            case .permissionDenied:
+                micDenied = true
+                showKeyboard = true
+            }
+        }
+    }
+
+    private func sendLiveUtterance() {
+        let text = liveCooled.trimmingCharacters(in: .whitespacesAndNewlines)
+        liveCooled = ""
+        livePreview = ""
+        guard !text.isEmpty else { return }
+        model.engine.sendTurn(text)
     }
 }
 

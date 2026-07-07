@@ -457,8 +457,11 @@ private struct BellowsBed: View {
 /// The live transcript + real ember bed, driven by a `BellowsController`.
 /// Layout mirrors the demo `Bellows`/`BellowsBed` pair on purpose (same
 /// screen position, same keyboard glyph) so the swap in SessionScreen's body
-/// is a data-source change, not a different screen.
-private struct RealBellows: View {
+/// is a data-source change, not a different screen. Internal (not private):
+/// `InitiationScreen` reuses this so the real path's first session gets the
+/// same legitimate input affordances a real session screen has, instead of
+/// injecting a fake kickoff string (review BLOCKER-1).
+struct RealBellows: View {
     var controller: any BellowsController
     var amplitude: Double
     var liveCooled: String
@@ -552,8 +555,9 @@ private struct RealBellows: View {
 /// as RMS-over-push_pcm-buffer events (~12/s at the plan's tap cadence);
 /// SwiftUI interpolates between ticks via `Ember.Motion.bellowsEmbers` (the
 /// budgeted spring the caller wraps each update in) — no per-frame timer
-/// needed here, unlike the demo sine stub.
-private struct RealBellowsBed: View {
+/// needed here, unlike the demo sine stub. Internal: shared with
+/// `RealBellows` (used by both SessionScreen and InitiationScreen).
+struct RealBellowsBed: View {
     var amplitude: Double
     var muted: Bool
     var onTap: () -> Void
