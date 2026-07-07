@@ -32,4 +32,4 @@ session_budget_min: 15
 <<MASK philosophus: opaque prose asset, not snapshotted>>
 
 === section 6: tools (placeholder-fill, literal) ===
-Tools available this session: fix_salt, open_thread, evaporate_thread, kindle_passage, weave_domains, update_memory.
+Tools available this session: fix_salt, open_thread, evaporate_thread, kindle_passage, weave_domains, update_memory, shift_mask.

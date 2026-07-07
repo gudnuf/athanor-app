@@ -13,6 +13,7 @@ pub mod conductor;
 pub mod domain;
 pub mod error;
 pub mod ids;
+pub mod mask;
 pub mod mystagogue;
 pub mod prompt;
 pub mod register;

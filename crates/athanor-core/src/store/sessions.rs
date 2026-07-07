@@ -46,6 +46,28 @@ impl Store {
         self.get_session(&id)
     }
 
+    /// Persists a session's current `(mask, mode)` — written when the model
+    /// shifts the mask mid-session (`shift_mask`) or the learner pins one, so
+    /// the row is a truthful record of the register the session is running
+    /// under (lane 13). The live source of truth during a session is the shared
+    /// `MaskState` cell; this keeps the durable row in step.
+    pub fn set_session_mask_mode(
+        &self,
+        session_id: &str,
+        mask: &str,
+        mode: &str,
+    ) -> Result<(), CoreError> {
+        let now = self.now();
+        let changed = self.conn().execute(
+            "UPDATE sessions SET mask = ?1, mode = ?2, updated_at = ?3 WHERE id = ?4",
+            params![mask, mode, now, session_id],
+        )?;
+        if changed == 0 {
+            return Err(CoreError::NotFound(format!("session {session_id}")));
+        }
+        Ok(())
+    }
+
     pub fn append_transcript(&self, session_id: &str, chunk: &str) -> Result<(), CoreError> {
         let now = self.now();
         let changed = self.conn().execute(
@@ -109,6 +131,20 @@ mod tests {
         assert_eq!(session.state, "open");
         assert_eq!(session.transcript, "");
         assert!(session.thread_id.is_none());
+    }
+
+    #[test]
+    fn set_session_mask_mode_updates_the_row() {
+        let store = Store::open_in_memory("d").unwrap();
+        let session = store
+            .create_session(None, "philosophus", "explain")
+            .unwrap();
+        store
+            .set_session_mask_mode(&session.id, "adamas", "challenge")
+            .unwrap();
+        let reloaded = store.get_session(&session.id).unwrap();
+        assert_eq!(reloaded.mask, "adamas");
+        assert_eq!(reloaded.mode, "challenge");
     }
 
     #[test]

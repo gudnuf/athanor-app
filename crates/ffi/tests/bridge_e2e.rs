@@ -63,26 +63,33 @@ async fn scripted_turn_fixes_salt_streams_condensation_then_reads_round_trip() {
         .send_turn("Forgetting costs energy, doesn't it?".into())
         .await;
 
-    // Ordered event stream: delta, tool call, synthesized condensation, then
-    // the turn completes — condensation strictly BEFORE TurnComplete.
+    // Ordered event stream: the opening register (lane 13), then delta, tool
+    // call, synthesized condensation, then the turn completes — condensation
+    // strictly BEFORE TurnComplete.
     let events = collector.0.lock().unwrap().clone();
     assert_eq!(
         events.len(),
-        4,
-        "delta, toolcall, condensation, complete: {events:?}"
+        5,
+        "mask, delta, toolcall, condensation, complete: {events:?}"
     );
     assert!(
-        matches!(&events[0], SessionEvent::TextDelta { text, register }
-            if text.contains("dissipation") && *register == ReplyRegister::Quick),
-        "first event is a quick-register text delta: {:?}",
+        matches!(&events[0], SessionEvent::MaskShifted { mask, mode }
+            if mask == "philosophus" && mode == "explain"),
+        "first event surfaces the opening register: {:?}",
         events[0]
     );
     assert!(
-        matches!(&events[1], SessionEvent::ToolCall { kind } if kind == "fix_salt"),
-        "second event is the fix_salt tool call: {:?}",
+        matches!(&events[1], SessionEvent::TextDelta { text, register }
+            if text.contains("dissipation") && *register == ReplyRegister::Quick),
+        "second event is a quick-register text delta: {:?}",
         events[1]
     );
-    let condensation_rid = match &events[2] {
+    assert!(
+        matches!(&events[2], SessionEvent::ToolCall { kind } if kind == "fix_salt"),
+        "third event is the fix_salt tool call: {:?}",
+        events[2]
+    );
+    let condensation_rid = match &events[3] {
         SessionEvent::Condensation {
             realization_id,
             child_thread_id,
@@ -104,12 +111,12 @@ async fn scripted_turn_fixes_salt_streams_condensation_then_reads_round_trip() {
             );
             realization_id.clone()
         }
-        other => panic!("third event must be the condensation moment: {other:?}"),
+        other => panic!("fourth event must be the condensation moment: {other:?}"),
     };
     assert!(
-        matches!(events[3], SessionEvent::TurnComplete),
+        matches!(events[4], SessionEvent::TurnComplete),
         "condensation precedes TurnComplete: {:?}",
-        events[3]
+        events[4]
     );
 
     // Land the session so tending is recorded (the only place wisdom advances).
@@ -213,14 +220,74 @@ async fn begin_initiation_open_streams_the_mystagogues_first_reply_with_no_learn
     session.open().await;
 
     let events = collector.0.lock().unwrap().clone();
-    assert_eq!(events.len(), 2, "delta, complete: {events:?}");
+    assert_eq!(events.len(), 3, "mask, delta, complete: {events:?}");
     assert!(
-        matches!(&events[0], SessionEvent::TextDelta { text, .. }
-            if text.contains("pulling at you")),
-        "the Mystagogue's opening line streams with no learner turn preceding it: {:?}",
+        matches!(&events[0], SessionEvent::MaskShifted { mask, mode }
+            if mask == "initiation" && mode == "initiation"),
+        "the opening register is surfaced first: {:?}",
         events[0]
     );
-    assert!(matches!(events[1], SessionEvent::TurnComplete));
+    assert!(
+        matches!(&events[1], SessionEvent::TextDelta { text, .. }
+            if text.contains("pulling at you")),
+        "the Mystagogue's opening line streams with no learner turn preceding it: {:?}",
+        events[1]
+    );
+    assert!(matches!(events[2], SessionEvent::TurnComplete));
+
+    session.close(15).await.unwrap();
+}
+
+/// Lane 13 escape hatch, end-to-end: the learner pins a mask, the header truth
+/// updates, and a subsequent model `shift_mask` no-ops (the pin wins).
+#[tokio::test]
+async fn pinning_a_mask_holds_it_against_a_later_shift_mask() {
+    let store = Arc::new(Store::open_in_memory("dev").unwrap());
+    store
+        .open_thread("why does iron remember?", None, None)
+        .unwrap();
+
+    // A turn where the model tries to shift to solve.
+    let mock = MockEngine::new(vec![
+        AcpUpdate::text_delta("Staying with it."),
+        AcpUpdate::ToolCall(AcpToolCall {
+            id: "1".into(),
+            name: "shift_mask".into(),
+            args: json!({ "mask": "solve" }),
+        }),
+        AcpUpdate::TurnComplete,
+    ]);
+    let engine = AthanorEngine::with_engine(Arc::clone(&store), Arc::new(mock));
+    let session = engine.begin_session(None, None, None).unwrap();
+    assert_eq!(
+        session.current_mask(),
+        "philosophus",
+        "opens on the default"
+    );
+
+    let collector = Arc::new(Collector(Mutex::new(Vec::new())));
+    session.set_listener(collector.clone());
+
+    // The learner pins adamas via the header escape hatch.
+    session.pin_mask("adamas".into());
+    assert_eq!(session.current_mask(), "adamas");
+    assert!(
+        collector
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|e| matches!(e, SessionEvent::MaskShifted { mask, .. } if mask == "adamas")),
+        "pinning surfaces the choice to the header at once"
+    );
+
+    // The model tries to shift to solve — the pin holds.
+    session.send_turn("push".into()).await;
+    assert_eq!(
+        session.current_mask(),
+        "adamas",
+        "the pin wins: shift_mask no-ops while pinned"
+    );
 
     session.close(15).await.unwrap();
 }

@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 
 use athanor_core::conductor::Conductor;
 use athanor_core::engine::{AcpUpdate, MystagogueEngine};
+use athanor_core::mask::{self, SharedMask};
 use athanor_core::Store;
 use tokio::sync::Mutex as TokioMutex;
 
@@ -35,6 +36,15 @@ pub struct SessionHandle {
     store: Arc<Store>,
     engine: Arc<dyn MystagogueEngine>,
     listener: StdMutex<Option<Arc<dyn SessionEventListener>>>,
+    /// The session's live `(mask, mode, pinned)` register — shared with the
+    /// `Conductor` + the `shift_mask` tool (lane 13). Read for the honest header
+    /// and written by the pin escape hatch.
+    mask_state: SharedMask,
+    /// This session's id — needed to persist the mask when the learner pins.
+    session_id: String,
+    /// The last `(mask, mode)` surfaced to the listener as a `MaskShifted`, so a
+    /// turn only emits the event when the register actually changed.
+    last_emitted_mask: StdMutex<Option<(String, String)>>,
     #[allow(dead_code)]
     runtime_handle: tokio::runtime::Handle,
 }
@@ -46,13 +56,32 @@ impl SessionHandle {
         engine: Arc<dyn MystagogueEngine>,
         runtime_handle: tokio::runtime::Handle,
     ) -> Arc<Self> {
+        let mask_state = conductor.mask_state();
+        let session_id = conductor.session_id().to_string();
         Arc::new(SessionHandle {
             conductor: TokioMutex::new(Some(conductor)),
             store,
             engine,
             listener: StdMutex::new(None),
+            mask_state,
+            session_id,
+            last_emitted_mask: StdMutex::new(None),
             runtime_handle,
         })
+    }
+
+    /// Surfaces the session's current `(mask, mode)` to the listener as a
+    /// `MaskShifted` — but only when it differs from what was last surfaced. Run
+    /// at the top of every turn: the first turn emits the opening register (so
+    /// the header is truthful from the first reply), and a mid-session shift is
+    /// surfaced on the first turn that runs under the new register.
+    fn emit_mask_if_changed(&self, listener: &Option<Arc<dyn SessionEventListener>>) {
+        let (mask, mode) = mask::current(&self.mask_state);
+        let mut last = self.last_emitted_mask.lock().unwrap();
+        if last.as_ref() != Some(&(mask.clone(), mode.clone())) {
+            *last = Some((mask.clone(), mode.clone()));
+            emit(listener, SessionEvent::MaskShifted { mask, mode });
+        }
     }
 }
 
@@ -100,6 +129,37 @@ impl SessionHandle {
         *self.listener.lock().unwrap() = Some(listener);
     }
 
+    /// The session's current mask id — for the honest header (lane 13).
+    pub fn current_mask(&self) -> String {
+        mask::current(&self.mask_state).0
+    }
+
+    /// The session's current mode id — for the honest header (lane 13).
+    pub fn current_mode(&self) -> String {
+        mask::current(&self.mask_state).1
+    }
+
+    /// The escape hatch: the learner pins a mask (header tap → picker). Pins the
+    /// shared cell (so `shift_mask` no-ops for the rest of the session), persists
+    /// it to the session row, and surfaces the choice to the listener as a
+    /// `MaskShifted` so the header reflects it at once.
+    pub fn pin_mask(&self, chosen: String) {
+        mask::pin(&self.mask_state, &chosen);
+        let mode = mask::current(&self.mask_state).1;
+        // Persist the learner's choice; a store hiccup must never panic across
+        // FFI, so it's logged-by-omission (the live cell is already authoritative).
+        let _ = self
+            .store
+            .set_session_mask_mode(&self.session_id, &chosen, &mode);
+        let listener = self.listener.lock().unwrap().clone();
+        // Force the header to update now, even though no turn is running.
+        {
+            let mut last = self.last_emitted_mask.lock().unwrap();
+            *last = Some((chosen.clone(), mode.clone()));
+        }
+        emit(&listener, SessionEvent::MaskShifted { mask: chosen, mode });
+    }
+
     /// Drives one learner turn through the `Conductor`, streaming projected
     /// `SessionEvent`s to the listener as `AcpUpdate`s arrive. Never panics
     /// across FFI: a failed turn (or a call after the session ended) surfaces
@@ -116,6 +176,10 @@ impl SessionHandle {
             );
             return;
         };
+
+        // Surface the register this turn runs under (the opening pair on turn 1,
+        // or a pair a prior turn's shift_mask moved us to) before any text.
+        self.emit_mask_if_changed(&listener);
 
         let store = Arc::clone(&self.store);
         let mut cond = CondensationState::default();
@@ -149,6 +213,8 @@ impl SessionHandle {
             );
             return;
         };
+
+        self.emit_mask_if_changed(&listener);
 
         let store = Arc::clone(&self.store);
         let mut cond = CondensationState::default();

@@ -24,6 +24,7 @@ use std::sync::Arc;
 
 use crate::engine::{AcpPrompt, AcpRole, AcpTurn, AcpUpdate, EngineError, MystagogueEngine};
 use crate::error::CoreError;
+use crate::mask::{self, SharedMask};
 use crate::mystagogue::Mystagogue;
 use crate::prompt;
 use crate::register::RegisterParser;
@@ -70,8 +71,14 @@ pub struct Conductor {
     store: Arc<Store>,
     mystagogue: Mystagogue,
     session_id: String,
-    mask: String,
-    mode: String,
+    /// The session's live `(mask, mode)` register — the shared cell the
+    /// `shift_mask` tool moves and the FFI header/pin read (lane 13). Assembled
+    /// under, fresh, on every turn, so a mid-session shift takes effect the next
+    /// turn for free.
+    mask_state: SharedMask,
+    /// Whether this is the initiation session (assembles the cold-start prompt,
+    /// ignores the mask/mode register). Fixed at construction.
+    is_initiation: bool,
     thread_id: Option<String>,
     /// The full dialogue so far, oldest first, both sides — re-sent (via a
     /// freshly-assembled prompt) on every subsequent `run_turn` so a
@@ -124,15 +131,22 @@ impl Conductor {
         mode: String,
         thread_id: Option<String>,
     ) -> Self {
-        // Hand the Mystagogue the session's focal thread so `fix_salt` can fall
-        // back to it when the model fumbles the id.
-        let mystagogue = Mystagogue::new(Arc::clone(&store)).with_focal_thread(thread_id.clone());
+        let is_initiation = mask == INITIATION_MASK && mode == INITIATION_MODE;
+        // The session's live register, shared with the Mystagogue's shift_mask
+        // tool + the FFI header/pin. Seeded at the opening (mask, mode).
+        let mask_state = mask::shared(&mask, &mode);
+        // Hand the Mystagogue the session's focal thread (fix_salt fallback) and
+        // the shared mask cell + id (so shift_mask can move + persist the
+        // register mid-session).
+        let mystagogue = Mystagogue::new(Arc::clone(&store))
+            .with_focal_thread(thread_id.clone())
+            .with_mask_state(Arc::clone(&mask_state), session_id.clone());
         Self {
             store,
             mystagogue,
             session_id,
-            mask,
-            mode,
+            mask_state,
+            is_initiation,
             thread_id,
             turns: Vec::new(),
             transcript: String::new(),
@@ -143,6 +157,12 @@ impl Conductor {
 
     pub fn session_id(&self) -> &str {
         &self.session_id
+    }
+
+    /// The session's shared `(mask, mode, pinned)` cell — handed to the FFI
+    /// bridge so it can surface the honest header and pin the escape hatch.
+    pub fn mask_state(&self) -> SharedMask {
+        Arc::clone(&self.mask_state)
     }
 
     pub fn thread_id(&self) -> Option<&str> {
@@ -165,25 +185,23 @@ impl Conductor {
     }
 
     fn is_initiation(&self) -> bool {
-        self.mask == INITIATION_MASK && self.mode == INITIATION_MODE
+        self.is_initiation
     }
 
     /// Assembles the prompt fresh from current store state + the accumulated
     /// dialogue history (both sides — see `turns`). Called at the top of
     /// every `run_turn`/`open_turn` so later turns see whatever the session
-    /// (or a prior turn's tool calls) has changed — `assemble`/
-    /// `assemble_initiation` are pure over store state, so this stays
-    /// deterministic given a fixed store + turn history.
+    /// (or a prior turn's tool calls) has changed — including a mid-session
+    /// `shift_mask`, since the `(mask, mode)` is read fresh from the shared cell
+    /// here every turn. `assemble`/`assemble_initiation` are pure over store
+    /// state, so this stays deterministic given a fixed store + turn history +
+    /// register.
     fn assemble_prompt(&self) -> AcpPrompt {
         let plan = if self.is_initiation() {
             prompt::assemble_initiation(&self.store)
         } else {
-            prompt::assemble(
-                &self.mask,
-                &self.mode,
-                self.thread_id.as_deref(),
-                &self.store,
-            )
+            let (mask, mode) = mask::current(&self.mask_state);
+            prompt::assemble(&mask, &mode, self.thread_id.as_deref(), &self.store)
         };
         AcpPrompt {
             system: plan.system_prompt,
@@ -559,6 +577,50 @@ mod tests {
         assert!(conductor
             .transcript()
             .contains("A measured lesson, laid down."));
+    }
+
+    /// Lane 13: the Mystagogue shifts the mask mid-session via `shift_mask`; the
+    /// shift lands on the shared cell during the turn and the NEXT assemble runs
+    /// under the new register (the Conductor reads the cell fresh each turn).
+    #[tokio::test]
+    async fn shift_mask_mid_session_reassembles_under_the_new_register_next_turn() {
+        let store = store_arc();
+        let mut conductor =
+            Conductor::begin(Arc::clone(&store), "philosophus", "explain", None).unwrap();
+        assert_eq!(
+            mask::current(&conductor.mask_state()),
+            ("philosophus".into(), "explain".into())
+        );
+
+        // Turn 1: the model shifts to adamas/challenge as the moment calls for it.
+        let engine = MockEngine::new(vec![
+            AcpUpdate::text_delta("Let's press this harder."),
+            AcpUpdate::ToolCall(AcpToolCall {
+                id: "1".into(),
+                name: "shift_mask".into(),
+                args: json!({ "mask": "adamas", "mode": "challenge" }),
+            }),
+            AcpUpdate::TurnComplete,
+        ]);
+        conductor
+            .run_turn(&engine, Some("Push me."), &mut |_| {})
+            .await
+            .unwrap();
+
+        // The shared cell moved…
+        assert_eq!(
+            mask::current(&conductor.mask_state()),
+            ("adamas".into(), "challenge".into()),
+            "shift_mask moved the live register"
+        );
+        // …and the next assemble is byte-identical to a fresh adamas/challenge
+        // assembly (proving the Conductor reads the register fresh each turn),
+        // and different from the philosophus/explain it opened under.
+        let next = conductor.assemble_prompt();
+        let adamas = prompt::assemble("adamas", "challenge", None, &store);
+        let philosophus = prompt::assemble("philosophus", "explain", None, &store);
+        assert_eq!(next.system, adamas.system_prompt);
+        assert_ne!(next.system, philosophus.system_prompt);
     }
 
     #[tokio::test]

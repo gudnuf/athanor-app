@@ -45,6 +45,12 @@ pub enum SessionEvent {
     /// (`fix_salt`, `open_thread`, `evaporate_thread`, `kindle_passage`,
     /// `weave_domains`, `update_memory`).
     ToolCall { kind: String },
+    /// **Bridge-synthesized.** The session's current `(mask, mode)` register
+    /// (lane 13) — emitted at the top of a turn whenever it differs from what was
+    /// last surfaced: the opening pair on the first turn, and the new pair on the
+    /// first turn after a `shift_mask` (or a learner pin). Drives the honest
+    /// Session-screen header.
+    MaskShifted { mask: String, mode: String },
     /// A salt was fixed this turn — the condensation moment. Derived from the
     /// `fix_salt` tool's own `AcpUpdate::ToolResult` (its real `realization_id`
     /// and spiral `child_thread_id`), and carrying the fixed salt's TEXT so the
