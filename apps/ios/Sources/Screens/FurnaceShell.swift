@@ -11,9 +11,21 @@ enum FurnaceTab: Hashable {
 
 struct FurnaceShell: View {
     var model: AppModel
-    @State private var tab: FurnaceTab = .furnace
+    @State private var tab: FurnaceTab
     @State private var showTabula = false
-    @State private var sessionActive = false
+    @State private var sessionActive: Bool
+
+    init(model: AppModel) {
+        self.model = model
+        // Screenshot/QA automation hook only (mirrors murmur-rmp's `screen=`
+        // launch arg) — jumps straight to a tab or the session screen so
+        // screens can be captured without scripting real taps. Never
+        // affects a normal launch.
+        let args = ProcessInfo.processInfo.arguments
+        let screen = args.first(where: { $0.hasPrefix("screen=") })?.dropFirst("screen=".count)
+        _tab = State(initialValue: screen == "mercury" ? .mercury : screen == "grimoire" ? .grimoire : .furnace)
+        _sessionActive = State(initialValue: screen == "session")
+    }
 
     var body: some View {
         Group {
