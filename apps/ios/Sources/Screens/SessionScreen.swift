@@ -19,6 +19,17 @@ struct SessionScreen: View {
     @State private var typedText = ""
     @FocusState private var typedFieldFocused: Bool
 
+    // Real Bellows (E4 real half) — nil in the demo build/path, where the
+    // sine-stub `Bellows` view below is used unchanged.
+    @State private var realBellows: (any BellowsController)?
+    @State private var realMuted = false
+    @State private var micDenied = false
+    @State private var amplitude: Double = 0
+    /// Finalized-but-not-yet-sent text for the current utterance (cooled/settled).
+    @State private var liveCooled = ""
+    /// Volatile preview tail (mercury-shimmer), replaced wholesale each tick.
+    @State private var livePreview = ""
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -45,18 +56,35 @@ struct SessionScreen: View {
                 }
             }
 
-            Bellows(
-                listening: $listening,
-                showKeyboard: $showKeyboard,
-                typedText: $typedText,
-                fieldFocused: $typedFieldFocused,
-                onTapBed: sendDemoTurn,
-                onSubmitTyped: submitTyped
-            )
+            if let realBellows {
+                RealBellows(
+                    controller: realBellows,
+                    amplitude: amplitude,
+                    liveCooled: liveCooled,
+                    livePreview: livePreview,
+                    muted: $realMuted,
+                    micDenied: micDenied,
+                    showKeyboard: $showKeyboard,
+                    typedText: $typedText,
+                    fieldFocused: $typedFieldFocused,
+                    onSendCooledNow: { realBellows.sendNow() },
+                    onSubmitTyped: submitTyped
+                )
+            } else {
+                Bellows(
+                    listening: $listening,
+                    showKeyboard: $showKeyboard,
+                    typedText: $typedText,
+                    fieldFocused: $typedFieldFocused,
+                    onTapBed: sendDemoTurn,
+                    onSubmitTyped: submitTyped
+                )
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Ember.C.ground.ignoresSafeArea())
         .task { await begin() }
+        .task { await beginRealBellows() }
         .task {
             // Screenshot/QA automation hook only (mirrors the same pattern in
             // InitiationScreen) — taps the bed on a timer so the full script,
@@ -143,6 +171,7 @@ struct SessionScreen: View {
     }
 
     private func close() {
+        realBellows?.stop()
         Task {
             await model.engine.endSession(abandon: false)
             onClose()
@@ -151,7 +180,15 @@ struct SessionScreen: View {
 
     private func begin() async {
         guard let stream = try? model.engine.beginSession(threadId: nil) else { return }
-        model.engine.sendTurn("(session opens)")
+        // DemoEngine's canned script only advances on a `sendTurn` call, so a
+        // synthetic kickoff plays its opening line with no real interaction
+        // yet. The REAL engine's Conductor opens the Socratic turn itself
+        // from the assembled SessionPlan — sending a fake "(session opens)"
+        // string would inject it as the learner's actual first utterance to
+        // the live model, so this kickoff is demo-only.
+        if !model.engine.isReal {
+            model.engine.sendTurn("(session opens)")
+        }
         for await event in stream {
             switch event {
             case .textDelta(let chunk, let register):
@@ -179,6 +216,67 @@ struct SessionScreen: View {
                 break
             }
         }
+    }
+
+    /// Opens the Bellows against the model F1 already downloaded, with bias
+    /// terms assembled from the ordinary read surface (BellowsBias —
+    /// grimoire()/mercury(), never a second Store access).
+    ///
+    /// Deliberately NOT gated on `model.engine.isReal`: the Bellows (mic +
+    /// on-device whisper STT) needs no Anthropic key at all — only the FFI
+    /// build + a ready model file. Gating on `isReal` would make it
+    /// impossible to exercise real audio capture without a live key. The
+    /// actual "real build vs demo build" gate lives in `BellowsFactory`
+    /// (compiles to `nil` under `#if canImport(AthanorCoreFFI)` absence) —
+    /// that's the one seam this screen needs; a no-key real build still
+    /// gets real ears even while `sendTurn` reaches DemoEngine's fallback.
+    private func beginRealBellows() async {
+        // The model may still be mid-download if the learner reaches a
+        // session unusually fast after first launch (normally Initiation
+        // covers this wait) — poll briefly rather than giving up on a single
+        // snapshot. Bounded so a session with no model yet (or none at all,
+        // e.g. demo build) still opens promptly.
+        var modelPath = model.modelDownloader.readyPath
+        var attempts = 0
+        while modelPath == nil, attempts < 40 {
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            modelPath = model.modelDownloader.readyPath
+            attempts += 1
+        }
+        guard let modelPath else { return }
+        let bias = BellowsBias.terms(engine: model.engine)
+        guard let controller = BellowsFactory.makeRealController(
+            modelPath: modelPath, tier: model.modelTier, biasTerms: bias
+        ) else { return }
+        realBellows = controller
+        controller.start()
+        for await event in controller.events {
+            switch event {
+            case .amplitude(let level):
+                withAnimation(Ember.Motion.bellowsEmbers) { amplitude = level }
+            case .previewTail(let text):
+                livePreview = text
+            case .finalizedAppend(let text):
+                liveCooled = liveCooled.isEmpty ? text : liveCooled + " " + text
+                livePreview = ""
+            case .utteranceEnded:
+                sendLiveUtterance()
+            case .permissionDenied:
+                // Quiet, no nagging: fall back to the typed field and never
+                // ask again this session.
+                micDenied = true
+                showKeyboard = true
+            }
+        }
+    }
+
+    private func sendLiveUtterance() {
+        let text = liveCooled.trimmingCharacters(in: .whitespacesAndNewlines)
+        liveCooled = ""
+        livePreview = ""
+        guard !text.isEmpty else { return }
+        messages.append(.learner(id: UUID().uuidString, text: text))
+        model.engine.sendTurn(text)
     }
 }
 
@@ -332,6 +430,143 @@ private struct BellowsBed: View {
                 RoundedRectangle(cornerRadius: 12)
                     .stroke(Ember.C.hairline, lineWidth: 1)
             }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onTap)
+    }
+}
+
+// MARK: - The real Bellows (E4 real half)
+
+/// The live transcript + real ember bed, driven by a `BellowsController`.
+/// Layout mirrors the demo `Bellows`/`BellowsBed` pair on purpose (same
+/// screen position, same keyboard glyph) so the swap in SessionScreen's body
+/// is a data-source change, not a different screen.
+private struct RealBellows: View {
+    var controller: any BellowsController
+    var amplitude: Double
+    var liveCooled: String
+    var livePreview: String
+    @Binding var muted: Bool
+    var micDenied: Bool
+    @Binding var showKeyboard: Bool
+    @Binding var typedText: String
+    var fieldFocused: FocusState<Bool>.Binding
+    var onSendCooledNow: () -> Void
+    var onSubmitTyped: () -> Void
+
+    var body: some View {
+        VStack(spacing: 10) {
+            if !liveCooled.isEmpty || !livePreview.isEmpty {
+                transcript
+            }
+
+            if showKeyboard {
+                HStack(spacing: 10) {
+                    TextField("Say it your way…", text: $typedText, axis: .vertical)
+                        .focused(fieldFocused)
+                        .font(Ember.F.sans(15))
+                        .foregroundStyle(Ember.C.ink)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(Ember.C.raised2, in: RoundedRectangle(cornerRadius: 12))
+                    Button("Send", action: onSubmitTyped)
+                        .font(Ember.F.sans(14, weight: .semibold))
+                        .foregroundStyle(Ember.C.heat)
+                }
+            } else {
+                RealBellowsBed(amplitude: amplitude, muted: muted) {
+                    muted.toggle()
+                    controller.setMuted(muted)
+                }
+                .frame(height: 46)
+            }
+
+            HStack {
+                if micDenied {
+                    Text("no mic access — type instead")
+                        .font(Ember.F.sans(11))
+                        .foregroundStyle(Ember.C.mutedDim)
+                } else if !showKeyboard {
+                    Text(muted ? "banked" : "listening — tap the bed to bank")
+                        .font(Ember.F.sans(11))
+                        .foregroundStyle(Ember.C.mutedDim)
+                }
+                Spacer()
+                if !micDenied {
+                    Button {
+                        showKeyboard.toggle()
+                        if showKeyboard { fieldFocused.wrappedValue = true }
+                    } label: {
+                        Text("⌨").font(.system(size: 16)).foregroundStyle(Ember.C.muted.opacity(0.65))
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, Ember.S.screenPad)
+        .padding(.top, 16)
+        .padding(.bottom, 12)
+        .overlay(alignment: .top) { Ember.C.hairline.frame(height: 1) }
+    }
+
+    /// Cooled (settled/finalized) text upright and tappable — "tapping the
+    /// settled text sends immediately" (spec). Volatile preview styled once,
+    /// statically (italic + a fixed two-tone foreground) — a look, not a
+    /// loop; shimmer here is styling, not a new animation.
+    private var transcript: some View {
+        (Text(liveCooled.isEmpty ? "" : liveCooled + " ")
+            .font(Ember.F.sans(17))
+            .foregroundStyle(Ember.C.ink)
+        + Text(livePreview)
+            .font(Ember.F.serif(17, italic: true))
+            .foregroundStyle(Ember.C.muted)
+        )
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
+        .animation(Ember.Motion.none, value: liveCooled)
+        .animation(Ember.Motion.none, value: livePreview)
+        .onTapGesture {
+            guard !liveCooled.isEmpty else { return }
+            onSendCooledNow()
+        }
+    }
+}
+
+/// Real-amplitude coal row. `amplitude` arrives from `RealBellowsController`
+/// as RMS-over-push_pcm-buffer events (~12/s at the plan's tap cadence);
+/// SwiftUI interpolates between ticks via `Ember.Motion.bellowsEmbers` (the
+/// budgeted spring the caller wraps each update in) — no per-frame timer
+/// needed here, unlike the demo sine stub.
+private struct RealBellowsBed: View {
+    var amplitude: Double
+    var muted: Bool
+    var onTap: () -> Void
+
+    private let cellCount = 7
+    // Fixed per-cell spread so seven cells don't all move in lockstep off
+    // one scalar — a look, not a spectral analysis (out of scope for E4).
+    private static let spread: [Double] = [0.55, 0.8, 1.0, 0.85, 0.6, 0.9, 0.7]
+
+    var body: some View {
+        let level = muted ? 0.04 : amplitude
+        ZStack {
+            RoundedRectangle(cornerRadius: 12).fill(Color(hex: 0x0a0806))
+            HStack(spacing: 6) {
+                ForEach(0..<cellCount, id: \.self) { i in
+                    let amp = min(level * Self.spread[i], 1.0)
+                    Capsule()
+                        .fill(
+                            RadialGradient(
+                                colors: [Ember.C.heatCore, Ember.C.heatHot, Ember.C.heatDeep],
+                                center: .center, startRadius: 0, endRadius: 20
+                            )
+                        )
+                        .opacity(0.16 + 0.84 * amp)
+                        .frame(width: 20, height: 10 + 26 * amp)
+                }
+            }
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Ember.C.hairline, lineWidth: 1)
         }
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
