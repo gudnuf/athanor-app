@@ -101,11 +101,13 @@ enum RealEngineLoader {
     ///   - Opt-in by presence: does nothing unless generate.sh baked a fixture
     ///     path (`ATHANOR_DEV_SEED_DB`) AND that file exists on disk (so a
     ///     device/CI build with no host fixture simply falls through to empty).
+    ///   - Profile select: `seed-profile=normy` at launch prefers the committed
+    ///     "normy" demo persona (`ATHANOR_DEV_SEED_DB_NORMY`) over the default,
+    ///     so the everyday-learner demo is one launch arg away.
     /// The seeded data lives only in the gitignored fixture; nothing is committed.
     private static func seedFromDevFixtureIfNeeded(liveDB: URL, fileManager fm: FileManager) {
         guard !fm.fileExists(atPath: liveDB.path) else { return } // never clobber
-        guard let fixture = Bundle.main.object(forInfoDictionaryKey: "ATHANOR_DEV_SEED_DB") as? String,
-              !fixture.isEmpty, fm.fileExists(atPath: fixture) else { return }
+        guard let fixture = resolveDevFixture(fileManager: fm) else { return }
         do {
             try fm.copyItem(atPath: fixture, toPath: liveDB.path)
             // Bring along the sqlite sidecars if the fixture carries them (WAL
@@ -123,13 +125,30 @@ enum RealEngineLoader {
             // before AppModel reads the flag. Key mirrors AppModel.initiationKey;
             // dev-only, only on the seed path.
             UserDefaults.standard.set(true, forKey: "athanor.hasCompletedInitiation")
-            NSLog("[Athanor] dev: seeded a fresh live db from the lived-in fixture")
+            NSLog("[Athanor] dev: seeded a fresh live db from the dev fixture")
         } catch {
             NSLog("[Athanor] dev: could not seed from fixture (\(error)); starting empty")
         }
     }
-    #endif
-    #endif
+
+    /// Which baked fixture to seed from: the committed "normy" demo persona when
+    /// `seed-profile=normy` is passed and its fixture exists, otherwise the
+    /// default (`ATHANOR_DEV_SEED_DB` — the lived seed if present, else normy).
+    /// Returns nil when the chosen fixture isn't on disk (device/CI → empty).
+    private static func resolveDevFixture(fileManager fm: FileManager) -> String? {
+        func baked(_ key: String) -> String? {
+            guard let v = Bundle.main.object(forInfoDictionaryKey: key) as? String,
+                  !v.isEmpty, fm.fileExists(atPath: v) else { return nil }
+            return v
+        }
+        if ProcessInfo.processInfo.arguments.contains("seed-profile=normy"),
+           let normy = baked("ATHANOR_DEV_SEED_DB_NORMY") {
+            return normy
+        }
+        return baked("ATHANOR_DEV_SEED_DB")
+    }
+    #endif // DEBUG
+    #endif // canImport(AthanorCoreFFI)
 }
 
 #if canImport(AthanorCoreFFI)

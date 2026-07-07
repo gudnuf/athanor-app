@@ -59,18 +59,29 @@ if [ -z "$KEY" ]; then
   echo "      at runtime until a key is present." >&2
 fi
 
-# Dev lived-in seed fixture (optional): a gitignored sqlite the operator built
-# with `athanor-cli seed` (see docs/research/lived-seed-mapping.md). When present,
-# its absolute path is baked into the build so a DEBUG install seeds itself on
-# first launch (RealEngineLoader, #if DEBUG) — no `seed-db=` arg to remember.
-# The path is NOT a secret; the seeded data never enters git (the fixture lives
-# under gitignored /seeds/). Release builds ignore it.
+# Dev seed fixtures (optional): gitignored sqlite dbs built with `athanor-cli
+# seed` (see docs/research/lived-seed-mapping.md). When present, their absolute
+# paths are baked into the build so a DEBUG install seeds itself on first launch
+# (RealEngineLoader, #if DEBUG) — no `seed-db=` arg to remember. Paths are NOT
+# secrets; the seeded data never enters git (fixtures live under gitignored
+# /seeds/). Release builds ignore all of this.
+#
+# Two fixtures: the operator's PRIVATE lived seed (from ~/athanor) and the
+# committed "normy" demo persona (`athanor-cli seed --profile normy`). The
+# DEFAULT the app seeds is the lived one if present, else normy; `seed-profile=
+# normy` at launch always selects normy.
+LIVED_SEED="$REPO_ROOT/seeds/lived.seed.sqlite"
+NORMY_SEED="$REPO_ROOT/seeds/normy.seed.sqlite"
 SEED_FIXTURE=""
-SEED_CANDIDATE="$REPO_ROOT/seeds/lived.seed.sqlite"
-if [ -f "$SEED_CANDIDATE" ]; then
-  SEED_FIXTURE="$SEED_CANDIDATE"
-  echo "NOTE: found lived-in dev seed fixture — DEBUG installs will seed on first launch." >&2
+if [ -f "$LIVED_SEED" ]; then
+  SEED_FIXTURE="$LIVED_SEED"
+  echo "NOTE: found lived-in dev seed — DEBUG installs seed from it by default." >&2
+elif [ -f "$NORMY_SEED" ]; then
+  SEED_FIXTURE="$NORMY_SEED"
+  echo "NOTE: found normy demo seed — DEBUG installs seed from it by default." >&2
 fi
+NORMY_FIXTURE=""
+if [ -f "$NORMY_SEED" ]; then NORMY_FIXTURE="$NORMY_SEED"; fi
 
 # Write the gitignored local spec (0600). The key VALUE is never echoed (it
 # stays inside the heredoc, redirected straight to the 0600 file).
@@ -82,8 +93,11 @@ settings:
     ANTHROPIC_API_KEY: "$KEY"
 EOF
 if [ -n "$SEED_FIXTURE" ]; then
-  # Path only — not a secret. Appended (not in the heredoc) for clarity.
+  # Paths only — not secrets. Appended (not in the heredoc) for clarity.
   echo "    ATHANOR_DEV_SEED_DB: \"$SEED_FIXTURE\"" >> "$LOCAL"
+fi
+if [ -n "$NORMY_FIXTURE" ]; then
+  echo "    ATHANOR_DEV_SEED_DB_NORMY: \"$NORMY_FIXTURE\"" >> "$LOCAL"
 fi
 
 xcodegen generate --spec project-real.yml

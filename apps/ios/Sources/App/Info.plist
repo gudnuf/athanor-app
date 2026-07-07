@@ -6,6 +6,8 @@
 	<string>$(ANTHROPIC_API_KEY)</string>
 	<key>ATHANOR_DEV_SEED_DB</key>
 	<string>$(ATHANOR_DEV_SEED_DB)</string>
+	<key>ATHANOR_DEV_SEED_DB_NORMY</key>
+	<string>$(ATHANOR_DEV_SEED_DB_NORMY)</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>

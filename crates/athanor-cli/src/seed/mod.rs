@@ -15,8 +15,15 @@
 //! by path and pattern (see `.gitignore` + docs/research/lived-seed-mapping.md).
 //! Only this script is committed; the data never is. All tests use invented
 //! synthetic samples.
+//!
+//! **Demo personas.** `profiles` holds committable FICTION (e.g. `normy`) whose
+//! source markdown lives in `fixtures/` and is embedded into the binary — so the
+//! public repo carries a shippable, personal-data-free demo that seeds through
+//! this exact same path.
 
 pub mod parse;
+pub mod profiles;
 pub mod translate;
 
+pub use profiles::Profile;
 pub use translate::{seed_from, SeedClock, SeedError, SeedReport};

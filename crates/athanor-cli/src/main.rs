@@ -27,9 +27,12 @@ SESSION OPTIONS:
     --goose           use the real engine (build with --features goose; reads
                       ANTHROPIC_API_KEY from the environment at runtime)
 
-SEED OPTIONS (lived-in demo — reads real academy markdown, writes a private db):
-    --from <DIR>      academy directory (domains/, grimoire/, STATE.md, profile/)
-    --db <PATH>       sqlite path to write (git-ignored; never commit it)
+SEED OPTIONS (lived-in demo — writes a demo db through the real store APIs):
+    --from <DIR>      academy directory (domains/, grimoire/, STATE.md, profile/).
+                      Use for the operator's PRIVATE lived seed (git-ignored db).
+    --profile <NAME>  a committed demo persona instead of --from (known: normy) —
+                      fiction, safe to ship; source lives in fixtures/<NAME>/.
+    --db <PATH>       sqlite path to write
 
     -h, --help        print this help
 ";
@@ -127,13 +130,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 /// past, then translates the real academy markdown through the store APIs.
 /// Prints COUNTS ONLY (no personal content) so the output is safe to log.
 fn run_seed(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
-    use athanor_cli::seed::{seed_from, SeedClock};
+    use athanor_cli::seed::{profiles, seed_from, SeedClock};
 
     let mut from: Option<String> = None;
+    let mut profile: Option<String> = None;
     let mut db_path: Option<String> = None;
     while let Some(flag) = args.next() {
         match flag.as_str() {
             "--from" => from = Some(next_value(&mut args, "--from")?),
+            "--profile" => profile = Some(next_value(&mut args, "--profile")?),
             "--db" => db_path = Some(next_value(&mut args, "--db")?),
             "-h" | "--help" => {
                 print!("{USAGE}");
@@ -142,8 +147,28 @@ fn run_seed(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn std::e
             other => return Err(format!("unknown seed option '{other}'\n\n{USAGE}").into()),
         }
     }
-    let from = from.ok_or("seed requires --from <ACADEMY_DIR>")?;
     let db_path = db_path.ok_or("seed requires --db <PATH>")?;
+
+    // Source academy tree: either an on-disk --from directory (the private
+    // lived seed) or an embedded --profile persona materialized to a temp tree
+    // (a committed demo). Both feed the identical `seed_from` path below.
+    let (academy_dir, _tmp): (std::path::PathBuf, Option<TempDir>) = match (from, profile) {
+        (Some(dir), None) => (dir.into(), None),
+        (None, Some(name)) => {
+            let persona = profiles::by_name(&name).ok_or_else(|| {
+                format!(
+                    "unknown --profile '{name}' (known: {})",
+                    profiles::known_names()
+                )
+            })?;
+            let dir =
+                std::env::temp_dir().join(format!("athanor-seed-{name}-{}", std::process::id()));
+            persona.materialize(&dir)?;
+            (dir.clone(), Some(TempDir(dir)))
+        }
+        (Some(_), Some(_)) => return Err("use either --from or --profile, not both".into()),
+        (None, None) => return Err("seed requires --from <DIR> or --profile <NAME>".into()),
+    };
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -152,7 +177,7 @@ fn run_seed(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn std::e
     let clock = SeedClock::new(now);
     let store = Store::open(&db_path, "seed")?.with_clock(clock.clock());
 
-    let report = seed_from(&store, &clock, std::path::Path::new(&from))?;
+    let report = seed_from(&store, &clock, &academy_dir)?;
     println!(
         "seeded {db_path}:\n  domains={} realizations={} spiral_children={} \
 open_threads={} condensing={} correspondences={} tending_days={} \
@@ -177,6 +202,15 @@ fn next_value(
 ) -> Result<String, Box<dyn std::error::Error>> {
     args.next()
         .ok_or_else(|| format!("{flag} requires a value").into())
+}
+
+/// Removes a materialized persona's temp academy tree when seeding finishes
+/// (or errors out), so `--profile` leaves nothing behind in the temp dir.
+struct TempDir(std::path::PathBuf);
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 #[cfg(feature = "goose")]

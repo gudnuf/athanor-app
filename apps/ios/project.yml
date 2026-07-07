@@ -36,6 +36,10 @@ targets:
         # seed a fresh install so every screen looks inhabited. Never a secret,
         # never committed with a value; release builds ignore it.
         ATHANOR_DEV_SEED_DB: "$(ATHANOR_DEV_SEED_DB)"
+        # The committed "normy" demo persona's fixture path — baked when its
+        # seed db exists, so `seed-profile=normy` at launch can select it over
+        # the default. Same $(VAR) reference discipline; empty in a plain build.
+        ATHANOR_DEV_SEED_DB_NORMY: "$(ATHANOR_DEV_SEED_DB_NORMY)"
         CFBundleDisplayName: Athanor
         UILaunchScreen: {}
         NSMicrophoneUsageDescription: "Athanor listens to your Bellows so the Mystagogue can hear you tend your domains."

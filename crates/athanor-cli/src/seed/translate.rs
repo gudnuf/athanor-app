@@ -327,16 +327,24 @@ fn seed_profile(store: &Store, academy_dir: &Path) -> Result<usize, SeedError> {
     let mut count = 0;
     if let Some(learner) = read_opt(&academy_dir.join("profile").join("learner.md"))? {
         let sections = extract_named_sections(&learner);
-        let mut set = |key: &str, header: &str| -> Result<(), SeedError> {
-            if let Some(body) = sections.iter().find(|(h, _)| h == header) {
+        // Each profile key accepts a few candidate headings (first match wins):
+        // the academy template's own labels, plus plainer ones so a committed
+        // demo persona's learner.md reads naturally (a sourdough baker has no
+        // "Throat"). The heading is structure, not substance — only the body
+        // prose beneath it is stored.
+        let mut set = |key: &str, headers: &[&str]| -> Result<(), SeedError> {
+            if let Some(body) = sections
+                .iter()
+                .find(|(h, _)| headers.iter().any(|w| w == h))
+            {
                 store.set_profile_section(key, &body.1)?;
                 count += 1;
             }
             Ok(())
         };
-        set("how_i_learn", "How You Think")?;
-        set("frictions", "The Throat")?;
-        set("pulls", "Drives")?;
+        set("how_i_learn", &["How You Think", "How I Learn"])?;
+        set("frictions", &["The Throat", "Where I Get Stuck"])?;
+        set("pulls", &["Drives", "Why I Care"])?;
     }
     if let Some(state) = read_opt(&academy_dir.join("STATE.md"))? {
         let sections = extract_named_sections(&state);
@@ -514,6 +522,78 @@ mod tests {
         );
 
         fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn normy_persona_seeds_a_full_lived_in_state_through_the_same_path() {
+        let tmp = std::env::temp_dir().join(format!("normy-seed-test-{}", std::process::id()));
+        crate::seed::profiles::NORMY.materialize(&tmp).unwrap();
+        let (store, clock) = seeded_store();
+        let report = seed_from(&store, &clock, &tmp).unwrap();
+
+        // A real three-week practice: domains, salt, threads, tending, weaves.
+        assert!(
+            report.domains >= 4,
+            "starter/proofing/scoring/crumb: {report:?}"
+        );
+        assert!(report.realizations >= 6, "the journal's bakes became salt");
+        assert!(report.open_threads >= 5, "Sam's plain-language questions");
+        assert!(report.tending_days >= 10, "~three weeks of sessions");
+        assert!(report.correspondences >= 1, "cross-domain links");
+
+        // The SAME parity kindles as the lived seed light Tabula I–V.
+        let by_key = |k: &str| {
+            store
+                .tabula()
+                .unwrap()
+                .into_iter()
+                .find(|p| p.key == k)
+                .unwrap()
+        };
+        for key in ["FURNACE", "PRINCIPLES", "GATES", "MINISTERS", "GRIMOIRE"] {
+            assert!(
+                by_key(key).kindled,
+                "{key} should be lit for a lived install"
+            );
+        }
+
+        // Profile read from the plainer headings (How I Learn / Where I Get Stuck).
+        assert!(!store.get_profile_section("how_i_learn").unwrap().is_empty());
+        assert!(!store.get_profile_section("frictions").unwrap().is_empty());
+
+        // THE DEMO'S PREMISE: the learner's own material is entirely plain —
+        // no alchemical vocabulary anywhere in what Sam wrote. (The Mystagogue's
+        // voice is untouched and lives in the prompt pack, not here.)
+        let mut learner = String::new();
+        for g in store.list_realizations().unwrap() {
+            learner.push_str(&g.realization.text);
+            learner.push(' ');
+        }
+        for t in store.open_threads().unwrap() {
+            learner.push_str(&t.prompt);
+            learner.push(' ');
+        }
+        learner.push_str(&store.get_profile_section("how_i_learn").unwrap());
+        learner.push_str(&store.get_profile_section("frictions").unwrap());
+        learner.push_str(&store.get_profile_section("pulls").unwrap());
+        let lower = learner.to_lowercase();
+        for tell in [
+            "nigredo",
+            "albedo",
+            "citrinitas",
+            "rubedo",
+            "azoth",
+            "mystagogue",
+            "adamas",
+            "alchem",
+        ] {
+            assert!(
+                !lower.contains(tell),
+                "learner input must stay plain — found alchemical tell '{tell}'"
+            );
+        }
+
+        fs::remove_dir_all(&tmp).ok();
     }
 
     #[test]
