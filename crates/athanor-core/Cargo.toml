@@ -5,15 +5,34 @@ edition = "2021"
 
 [dependencies]
 rusqlite = { workspace = true }
+thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-thiserror = { workspace = true }
 uuid = { workspace = true }
 async-trait = { workspace = true }
 
+# Real goose embed, pulled in only behind `feature = "goose"` — see
+# src/engine/goose.rs. `agent-client-protocol{,-schema,-http}` pinned per the
+# Task-8 review's VERIFY #6 correction (agent-client-protocol 1.0 is stable;
+# `unstable` lives on -schema 1.1, not on the main crate) — these resolved
+# clean against crates.io. `goose-sdk-types` did NOT: the review's pin of
+# "1.41.0" does not exist on crates.io (only 0.1.0-alpha.0 is published as of
+# 2026-07-06 — verified via the crates.io API). Pinned to the real published
+# version instead of the review's guess; flagged as a deviation. NOT enabled
+# in default features — the hermetic tier must never compile these.
+agent-client-protocol = { version = "1.0", optional = true }
+agent-client-protocol-schema = { version = "1.1", optional = true, features = ["unstable"] }
+agent-client-protocol-http = { version = "1.0", optional = true }
+goose-sdk-types = { version = "0.1.0-alpha.0", optional = true }
+
 [features]
 default = []
-goose = []   # real embed pulled in Task 8; off keeps tests hermetic
+goose = [
+    "dep:agent-client-protocol",
+    "dep:agent-client-protocol-schema",
+    "dep:agent-client-protocol-http",
+    "dep:goose-sdk-types",
+]
 
 [dev-dependencies]
 tokio = { workspace = true }

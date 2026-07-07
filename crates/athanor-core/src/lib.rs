@@ -17,6 +17,8 @@ pub mod store;
 pub use error::CoreError;
 pub use store::Store;
 
+pub mod engine;
+
 /// Returns the crate's own identity string. A trivial, stable UniFFI-exportable
 /// function so the FFI bridge and the SwiftUI shell have a real round-trip to
 /// build against before any domain logic exists.
