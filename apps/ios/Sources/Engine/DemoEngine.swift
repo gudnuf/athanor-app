@@ -174,7 +174,7 @@ final class DemoEngine: AthanorEngineProtocol {
 
     // MARK: AthanorEngineProtocol
 
-    func beginSession(threadId: String?) throws -> AsyncStream<SessionEvent> {
+    func beginSession(threadId: String?, mask: String?) throws -> AsyncStream<SessionEvent> {
         turnIndex = 0
         scriptedInitiation = false
         return makeStream()
@@ -252,6 +252,16 @@ final class DemoEngine: AthanorEngineProtocol {
         streamTask = nil
         continuation?.finish()
         continuation = nil
+    }
+
+    /// Demo heats — a lived-in home screen (mirrors the gallery's DIAL_HEAT feel:
+    /// the Bellows overdue and roaring, Mercury kindled on a ripe thread, Adamas
+    /// the mask last worn running molten, Azoth cold iron).
+    func homeHeat() -> HomeHeatValues {
+        HomeHeatValues(
+            furnace: 0.62, bellows: 0.97, mercury: 0.68, grimoire: 0.5,
+            tabula: 0.36, adamas: 0.85, philosophus: 0.30, solve: 0.15, azoth: 0
+        )
     }
 
     func furnaceState() -> FireState { seededFire }

@@ -561,6 +561,13 @@ public protocol AthanorEngineProtocol: AnyObject, Sendable {
     func grimoire() throws  -> [GrimoireGrain]
     
     /**
+     * The home screen's per-door heat (lane 14): every door's 0..1 temperature,
+     * computed in core from real store facts (`Store::home_heat`). Heat is the
+     * notification system — no badges or counts anywhere.
+     */
+    func homeHeat() throws  -> HomeHeat
+    
+    /**
      * The Mercury read: open threads (volatile + condensing)
      * (`Store::open_threads`), each with its domain's human NAME resolved from
      * the domain table so the UI never has to show a raw domain id.
@@ -682,6 +689,19 @@ open func furnaceState()throws  -> FurnaceState  {
 open func grimoire()throws  -> [GrimoireGrain]  {
     return try  FfiConverterSequenceTypeGrimoireGrain.lift(try rustCallWithError(FfiConverterTypeEngineError_lift) {
     uniffi_ffi_fn_method_athanorengine_grimoire(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+    
+    /**
+     * The home screen's per-door heat (lane 14): every door's 0..1 temperature,
+     * computed in core from real store facts (`Store::home_heat`). Heat is the
+     * notification system — no badges or counts anywhere.
+     */
+open func homeHeat()throws  -> HomeHeat  {
+    return try  FfiConverterTypeHomeHeat_lift(try rustCallWithError(FfiConverterTypeEngineError_lift) {
+    uniffi_ffi_fn_method_athanorengine_home_heat(
             self.uniffiCloneHandle(),$0
     )
 })
@@ -1784,6 +1804,93 @@ public func FfiConverterTypeGrimoireGrain_lift(_ buf: RustBuffer) throws -> Grim
 #endif
 public func FfiConverterTypeGrimoireGrain_lower(_ value: GrimoireGrain) -> RustBuffer {
     return FfiConverterTypeGrimoireGrain.lower(value)
+}
+
+
+/**
+ * The home screen's per-door heat (lane 14) — a projection of core `HomeHeat`.
+ * Each field is a 0..1 temperature the glyph renderer draws; heat is COMPUTED
+ * in core from real store facts, so the UI never invents a number.
+ */
+public struct HomeHeat: Equatable, Hashable {
+    public var furnace: Float
+    public var bellows: Float
+    public var mercury: Float
+    public var grimoire: Float
+    public var tabula: Float
+    public var adamas: Float
+    public var philosophus: Float
+    public var solve: Float
+    public var azoth: Float
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(furnace: Float, bellows: Float, mercury: Float, grimoire: Float, tabula: Float, adamas: Float, philosophus: Float, solve: Float, azoth: Float) {
+        self.furnace = furnace
+        self.bellows = bellows
+        self.mercury = mercury
+        self.grimoire = grimoire
+        self.tabula = tabula
+        self.adamas = adamas
+        self.philosophus = philosophus
+        self.solve = solve
+        self.azoth = azoth
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension HomeHeat: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeHomeHeat: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> HomeHeat {
+        return
+            try HomeHeat(
+                furnace: FfiConverterFloat.read(from: &buf), 
+                bellows: FfiConverterFloat.read(from: &buf), 
+                mercury: FfiConverterFloat.read(from: &buf), 
+                grimoire: FfiConverterFloat.read(from: &buf), 
+                tabula: FfiConverterFloat.read(from: &buf), 
+                adamas: FfiConverterFloat.read(from: &buf), 
+                philosophus: FfiConverterFloat.read(from: &buf), 
+                solve: FfiConverterFloat.read(from: &buf), 
+                azoth: FfiConverterFloat.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: HomeHeat, into buf: inout [UInt8]) {
+        FfiConverterFloat.write(value.furnace, into: &buf)
+        FfiConverterFloat.write(value.bellows, into: &buf)
+        FfiConverterFloat.write(value.mercury, into: &buf)
+        FfiConverterFloat.write(value.grimoire, into: &buf)
+        FfiConverterFloat.write(value.tabula, into: &buf)
+        FfiConverterFloat.write(value.adamas, into: &buf)
+        FfiConverterFloat.write(value.philosophus, into: &buf)
+        FfiConverterFloat.write(value.solve, into: &buf)
+        FfiConverterFloat.write(value.azoth, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeHomeHeat_lift(_ buf: RustBuffer) throws -> HomeHeat {
+    return try FfiConverterTypeHomeHeat.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeHomeHeat_lower(_ value: HomeHeat) -> RustBuffer {
+    return FfiConverterTypeHomeHeat.lower(value)
 }
 
 
@@ -2939,6 +3046,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_ffi_checksum_method_athanorengine_grimoire() != 13223) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ffi_checksum_method_athanorengine_home_heat() != 41246) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_ffi_checksum_method_athanorengine_mercury() != 14886) {

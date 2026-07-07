@@ -190,8 +190,10 @@ final class AthanorCoreEngine: AthanorEngineProtocol {
 
     // MARK: Sessions
 
-    func beginSession(threadId: String?) throws -> AsyncStream<SessionEvent> {
-        attach(try engine.beginSession(mask: nil, mode: nil, threadId: threadId))
+    func beginSession(threadId: String?, mask: String?) throws -> AsyncStream<SessionEvent> {
+        // A pre-chosen mask opens the session under that voice (mode left to the
+        // default) but does NOT pin it — the Mystagogue can still shift.
+        attach(try engine.beginSession(mask: mask, mode: nil, threadId: threadId))
     }
 
     // BLOCKER-1 deep fix: initiation has no other first-speaker channel — the
@@ -248,6 +250,21 @@ final class AthanorCoreEngine: AthanorEngineProtocol {
     }
 
     // MARK: Reads (FFI record -> app projection)
+
+    func homeHeat() -> HomeHeatValues {
+        guard let h = try? engine.homeHeat() else { return HomeHeatValues() }
+        return HomeHeatValues(
+            furnace: Double(h.furnace),
+            bellows: Double(h.bellows),
+            mercury: Double(h.mercury),
+            grimoire: Double(h.grimoire),
+            tabula: Double(h.tabula),
+            adamas: Double(h.adamas),
+            philosophus: Double(h.philosophus),
+            solve: Double(h.solve),
+            azoth: Double(h.azoth)
+        )
+    }
 
     func furnaceState() -> FireState {
         guard let f = try? engine.furnaceState() else {

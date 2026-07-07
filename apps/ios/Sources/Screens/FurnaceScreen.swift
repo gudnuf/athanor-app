@@ -14,10 +14,11 @@ struct FurnaceScreen: View {
     var onGrimoire: () -> Void = {}
     /// Turn to Mercury (the chamber a turn to the right).
     var onMercury: () -> Void = {}
+    /// Begin a session in a chosen mask (lane 14: tapping a mask glyph).
+    var onMask: (String) -> Void = { _ in }
 
     private var fire: FireState { model.engine.furnaceState() }
-    private var openThreads: [Thread] { model.engine.mercury().filter { $0.state == .volatile || $0.state == .condensing } }
-    private var ripeThread: Thread? { openThreads.first(where: \.isRipe) }
+    private var heats: HomeHeatValues { model.engine.homeHeat() }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -32,14 +33,17 @@ struct FurnaceScreen: View {
                         .font(.system(size: 18))
                         .foregroundStyle(Ember.C.heat)
                 }
+                .accessibilityLabel("Tabula — the scroll")
             }
             .padding(.horizontal, Ember.S.screenPad)
             .padding(.top, 16)
 
-            Spacer()
-
-            EmberBed(intensity: emberIntensity)
-                .frame(width: 220, height: 220)
+            // The living dial: the forge core breathing at the center, the eight
+            // glyph doors drifting around it at their own temperatures. This IS
+            // the ambient status layer — no badges, no counts (heat is the
+            // notification system). It replaces the old edge-glyph margin marks.
+            HomeDial(heats: heats, onTap: route)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             VStack(spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -59,54 +63,35 @@ struct FurnaceScreen: View {
                         .monospacedDigit()
                 }
             }
-            .padding(.top, 10)
 
-            Spacer()
-
-            VStack(spacing: 14) {
-                if !openThreads.isEmpty {
-                    MercuryRow(count: openThreads.count, ripe: ripeThread)
-                }
-                Button(action: onBegin) {
-                    Text("Tend the fire")
-                        .font(Ember.F.sans(17, weight: .semibold))
-                        .foregroundStyle(Color(hex: 0x1c0f04))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: Ember.S.buttonHeight)
-                        .background(
-                            LinearGradient(colors: [Ember.C.heatHot, Ember.C.heatDeep], startPoint: .top, endPoint: .bottom),
-                            in: Capsule()
-                        )
-                }
+            Button(action: onBegin) {
+                Text("Tend the fire")
+                    .font(Ember.F.sans(17, weight: .semibold))
+                    .foregroundStyle(Color(hex: 0x1c0f04))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: Ember.S.buttonHeight)
+                    .background(
+                        LinearGradient(colors: [Ember.C.heatHot, Ember.C.heatDeep], startPoint: .top, endPoint: .bottom),
+                        in: Capsule()
+                    )
             }
             .padding(.horizontal, Ember.S.screenPad)
+            .padding(.top, 14)
             .padding(.bottom, 20)
         }
-        // The chambers live in the Furnace's margins: a quiet glyph on each
-        // edge, at the door's height. They mark the way (and open it on tap);
-        // the same turn happens by swiping. Grimoire to the left, Mercury to
-        // the right — the marks sit on the side you'd swipe toward.
-        .overlay(alignment: .leading) {
-            ChamberMark(glyph: Ember.Glyph.grimoire, count: nil, action: onGrimoire)
-                .accessibilityLabel("Grimoire")
-        }
-        .overlay(alignment: .trailing) {
-            ChamberMark(glyph: Ember.Glyph.mercury, count: openThreads.count, action: onMercury)
-                .accessibilityLabel(mercuryMarkLabel)
-        }
     }
 
-    private var mercuryMarkLabel: String {
-        let n = openThreads.count
-        return n == 0 ? "Mercury" : "Mercury, \(n) open \(n == 1 ? "thread" : "threads")"
-    }
-
-    /// 0...1 — the ember bed reflects held heat: more days tended, brighter
-    /// coals; tended-today runs hottest. A placeholder heuristic (the real
-    /// weighting is athanor-core's to decide), just never a flat constant.
-    private var emberIntensity: Double {
-        let base = min(Double(fire.wisdomDays) / 60.0, 1.0)
-        return fire.tendedToday ? min(base + 0.25, 1.0) : base
+    /// Routes a tapped door: the Bellows opens a session, the surfaces turn to
+    /// their chamber, a mask begins a session in its voice.
+    private func route(_ key: GlyphKey) {
+        switch key {
+        case .bellows: onBegin()
+        case .mercury: onMercury()
+        case .grimoire: onGrimoire()
+        case .tabula: onTabula()
+        case .adamas, .philosophus, .solve, .azoth: onMask(key.rawValue)
+        case .furnace: break // the center core is home; the pill is the direct path
+        }
     }
 
     private var fireCopy: String {
@@ -145,99 +130,5 @@ struct FurnaceScreen: View {
 
     private func daysSinceTended(_ last: Date) -> Int {
         Calendar.current.dateComponents([.day], from: last, to: Date()).day ?? 99
-    }
-}
-
-/// A door in the Furnace's margin: a single quiet glyph at the vertical
-/// mid-line, hugging one edge, with an optional small count riding above it
-/// (Mercury's open threads — "glyphs are status marks"). Dim at rest so it
-/// never competes with the fire; a full `minTarget` hit area around the small
-/// mark keeps it reachable. Tapping turns to that chamber; swiping does the
-/// same.
-private struct ChamberMark: View {
-    var glyph: String
-    var count: Int?
-    var action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: 2) {
-                if let count, count > 0 {
-                    Text("\(count)")
-                        .font(Ember.F.sans(9, weight: .bold))
-                        .foregroundStyle(Ember.C.heat.opacity(0.7))
-                }
-                Text(glyph)
-                    .font(.system(size: 19))
-                    .foregroundStyle(Ember.C.mutedDim)
-            }
-            .frame(width: Ember.S.minTarget, height: Ember.S.minTarget)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .padding(.horizontal, 2)
-    }
-}
-
-/// Layered radial-gradient coal, breathing at `Ember.Motion.furnaceFire`'s
-/// cadence. `intensity` scales both brightness and the breathing range.
-private struct EmberBed: View {
-    var intensity: Double
-    @State private var breathe = false
-
-    var body: some View {
-        ZStack {
-            Circle()
-                .fill(RadialGradient(colors: [Ember.C.heatDeep.opacity(0.32 * intensity), .clear], center: .center, startRadius: 0, endRadius: 110))
-                .blur(radius: 22)
-            Circle()
-                .fill(RadialGradient(colors: [Ember.C.heat.opacity(0.45 * intensity), .clear], center: .center, startRadius: 0, endRadius: 78))
-                .blur(radius: 14)
-                .padding(30)
-            Circle()
-                .fill(RadialGradient(
-                    colors: [Ember.C.heatCore, Ember.C.heatHot, Ember.C.heatDeep, Ember.C.heatDeep.opacity(0.35), .clear],
-                    center: .center, startRadius: 0, endRadius: 40
-                ))
-                .blur(radius: 3)
-                .padding(74)
-                .opacity(0.3 + 0.7 * intensity)
-            Circle()
-                .fill(RadialGradient(colors: [Ember.C.heatCore, Ember.C.heatHot, Ember.C.heatDeep], center: UnitPoint(x: 0.46, y: 0.4), startRadius: 0, endRadius: 40))
-                .frame(width: 58, height: 58)
-                .shadow(color: Ember.C.heatCore.opacity(0.75), radius: 24)
-        }
-        .scaleEffect(breathe ? 1.035 : 0.975)
-        .onAppear {
-            withAnimation(Ember.Motion.furnaceFire) { breathe = true }
-        }
-    }
-}
-
-private struct MercuryRow: View {
-    var count: Int
-    var ripe: Thread?
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Text(Ember.Glyph.mercury)
-                .foregroundStyle(Ember.C.muted)
-            Text("\(count) \(count == 1 ? "thread" : "threads") volatile" + (ripe != nil ? " — one is ripe" : ""))
-                .font(Ember.F.sans(13.5))
-                .foregroundStyle(Ember.C.muted)
-            Spacer(minLength: 8)
-            if ripe != nil {
-                Text("ripe")
-                    .font(Ember.F.sans(12, weight: .semibold))
-                    .foregroundStyle(Ember.C.heat)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 3)
-                    .overlay(Capsule().stroke(Ember.C.heat.opacity(0.4), lineWidth: 1))
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
-        .background(Ember.C.raised, in: RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Ember.C.hairline, lineWidth: 1))
     }
 }

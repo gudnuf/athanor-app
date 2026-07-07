@@ -17,6 +17,10 @@ struct FurnaceShell: View {
     @State private var surface: FurnaceSurface
     @State private var showTabula = false
     @State private var sessionActive: Bool
+    /// A mask pre-chosen by tapping its home-screen glyph (lane 14) — the next
+    /// session opens under it (not pinned). Cleared for an ordinary "Tend the
+    /// fire" open.
+    @State private var sessionMask: String?
     /// Bumped when a session closes so the read surfaces re-fetch. The engine
     /// reads (`furnaceState`/`mercury`/`grimoire`) aren't `@Observable`, so a
     /// salt fixed or thread opened this session wouldn't otherwise show until a
@@ -48,10 +52,11 @@ struct FurnaceShell: View {
 
             FurnaceScreen(
                 model: model,
-                onBegin: { sessionActive = true },
+                onBegin: { sessionMask = nil; sessionActive = true },
                 onTabula: { showTabula = true },
                 onGrimoire: { turn(to: .grimoire) },
-                onMercury: { turn(to: .mercury) }
+                onMercury: { turn(to: .mercury) },
+                onMask: { mask in sessionMask = mask; sessionActive = true }
             )
             .id(readEpoch)
             .tag(FurnaceSurface.furnace)
@@ -70,7 +75,7 @@ struct FurnaceShell: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Ember.C.ground.ignoresSafeArea())
         .fullScreenCover(isPresented: $sessionActive) {
-            SessionScreen(model: model, onClose: { sessionActive = false })
+            SessionScreen(model: model, onClose: { sessionActive = false }, preferredMask: sessionMask)
         }
         .sheet(isPresented: $showTabula) {
             TabulaScreen(model: model)

@@ -29,6 +29,35 @@ struct TendedDay: Equatable {
     var minutes: Int
 }
 
+/// The home screen's per-door heat (lane 14), 0..1 each — computed in core from
+/// real store facts (`home_heat`), never invented in the UI. `subscript` reads
+/// a door's heat by its glyph key so the dial can iterate the eight orbiters.
+struct HomeHeatValues: Equatable {
+    var furnace: Double = 0.30
+    var bellows: Double = 0.30
+    var mercury: Double = 0.30
+    var grimoire: Double = 0.30
+    var tabula: Double = 0.30
+    var adamas: Double = 0
+    var philosophus: Double = 0
+    var solve: Double = 0
+    var azoth: Double = 0
+
+    subscript(_ key: GlyphKey) -> Double {
+        switch key {
+        case .furnace: return furnace
+        case .bellows: return bellows
+        case .mercury: return mercury
+        case .grimoire: return grimoire
+        case .tabula: return tabula
+        case .adamas: return adamas
+        case .philosophus: return philosophus
+        case .solve: return solve
+        case .azoth: return azoth
+        }
+    }
+}
+
 struct Realization: Identifiable, Equatable {
     var id: String
     var text: String
@@ -113,10 +142,12 @@ protocol AthanorEngineProtocol: AnyObject {
     /// attempting; DemoEngine's sine-stub bed never depends on it.
     var isReal: Bool { get }
 
-    /// Begin a session against a chosen thread (mask/mode may be nil to let
-    /// the Mystagogue choose). Returns THIS session's event stream; a fresh
-    /// `beginSession`/`beginInitiation` call hands out a fresh stream.
-    func beginSession(threadId: String?) throws -> AsyncStream<SessionEvent>
+    /// Begin a session against a chosen thread, optionally opening under a
+    /// chosen mask (lane 14: tapping a mask glyph pre-chooses its voice — the
+    /// session OPENS under it but it is NOT pinned, so the Mystagogue may still
+    /// shift as fitting). `nil` mask lets the opening default stand. Returns
+    /// THIS session's event stream; a fresh call hands out a fresh stream.
+    func beginSession(threadId: String?, mask: String?) throws -> AsyncStream<SessionEvent>
 
     /// First-launch: the Mystagogue's first session, about the learner.
     func beginInitiation() throws -> AsyncStream<SessionEvent>
@@ -139,6 +170,8 @@ protocol AthanorEngineProtocol: AnyObject {
 
     // Read surface (B2/C1 projections)
     func furnaceState() -> FireState
+    /// The home screen's per-door heat (lane 14), computed in core.
+    func homeHeat() -> HomeHeatValues
     func grimoire() -> [Realization]
     func mercury() -> [Thread]
     func tabula() -> [TabulaPassage]

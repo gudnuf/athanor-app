@@ -10,6 +10,10 @@ import os
 struct SessionScreen: View {
     var model: AppModel
     var onClose: () -> Void
+    /// Lane 14: a mask pre-chosen by tapping its home-screen glyph. The session
+    /// OPENS under it (not pinned — the Mystagogue can still shift). `nil` lets
+    /// the opening default stand.
+    var preferredMask: String? = nil
 
     @State private var messages: [SessionMessage] = []
     @State private var streamingText = ""
@@ -310,7 +314,7 @@ struct SessionScreen: View {
     private func begin() async {
         let stream: AsyncStream<SessionEvent>
         do {
-            stream = try model.engine.beginSession(threadId: nil)
+            stream = try model.engine.beginSession(threadId: nil, mask: preferredMask)
         } catch {
             // The session couldn't even open — surface it calmly instead of
             // leaving the learner on a screen that never comes alive.
