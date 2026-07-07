@@ -25,6 +25,7 @@ struct FurnaceShell: View {
         let screen = args.first(where: { $0.hasPrefix("screen=") })?.dropFirst("screen=".count)
         _tab = State(initialValue: screen == "mercury" ? .mercury : screen == "grimoire" ? .grimoire : .furnace)
         _sessionActive = State(initialValue: screen == "session")
+        _showTabula = State(initialValue: screen == "tabula")
     }
 
     var body: some View {

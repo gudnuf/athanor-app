@@ -30,6 +30,13 @@ impl Store {
         let rows = stmt.query_map([], |r| r.get(0))?;
         rows.collect::<Result<Vec<_>, _>>().map_err(CoreError::from)
     }
+
+    /// The Tabula read: the seven canonical passages projected against this
+    /// learner's kindling state (`crate::tabula`). Always all seven, in scroll
+    /// order — dim until the learner's own practice lights them.
+    pub fn tabula(&self) -> Result<Vec<crate::tabula::TabulaPassage>, CoreError> {
+        Ok(crate::tabula::project(&self.kindled()?))
+    }
 }
 
 #[cfg(test)]
@@ -56,5 +63,23 @@ mod tests {
             store.kindled().unwrap(),
             vec!["SALT".to_string(), "NIGREDO".to_string()]
         );
+    }
+
+    #[test]
+    fn tabula_projects_seven_passages_and_reflects_kindling() {
+        let store = Store::open_in_memory("d").unwrap();
+        // Cold: seven passages, all dim.
+        let cold = store.tabula().unwrap();
+        assert_eq!(cold.len(), 7);
+        assert!(cold.iter().all(|p| !p.kindled));
+
+        // Kindle SALT — the Grimoire passage lights, with its note.
+        store.kindle_passage("SALT", None).unwrap();
+        let warm = store.tabula().unwrap();
+        let grimoire = warm.iter().find(|p| p.key == "GRIMOIRE").unwrap();
+        assert!(grimoire.kindled);
+        assert_eq!(grimoire.kindled_note.as_deref(), Some("first salt fixed"));
+        // A passage with no kindled key stays dim.
+        assert!(!warm.iter().find(|p| p.key == "WORLD").unwrap().kindled);
     }
 }

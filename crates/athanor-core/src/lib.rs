@@ -17,6 +17,7 @@ pub mod mystagogue;
 pub mod prompt;
 pub mod session;
 pub mod store;
+pub mod tabula;
 
 pub use conductor::{Conductor, ConductorError, ConductorOutcome};
 pub use error::CoreError;

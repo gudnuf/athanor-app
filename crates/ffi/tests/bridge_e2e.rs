@@ -148,10 +148,31 @@ async fn scripted_turn_fixes_salt_streams_condensation_then_reads_round_trip() {
         "the parent left the open pool"
     );
 
+    // The Tabula now projects the seven canonical passages (rich shape), not
+    // raw kindled keys. Fixing salt kindled SALT, which lights the Grimoire
+    // passage (with its note); the scroll still renders all seven in order.
     let tabula = engine.tabula().unwrap();
+    assert_eq!(tabula.len(), 7, "all seven passages render: {tabula:?}");
+    assert_eq!(
+        tabula.iter().map(|p| p.number.as_str()).collect::<Vec<_>>(),
+        ["I", "II", "III", "IV", "V", "VI", "VII"],
+        "scroll order I→VII"
+    );
+    let grimoire = tabula.iter().find(|p| p.key == "GRIMOIRE").unwrap();
+    assert!(grimoire.kindled, "fixing salt lit the Grimoire: {tabula:?}");
+    assert_eq!(grimoire.kindled_note.as_deref(), Some("first salt fixed"));
     assert!(
-        tabula.contains(&"SALT".to_string()),
-        "fixing salt kindled SALT: {tabula:?}"
+        !grimoire.title.is_empty() && !grimoire.body.is_empty(),
+        "passages carry their canonical content"
+    );
+    assert!(
+        tabula
+            .iter()
+            .find(|p| p.key == "WORLD")
+            .unwrap()
+            .kindled_note
+            .is_none(),
+        "a dim passage carries no note"
     );
 }
 

@@ -206,17 +206,17 @@ final class AthanorCoreEngine: AthanorEngineProtocol {
     }
 
     func tabula() -> [TabulaPassage] {
-        // FFI `tabula()` projects kindled passage bodies as [String]; the rich
-        // number/title/kindledNote shape is E5 surface. Map minimally.
-        let romans = ["I", "II", "III", "IV", "V", "VI", "VII"]
-        return ((try? engine.tabula()) ?? []).enumerated().map { i, body in
+        // FFI `tabula()` now projects the seven canonical passages
+        // (number/title/body) against this learner's kindling state — a
+        // straight field map, no synthesis. Dim passages carry no note.
+        ((try? engine.tabula()) ?? []).map { p in
             TabulaPassage(
-                id: "passage-\(i)",
-                number: i < romans.count ? romans[i] : "\(i + 1)",
-                title: "",
-                body: body,
-                kindled: true,
-                kindledNote: nil
+                id: p.key,
+                number: p.number,
+                title: p.title,
+                body: p.body,
+                kindled: p.kindled,
+                kindledNote: p.kindledNote
             )
         }
     }

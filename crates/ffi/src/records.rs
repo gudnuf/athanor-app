@@ -4,6 +4,7 @@
 //! type crosses the boundary, no `serde_json::Value`.
 
 use athanor_core::domain::{FireState, GrimoireEntry, Tending, Thread};
+use athanor_core::tabula::TabulaPassage as CoreTabulaPassage;
 
 /// Furnace heat for the home screen — a projection of core `FireState`.
 #[derive(uniffi::Record, Clone, Debug, PartialEq)]
@@ -51,6 +52,34 @@ pub struct OpenThread {
     pub last_worked: Option<u64>,
     /// The spiral back-link: set when this thread was born of a realization.
     pub parent_realization_id: Option<String>,
+}
+
+/// One passage of the Tabula scroll — a projection of core `TabulaPassage`
+/// (canonical content + this learner's kindling state). Always seven, in scroll
+/// order; `kindled_note` is set only when the passage has been kindled.
+#[derive(uniffi::Record, Clone, Debug, PartialEq)]
+pub struct TabulaPassage {
+    /// Stable passage key (identity for the UI list; never shown).
+    pub key: String,
+    /// Roman numeral shown in the scroll ("I"…"VII").
+    pub number: String,
+    pub title: String,
+    pub body: String,
+    pub kindled: bool,
+    pub kindled_note: Option<String>,
+}
+
+impl From<CoreTabulaPassage> for TabulaPassage {
+    fn from(p: CoreTabulaPassage) -> Self {
+        TabulaPassage {
+            key: p.key,
+            number: p.number,
+            title: p.title,
+            body: p.body,
+            kindled: p.kindled,
+            kindled_note: p.kindled_note,
+        }
+    }
 }
 
 impl From<&Tending> for TendingDay {

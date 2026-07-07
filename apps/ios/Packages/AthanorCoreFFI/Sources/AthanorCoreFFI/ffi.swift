@@ -567,10 +567,12 @@ public protocol AthanorEngineProtocol: AnyObject, Sendable {
     func mercury() throws  -> [OpenThread]
     
     /**
-     * The Tabula read: kindled passage keys, first-kindled order
-     * (`Store::kindled`).
+     * The Tabula read: the seven canonical passages (number/title/body)
+     * projected against this learner's kindling state (`Store::tabula`).
+     * Always seven, in scroll order — dim until the learner's practice lights
+     * them.
      */
-    func tabula() throws  -> [String]
+    func tabula() throws  -> [TabulaPassage]
     
     /**
      * Opens the first-launch initiation session (cold start).
@@ -697,11 +699,13 @@ open func mercury()throws  -> [OpenThread]  {
 }
     
     /**
-     * The Tabula read: kindled passage keys, first-kindled order
-     * (`Store::kindled`).
+     * The Tabula read: the seven canonical passages (number/title/body)
+     * projected against this learner's kindling state (`Store::tabula`).
+     * Always seven, in scroll order — dim until the learner's practice lights
+     * them.
      */
-open func tabula()throws  -> [String]  {
-    return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeEngineError_lift) {
+open func tabula()throws  -> [TabulaPassage]  {
+    return try  FfiConverterSequenceTypeTabulaPassage.lift(try rustCallWithError(FfiConverterTypeEngineError_lift) {
     uniffi_ffi_fn_method_athanorengine_tabula(
             self.uniffiCloneHandle(),$0
     )
@@ -1817,6 +1821,93 @@ public func FfiConverterTypeOpenThread_lower(_ value: OpenThread) -> RustBuffer 
 
 
 /**
+ * One passage of the Tabula scroll — a projection of core `TabulaPassage`
+ * (canonical content + this learner's kindling state). Always seven, in scroll
+ * order; `kindled_note` is set only when the passage has been kindled.
+ */
+public struct TabulaPassage: Equatable, Hashable {
+    /**
+     * Stable passage key (identity for the UI list; never shown).
+     */
+    public var key: String
+    /**
+     * Roman numeral shown in the scroll ("I"…"VII").
+     */
+    public var number: String
+    public var title: String
+    public var body: String
+    public var kindled: Bool
+    public var kindledNote: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Stable passage key (identity for the UI list; never shown).
+         */key: String, 
+        /**
+         * Roman numeral shown in the scroll ("I"…"VII").
+         */number: String, title: String, body: String, kindled: Bool, kindledNote: String?) {
+        self.key = key
+        self.number = number
+        self.title = title
+        self.body = body
+        self.kindled = kindled
+        self.kindledNote = kindledNote
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension TabulaPassage: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeTabulaPassage: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TabulaPassage {
+        return
+            try TabulaPassage(
+                key: FfiConverterString.read(from: &buf), 
+                number: FfiConverterString.read(from: &buf), 
+                title: FfiConverterString.read(from: &buf), 
+                body: FfiConverterString.read(from: &buf), 
+                kindled: FfiConverterBool.read(from: &buf), 
+                kindledNote: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: TabulaPassage, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.key, into: &buf)
+        FfiConverterString.write(value.number, into: &buf)
+        FfiConverterString.write(value.title, into: &buf)
+        FfiConverterString.write(value.body, into: &buf)
+        FfiConverterBool.write(value.kindled, into: &buf)
+        FfiConverterOptionString.write(value.kindledNote, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTabulaPassage_lift(_ buf: RustBuffer) throws -> TabulaPassage {
+    return try FfiConverterTypeTabulaPassage.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTabulaPassage_lower(_ value: TabulaPassage) -> RustBuffer {
+    return FfiConverterTypeTabulaPassage.lower(value)
+}
+
+
+/**
  * One tended day — a projection of core `Tending`.
  */
 public struct TendingDay: Equatable, Hashable {
@@ -2538,6 +2629,31 @@ fileprivate struct FfiConverterSequenceTypeOpenThread: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeTabulaPassage: FfiConverterRustBuffer {
+    typealias SwiftType = [TabulaPassage]
+
+    public static func write(_ value: [TabulaPassage], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeTabulaPassage.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [TabulaPassage] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [TabulaPassage]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeTabulaPassage.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeTendingDay: FfiConverterRustBuffer {
     typealias SwiftType = [TendingDay]
 
@@ -2659,7 +2775,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_ffi_checksum_method_athanorengine_mercury() != 39448) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_ffi_checksum_method_athanorengine_tabula() != 62211) {
+    if (uniffi_ffi_checksum_method_athanorengine_tabula() != 14998) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_ffi_checksum_method_athanorengine_begin_initiation() != 20017) {

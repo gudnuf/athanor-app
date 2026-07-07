@@ -14,7 +14,7 @@ use std::sync::Arc;
 use athanor_core::engine::{AcpUpdate, MockEngine, MystagogueEngine};
 use athanor_core::Store;
 
-use crate::records::{FurnaceState, GrimoireGrain, OpenThread};
+use crate::records::{FurnaceState, GrimoireGrain, OpenThread, TabulaPassage};
 
 /// Errors that cross the FFI boundary as a thrown error rather than a panic
 /// (no panics across FFI). `flat_error`: Swift receives the variant plus its
@@ -146,11 +146,14 @@ impl AthanorEngine {
             .map_err(|e| EngineError::Read(e.to_string()))
     }
 
-    /// The Tabula read: kindled passage keys, first-kindled order
-    /// (`Store::kindled`).
-    pub fn tabula(&self) -> Result<Vec<String>, EngineError> {
+    /// The Tabula read: the seven canonical passages (number/title/body)
+    /// projected against this learner's kindling state (`Store::tabula`).
+    /// Always seven, in scroll order — dim until the learner's practice lights
+    /// them.
+    pub fn tabula(&self) -> Result<Vec<TabulaPassage>, EngineError> {
         self.store
-            .kindled()
+            .tabula()
+            .map(|v| v.into_iter().map(TabulaPassage::from).collect())
             .map_err(|e| EngineError::Read(e.to_string()))
     }
 }
