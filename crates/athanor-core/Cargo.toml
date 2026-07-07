@@ -4,10 +4,16 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-thiserror = { workspace = true }
+rusqlite = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+thiserror = { workspace = true }
 uuid = { workspace = true }
+async-trait = { workspace = true }
+
+[features]
+default = []
+goose = []   # real embed pulled in Task 8; off keeps tests hermetic
 
 [dev-dependencies]
 tokio = { workspace = true }
