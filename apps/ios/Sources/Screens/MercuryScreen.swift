@@ -1,42 +1,132 @@
 import SwiftUI
 
-// Open threads. E5 fills in evaporation-aware behavior; E1 ships the list
-// off seeded data with state shown per thread.
+// Open threads (mirrors mockups-v2.html screen 6) — what will not be held.
+// Ripe threads surface first; a swipe lets the learner drop a thread
+// they've outgrown (evaporation is local/visual only here — the real
+// evaporate write is the engine's, not this screen's, to make).
 struct MercuryScreen: View {
     var model: AppModel
 
+    @State private var evaporated: Set<String> = []
+
+    private var threads: [Thread] {
+        model.engine.mercury()
+            .filter { !evaporated.contains($0.id) }
+            .sorted { ($0.isRipe ? 0 : 1, $0.born) < ($1.isRipe ? 0 : 1, $1.born) }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("\(Ember.Glyph.mercury) Mercury")
-                .font(Ember.F.serif(20, weight: .semibold))
-                .foregroundStyle(Ember.C.ink)
-                .padding(.horizontal, Ember.S.screenPad)
-                .padding(.top, 16)
-                .padding(.bottom, 8)
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    ForEach(model.engine.mercury()) { thread in
-                        HStack(alignment: .top, spacing: 10) {
-                            Text(Ember.Glyph.mercury)
-                                .foregroundStyle(Ember.C.muted)
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(thread.prompt)
-                                    .font(Ember.F.sans(14))
-                                    .foregroundStyle(Ember.C.ink)
-                                Text("\(thread.domain) · \(thread.state.rawValue)")
-                                    .font(Ember.F.sans(11, weight: .semibold))
-                                    .foregroundStyle(Ember.C.mutedDim)
-                            }
-                        }
-                        .padding(.vertical, 8)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .overlay(alignment: .bottom) { Ember.C.hairline.frame(height: 1) }
-                    }
-                }
-                .padding(.horizontal, Ember.S.screenPad)
-                .padding(.bottom, 100)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Mercury")
+                    .font(Ember.F.serif(23, weight: .medium))
+                    .foregroundStyle(Ember.C.ink)
+                Text("what will not be held · \(threads.count) volatile")
+                    .font(Ember.F.sans(13))
+                    .foregroundStyle(Ember.C.muted)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, Ember.S.screenPad)
+            .padding(.top, 12)
+            .padding(.bottom, 14)
+            .overlay(alignment: .bottom) { Ember.C.hairline.frame(height: 1) }
+
+            List {
+                ForEach(threads) { thread in
+                    ThreadRow(thread: thread)
+                        .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+                        .listRowBackground(Ember.C.ground)
+                        .listRowSeparatorTint(Ember.C.hairline)
+                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                            Button(role: .destructive) {
+                                withAnimation(Ember.Motion.none) { _ = evaporated.insert(thread.id) }
+                            } label: {
+                                Label("Evaporate", systemImage: "circle.dotted")
+                            }
+                            .tint(Ember.C.raised2)
+                        }
+                }
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(Ember.C.ground)
         }
+        .background(Ember.C.ground)
+    }
+}
+
+private struct ThreadRow: View {
+    var thread: Thread
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 10) {
+                StateChip(thread: thread)
+                Spacer()
+                Text(thread.domain)
+                    .font(Ember.F.sans(10.5, weight: .bold))
+                    .tracking(0.8)
+                    .textCase(.uppercase)
+                    .foregroundStyle(Ember.C.mutedDim)
+            }
+            Text(thread.prompt)
+                .font(Ember.F.serif(16.5))
+                .foregroundStyle(Ember.C.ink)
+            Text(ageLabel)
+                .font(Ember.F.sans(12))
+                .foregroundStyle(Ember.C.mutedDim)
+                .monospacedDigit()
+        }
+        .padding(.horizontal, Ember.S.screenPad)
+        .padding(.vertical, 18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var ageLabel: String {
+        let days = Calendar.current.dateComponents([.day], from: thread.born, to: Date()).day ?? 0
+        let bornPart = days <= 0 ? "born today" : "born \(days)d ago"
+        guard let lastWorked = thread.lastWorked else { return "\(bornPart) · not yet worked" }
+        let workedDays = Calendar.current.dateComponents([.day], from: lastWorked, to: Date()).day ?? 0
+        let workedPart = workedDays <= 0 ? "worked today" : "worked \(workedDays)d ago"
+        return "\(bornPart) · \(workedPart)"
+    }
+}
+
+private struct StateChip: View {
+    var thread: Thread
+
+    private var label: String {
+        if thread.isRipe { return "Ripe" }
+        switch thread.state {
+        case .volatile: return "Volatile"
+        case .condensing: return "Condensing"
+        case .fixed: return "Fixed"
+        case .evaporated: return "Evaporated"
+        }
+    }
+
+    var body: some View {
+        Text(label)
+            .font(Ember.F.sans(10, weight: .bold))
+            .tracking(0.9)
+            .textCase(.uppercase)
+            .foregroundStyle(foreground)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 3)
+            .background(background, in: Capsule())
+            .overlay(Capsule().stroke(border, lineWidth: border == .clear ? 0 : 1))
+    }
+
+    private var foreground: Color {
+        if thread.isRipe { return Color(hex: 0x1c0f04) }
+        return thread.state == .condensing ? Ember.C.heatHot : Ember.C.muted
+    }
+    private var background: Color {
+        if thread.isRipe { return Ember.C.heat }
+        return thread.state == .condensing ? Ember.C.heat.opacity(0.08) : Ember.C.raised
+    }
+    private var border: Color {
+        if thread.isRipe { return .clear }
+        return thread.state == .condensing ? Ember.C.heat.opacity(0.4) : Ember.C.hairline
     }
 }
