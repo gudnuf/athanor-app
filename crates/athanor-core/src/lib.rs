@@ -9,6 +9,7 @@
 //! weave_domains / update_memory), and prompt assembly — see docs/plans/ for
 //! the build sequence.
 
+pub mod conductor;
 pub mod domain;
 pub mod error;
 pub mod ids;
@@ -17,6 +18,7 @@ pub mod prompt;
 pub mod session;
 pub mod store;
 
+pub use conductor::{Conductor, ConductorError, ConductorOutcome};
 pub use error::CoreError;
 pub use mystagogue::Mystagogue;
 pub use session::{abandon_session, close_session};

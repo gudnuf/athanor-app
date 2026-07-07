@@ -1,19 +1,21 @@
 //! `athanor-cli` — a thin desktop harness over `athanor-core` for fast prompt
-//! iteration. It drives the *real* pipeline: `assemble` the system prompt →
-//! run one turn through an engine (hermetic `MockEngine` by default, the real
-//! embed behind `--features goose`) → dispatch the Mystagogue's tools against a
-//! `Store` → land the session.
+//! iteration. It drives the *real* pipeline via `athanor_core::Conductor`:
+//! open a session → run one (scripted, single-turn) turn through an engine
+//! (hermetic `MockEngine` by default, the real embed behind `--features
+//! goose`) → dispatch the Mystagogue's tools against a `Store` → land the
+//! session.
 //!
-//! **Shell-thin (the rmp invariant).** All logic lives in `athanor-core`; this
-//! crate is orchestration + I/O only — the same contract SwiftUI has. Nothing
-//! here reimplements a store operation, a tool, or a state transition; it wires
-//! the core's pieces together and renders their output.
+//! **Shell-thin (the rmp invariant).** All logic — prompt assembly, the tool
+//! dispatch, the state transitions, transcript/trace persistence — lives in
+//! `athanor-core`'s `Conductor`; this crate is orchestration + I/O only, the
+//! same contract SwiftUI has. It does not reimplement a store operation, a
+//! tool, or a state transition; it drives the Conductor and renders its
+//! output.
 
 use std::sync::Arc;
 
-use athanor_core::engine::{AcpPrompt, AcpUpdate, MockEngine, MystagogueEngine};
-use athanor_core::prompt;
-use athanor_core::{close_session, Mystagogue, Store};
+use athanor_core::engine::{AcpUpdate, MockEngine, MystagogueEngine};
+use athanor_core::{Conductor, ConductorOutcome, Store};
 
 pub mod script;
 
@@ -23,23 +25,18 @@ pub mod script;
 pub const DEFAULT_SESSION_MINUTES: u32 = 15;
 
 /// What one driven session produced — enough for a test or a human to see what
-/// happened without reaching into the store.
-#[derive(Debug, Clone)]
-pub struct SessionOutcome {
-    pub session_id: String,
-    /// The assistant's streamed text, concatenated.
-    pub transcript: String,
-    /// Names of the tools the engine invoked, in order.
-    pub tools_called: Vec<String>,
-    /// Whether the turn reached `TurnComplete` (and so the session was landed).
-    pub landed: bool,
-}
+/// happened without reaching into the store. A thin alias over the
+/// Conductor's own outcome type, kept as a distinct name here since it's this
+/// crate's public surface (existing callers/tests name `SessionOutcome`).
+pub type SessionOutcome = ConductorOutcome;
 
-/// Drives one session turn end-to-end against `engine`, streaming assistant text
-/// to `out` as it arrives.
+/// Drives one session turn end-to-end against `engine` via a `Conductor`,
+/// streaming assistant text to `out` as it arrives, then landing the session
+/// on a completed turn.
 ///
-/// Glue only: `prompt::assemble`, `Mystagogue`'s tool dispatch, and
-/// `close_session`'s tending/wisdom accounting all live in `athanor-core`.
+/// Glue only: opening the session, assembling the prompt, dispatching the
+/// Mystagogue's tools, and the tending/wisdom + trace accounting on close all
+/// live in `athanor-core`'s `Conductor`.
 pub async fn run_session(
     store: Arc<Store>,
     engine: &dyn MystagogueEngine,
@@ -48,43 +45,41 @@ pub async fn run_session(
     thread_id: Option<&str>,
     out: &mut (dyn std::io::Write + Send),
 ) -> Result<SessionOutcome, Box<dyn std::error::Error>> {
-    let plan = prompt::assemble(mask, mode, thread_id, &store);
-    let session = store.create_session(thread_id, mask, mode)?;
-    let mystagogue = Mystagogue::new(Arc::clone(&store));
+    let mut conductor = Conductor::begin(Arc::clone(&store), mask, mode, thread_id)?;
 
-    let acp_prompt = AcpPrompt {
-        system: plan.system_prompt,
-        user_turns: Vec::new(),
-        tools: Mystagogue::tool_specs(),
-    };
-
-    let mut transcript = String::new();
-    let mut tools_called: Vec<String> = Vec::new();
-    let mut landed = false;
-
-    engine
-        .run_turn(acp_prompt, &mystagogue, &mut |update| match update {
-            AcpUpdate::TextDelta(text) => transcript.push_str(&text),
-            AcpUpdate::ToolCall(call) => tools_called.push(call.name),
-            AcpUpdate::TurnComplete => landed = true,
+    conductor
+        .run_turn(engine, None, &mut |update| {
+            if let AcpUpdate::TextDelta(text) = &update {
+                let _ = out.write_all(text.as_bytes());
+            }
         })
         .await?;
-
-    out.write_all(transcript.as_bytes())?;
     out.flush()?;
 
     // On a completed turn, land the session — the only place wisdom advances.
-    if landed {
-        let threads: Vec<String> = thread_id.into_iter().map(str::to_string).collect();
-        close_session(&store, &session.id, DEFAULT_SESSION_MINUTES, &threads)?;
-    }
+    let outcome = if conductor.landed() {
+        conductor.close(DEFAULT_SESSION_MINUTES)?
+    } else {
+        // No TurnComplete: nothing landed, but the harness still needs a
+        // report. Read the accumulator back out without abandoning the
+        // session — a dev-harness single-turn run that didn't complete is
+        // left `open` for a human to inspect, not silently abandoned.
+        outcome_without_landing(&conductor)
+    };
 
-    Ok(SessionOutcome {
-        session_id: session.id,
-        transcript,
-        tools_called,
-        landed,
-    })
+    Ok(outcome)
+}
+
+/// Snapshots a not-yet-landed conductor's accumulators into an outcome
+/// without consuming it (so the underlying session stays `open`, matching the
+/// pre-Conductor harness's behavior of only closing on `TurnComplete`).
+fn outcome_without_landing(conductor: &Conductor) -> SessionOutcome {
+    SessionOutcome {
+        session_id: conductor.session_id().to_string(),
+        transcript: conductor.transcript().to_string(),
+        tools_called: conductor.tools_called().to_vec(),
+        landed: conductor.landed(),
+    }
 }
 
 /// Hermetic convenience: drive a session against a scripted [`MockEngine`].
