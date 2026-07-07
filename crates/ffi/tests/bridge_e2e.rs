@@ -86,6 +86,7 @@ async fn scripted_turn_fixes_salt_streams_condensation_then_reads_round_trip() {
         SessionEvent::Condensation {
             realization_id,
             child_thread_id,
+            text,
         } => {
             assert!(
                 !realization_id.is_empty(),
@@ -95,9 +96,15 @@ async fn scripted_turn_fixes_salt_streams_condensation_then_reads_round_trip() {
                 child_thread_id.is_some(),
                 "fix_salt births a spiral child thread"
             );
+            // The moment now carries the REAL fixed salt's text (from the
+            // fix_salt ToolResult's id), not a guess.
+            assert!(
+                text.contains("erasure is dissipation"),
+                "condensation carries the fixed salt text: {text:?}"
+            );
             realization_id.clone()
         }
-        other => panic!("third event must be the synthesized condensation: {other:?}"),
+        other => panic!("third event must be the condensation moment: {other:?}"),
     };
     assert!(
         matches!(events[3], SessionEvent::TurnComplete),

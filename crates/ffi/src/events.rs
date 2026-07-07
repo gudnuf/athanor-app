@@ -26,12 +26,15 @@ pub enum SessionEvent {
     /// (`fix_salt`, `open_thread`, `evaporate_thread`, `kindle_passage`,
     /// `weave_domains`, `update_memory`).
     ToolCall { kind: String },
-    /// **Bridge-synthesized.** A salt was fixed this turn: the immutable
-    /// realization's id plus the spiral child thread it birthed (if any). The
-    /// Session screen animates the gold condensation moment on this event.
+    /// A salt was fixed this turn — the condensation moment. Derived from the
+    /// `fix_salt` tool's own `AcpUpdate::ToolResult` (its real `realization_id`
+    /// and spiral `child_thread_id`), and carrying the fixed salt's TEXT so the
+    /// Session screen can render the gold moment directly, without a second
+    /// store read. Falls back to the newest grain only if a result is missing.
     Condensation {
         realization_id: String,
         child_thread_id: Option<String>,
+        text: String,
     },
     /// The turn reached its natural end (`AcpUpdate::TurnComplete`).
     TurnComplete,

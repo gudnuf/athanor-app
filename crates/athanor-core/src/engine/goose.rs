@@ -214,6 +214,10 @@ impl GooseEngine {
                                     sink(AcpUpdate::ToolCall(call.clone()));
 
                                     let result = tools.dispatch(call).await;
+                                    // Stream the result to the bridge (carries
+                                    // fix_salt's realization id) before handing
+                                    // it back to the agent loop.
+                                    sink(AcpUpdate::ToolResult(result.clone()));
                                     let payload = serde_json::to_string(&result.value)
                                         .unwrap_or_else(|_| "{}".to_string());
                                     agent

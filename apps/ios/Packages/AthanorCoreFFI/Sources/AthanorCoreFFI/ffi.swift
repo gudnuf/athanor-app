@@ -2365,11 +2365,13 @@ public enum SessionEvent: Equatable, Hashable {
     case toolCall(kind: String
     )
     /**
-     * **Bridge-synthesized.** A salt was fixed this turn: the immutable
-     * realization's id plus the spiral child thread it birthed (if any). The
-     * Session screen animates the gold condensation moment on this event.
+     * A salt was fixed this turn — the condensation moment. Derived from the
+     * `fix_salt` tool's own `AcpUpdate::ToolResult` (its real `realization_id`
+     * and spiral `child_thread_id`), and carrying the fixed salt's TEXT so the
+     * Session screen can render the gold moment directly, without a second
+     * store read. Falls back to the newest grain only if a result is missing.
      */
-    case condensation(realizationId: String, childThreadId: String?
+    case condensation(realizationId: String, childThreadId: String?, text: String
     )
     /**
      * The turn reached its natural end (`AcpUpdate::TurnComplete`).
@@ -2408,7 +2410,7 @@ public struct FfiConverterTypeSessionEvent: FfiConverterRustBuffer {
         case 2: return .toolCall(kind: try FfiConverterString.read(from: &buf)
         )
         
-        case 3: return .condensation(realizationId: try FfiConverterString.read(from: &buf), childThreadId: try FfiConverterOptionString.read(from: &buf)
+        case 3: return .condensation(realizationId: try FfiConverterString.read(from: &buf), childThreadId: try FfiConverterOptionString.read(from: &buf), text: try FfiConverterString.read(from: &buf)
         )
         
         case 4: return .turnComplete
@@ -2435,10 +2437,11 @@ public struct FfiConverterTypeSessionEvent: FfiConverterRustBuffer {
             FfiConverterString.write(kind, into: &buf)
             
         
-        case let .condensation(realizationId,childThreadId):
+        case let .condensation(realizationId,childThreadId,text):
             writeInt(&buf, Int32(3))
             FfiConverterString.write(realizationId, into: &buf)
             FfiConverterOptionString.write(childThreadId, into: &buf)
+            FfiConverterString.write(text, into: &buf)
             
         
         case .turnComplete:

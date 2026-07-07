@@ -187,7 +187,10 @@ final class DemoEngine: AthanorEngineProtocol {
         streamTask = Task { [weak self] in
             guard let self else { return }
             if let c = turn.condensationBefore {
-                self.continuation?.yield(.condensation(realizationId: c.realizationId, childThreadId: c.childThreadId))
+                // Carry the demo salt's text (as the real bridge now does from
+                // fix_salt's ToolResult) so the moment renders without a lookup.
+                let text = self.seededGrimoire.first { $0.id == c.realizationId }?.text ?? ""
+                self.continuation?.yield(.condensation(realizationId: c.realizationId, childThreadId: c.childThreadId, text: text))
                 try? await Task.sleep(nanoseconds: 350_000_000)
             }
             await self.stream(turn.reply, register: turn.register)

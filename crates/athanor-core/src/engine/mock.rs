@@ -35,7 +35,10 @@ impl MystagogueEngine for MockEngine {
             if let AcpUpdate::ToolCall(call) = &update {
                 let call: AcpToolCall = call.clone();
                 sink(update);
-                tools.dispatch(call).await;
+                // Stream the dispatched result too, so the bridge sees the
+                // tool's real return value (mirrors GooseEngine).
+                let result = tools.dispatch(call).await;
+                sink(AcpUpdate::ToolResult(result));
             } else {
                 sink(update);
             }

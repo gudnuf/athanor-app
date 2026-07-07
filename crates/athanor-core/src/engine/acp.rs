@@ -51,6 +51,12 @@ pub struct AcpToolSpec {
 pub enum AcpUpdate {
     TextDelta(String),
     ToolCall(AcpToolCall),
+    /// The dispatched result of a `ToolCall`, streamed right after the engine
+    /// resolves it (same `id` as the call). Carries the tool's return value —
+    /// e.g. `fix_salt`'s `{realization_id, child_thread_id}` — so the bridge can
+    /// synthesize the Condensation moment from the REAL fixed salt rather than
+    /// guessing the newest grain out of the store.
+    ToolResult(AcpToolResult),
     TurnComplete,
 }
 

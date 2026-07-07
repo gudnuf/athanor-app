@@ -109,6 +109,8 @@ pub async fn run_persona(persona: &Persona) -> ScenarioReport {
                                 args: call.args.to_string(),
                             });
                         }
+                        // The dispatched result isn't part of the eval transcript.
+                        AcpUpdate::ToolResult(_) => {}
                         AcpUpdate::TurnComplete => {}
                     })
                     .await

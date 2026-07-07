@@ -220,6 +220,9 @@ impl Conductor {
                 match &update {
                     AcpUpdate::TextDelta(text) => turn_text.push_str(text),
                     AcpUpdate::ToolCall(call) => tools_called.push(call.name.clone()),
+                    // A tool's return value — nothing to accumulate here; it
+                    // flows straight through to the bridge's sink below.
+                    AcpUpdate::ToolResult(_) => {}
                     AcpUpdate::TurnComplete => turn_landed = true,
                 }
                 sink(update);

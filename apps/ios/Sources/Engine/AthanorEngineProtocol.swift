@@ -85,7 +85,7 @@ enum ReplyRegister: Equatable {
 enum SessionEvent: Equatable {
     case textDelta(String, register: ReplyRegister)
     case toolCall(kind: String)
-    case condensation(realizationId: String, childThreadId: String)
+    case condensation(realizationId: String, childThreadId: String, text: String)
     case turnComplete
     case error(message: String)
 }

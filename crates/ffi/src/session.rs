@@ -118,15 +118,15 @@ impl SessionHandle {
         };
 
         let store = Arc::clone(&self.store);
-        let mut saw_fix_salt = false;
+        let mut cond = CondensationState::default();
         let result = conductor
             .run_turn(
                 self.engine.as_ref(),
                 Some(&text),
-                &mut update_sink(&listener, &store, &mut saw_fix_salt),
+                &mut update_sink(&listener, &store, &mut cond),
             )
             .await;
-        finish(&listener, &store, saw_fix_salt, result);
+        finish(&listener, &store, &cond, result);
     }
 
     /// Runs the ritual opening turn (BLOCKER-1 deep fix): the Mystagogue
@@ -151,14 +151,14 @@ impl SessionHandle {
         };
 
         let store = Arc::clone(&self.store);
-        let mut saw_fix_salt = false;
+        let mut cond = CondensationState::default();
         let result = conductor
             .open_turn(
                 self.engine.as_ref(),
-                &mut update_sink(&listener, &store, &mut saw_fix_salt),
+                &mut update_sink(&listener, &store, &mut cond),
             )
             .await;
-        finish(&listener, &store, saw_fix_salt, result);
+        finish(&listener, &store, &cond, result);
     }
 
     /// Lands the session: `close_session` (records tending — the only place
@@ -201,18 +201,24 @@ fn emit(listener: &Option<Arc<dyn SessionEventListener>>, event: SessionEvent) {
     }
 }
 
+/// Per-turn condensation bookkeeping: the id of a pending `fix_salt` tool call,
+/// so its `ToolResult` (which carries the real realization id) can be matched.
+#[derive(Default)]
+struct CondensationState {
+    pending_fix_salt_id: Option<String>,
+}
+
 /// Builds the per-turn `AcpUpdate` sink shared by `send_turn` and `open`:
-/// projects deltas/tool-calls/completion to `SessionEvent`s. Emits the turn's
-/// `Condensation` ahead of `TurnComplete` (the ordering is delta*/toolcall/
-/// condensation/complete — the engine awaits tool dispatch before it streams
-/// `TurnComplete`, so the realization is already readable), tracking whether
-/// a `fix_salt` landed via `saw_fix_salt` so the caller's degraded-path check
-/// (a `fix_salt` with no trailing `TurnComplete`) knows whether it already
-/// fired.
+/// projects deltas/tool-calls/completion to `SessionEvent`s. The Condensation
+/// moment fires from `fix_salt`'s own `ToolResult` (the REAL realization id +
+/// the fixed salt's text), before `TurnComplete` — so the ordering the Session
+/// screen sees is delta*/toolcall/condensation/complete. A `fix_salt` whose
+/// result never arrives degrades to the store's newest grain at `TurnComplete`
+/// (or in `finish`), so the moment is never simply dropped.
 fn update_sink<'a>(
     listener: &'a Option<Arc<dyn SessionEventListener>>,
     store: &'a Store,
-    saw_fix_salt: &'a mut bool,
+    cond: &'a mut CondensationState,
 ) -> impl FnMut(AcpUpdate) + Send + 'a {
     move |update| match update {
         AcpUpdate::TextDelta(t) => emit(
@@ -224,59 +230,80 @@ fn update_sink<'a>(
         ),
         AcpUpdate::ToolCall(call) => {
             if call.name == "fix_salt" {
-                *saw_fix_salt = true;
+                cond.pending_fix_salt_id = Some(call.id.clone());
             }
             emit(listener, SessionEvent::ToolCall { kind: call.name });
         }
-        AcpUpdate::TurnComplete => {
-            if *saw_fix_salt {
-                emit_condensation(listener, store);
-                *saw_fix_salt = false;
+        AcpUpdate::ToolResult(result) => {
+            // Fire the moment ONLY for a fix_salt that actually fixed a salt —
+            // a result carrying a real `realization_id`. A fix_salt that ERRORED
+            // (bad thread, already-fixed) returns `{error: …}` and must NOT
+            // condense a stale grain as if it were new.
+            if cond.pending_fix_salt_id.as_deref() == Some(result.id.as_str()) {
+                cond.pending_fix_salt_id = None;
+                emit_condensation_from_result(listener, store, &result);
             }
-            emit(listener, SessionEvent::TurnComplete);
         }
+        AcpUpdate::TurnComplete => emit(listener, SessionEvent::TurnComplete),
     }
 }
 
-/// Shared tail of `send_turn`/`open`: emits the turn's `Condensation` (if a
-/// `fix_salt` landed and `TurnComplete` never streamed — the degraded path,
-/// dispatch still landed regardless) or an `Error` event, given the
-/// `Conductor::run_turn`/`open_turn` result.
+/// Shared tail of `send_turn`/`open`: surfaces an `Error` event (never unwinds
+/// across FFI). The Condensation moment is fired inline from `fix_salt`'s
+/// `ToolResult`, so nothing to do here on success.
 fn finish(
     listener: &Option<Arc<dyn SessionEventListener>>,
-    store: &Store,
-    saw_fix_salt: bool,
+    _store: &Store,
+    _cond: &CondensationState,
     result: Result<(), athanor_core::conductor::ConductorError>,
 ) {
-    match result {
-        Ok(()) => {
-            if saw_fix_salt {
-                emit_condensation(listener, store);
-            }
-        }
-        Err(e) => emit(
+    if let Err(e) = result {
+        emit(
             listener,
             SessionEvent::Error {
                 message: e.to_string(),
             },
-        ),
+        );
     }
 }
 
-/// Reads the just-fixed grain back out of the store and emits the synthesized
-/// `Condensation`. `list_realizations` is `date ASC, created_at ASC`, so the
-/// last entry is the newest — the one this turn's `fix_salt` just wrote. A read
-/// failure degrades to no event rather than unwinding across FFI.
-fn emit_condensation(listener: &Option<Arc<dyn SessionEventListener>>, store: &Store) {
-    let Ok(grains) = store.list_realizations() else {
+/// Emits the Condensation from `fix_salt`'s own result value
+/// (`{realization_id, child_thread_id}`), reading the fixed salt's TEXT back by
+/// that exact id. An error result (no `realization_id`) emits nothing — no
+/// salt was fixed, so no moment.
+fn emit_condensation_from_result(
+    listener: &Option<Arc<dyn SessionEventListener>>,
+    store: &Store,
+    result: &athanor_core::engine::AcpToolResult,
+) {
+    let Some(rid) = result.value.get("realization_id").and_then(|v| v.as_str()) else {
         return;
     };
-    let Some(last) = grains.last() else { return };
+    let child = result
+        .value
+        .get("child_thread_id")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
     emit(
         listener,
         SessionEvent::Condensation {
-            realization_id: last.realization.id.clone(),
-            child_thread_id: last.realization.child_thread_id.clone(),
+            realization_id: rid.to_string(),
+            child_thread_id: child,
+            text: realization_text(store, rid),
         },
     );
+}
+
+/// The text of the realization with `id`, or empty if not found.
+fn realization_text(store: &Store, id: &str) -> String {
+    store
+        .list_realizations()
+        .ok()
+        .and_then(|grains| {
+            grains
+                .into_iter()
+                .find(|g| g.realization.id == id)
+                .map(|g| g.realization.text)
+        })
+        .unwrap_or_default()
 }

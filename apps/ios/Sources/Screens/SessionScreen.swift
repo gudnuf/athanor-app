@@ -28,6 +28,12 @@ struct SessionScreen: View {
 
     private static let log = Logger(subsystem: "com.gudnuf.athanor", category: "session")
 
+    /// QA only: a scripted follow-up turn (`debug-turn2=…`) fired once after the
+    /// first reply settles. Nil on a normal launch.
+    @State private var pendingSecondTurn: String? = ProcessInfo.processInfo.arguments
+        .first(where: { $0.hasPrefix("debug-turn2=") })
+        .map { String($0.dropFirst("debug-turn2=".count)) }
+
     // Real Bellows (E4 real half) — nil in the demo build/path, where the
     // sine-stub `Bellows` view below is used unchanged.
     @State private var realBellows: (any BellowsController)?
@@ -145,12 +151,22 @@ struct SessionScreen: View {
             // RealBellowsController); this hook only stands in for "a
             // learner turn arrived," same as the typed keyboard fallback
             // already does in the shipped UI. Never fires without the arg.
-            guard ProcessInfo.processInfo.arguments.contains("debug-send-turn=1") else { return }
+            guard let text = Self.debugTurnText else { return }
             try? await Task.sleep(for: .milliseconds(2500))
-            let text = "What's the thread I keep circling back to."
             messages.append(.learner(id: UUID().uuidString, text: text))
             model.engine.sendTurn(text)
         }
+    }
+
+    /// The QA turn to inject, if any: `debug-turn=<text>` sends that exact text
+    /// (used to drive a realization statement that elicits fix_salt), else
+    /// `debug-send-turn=1` sends a default. Nil on a normal launch.
+    static var debugTurnText: String? {
+        let args = ProcessInfo.processInfo.arguments
+        if let custom = args.first(where: { $0.hasPrefix("debug-turn=") }) {
+            return String(custom.dropFirst("debug-turn=".count))
+        }
+        return args.contains("debug-send-turn=1") ? "What's the thread I keep circling back to." : nil
     }
 
     private var header: some View {
@@ -209,8 +225,8 @@ struct SessionScreen: View {
                 .foregroundStyle(Ember.C.muted)
                 .frame(maxWidth: 260, alignment: .trailing)
                 .frame(maxWidth: .infinity, alignment: .trailing)
-        case .salt(_, let realization, let childPrompt):
-            SaltCard(realization: realization, childPrompt: childPrompt)
+        case .salt(_, let text, let childPrompt):
+            SaltCard(text: text, childPrompt: childPrompt)
                 .transition(.scale(scale: 0.92).combined(with: .opacity))
         }
     }
@@ -292,13 +308,31 @@ struct SessionScreen: View {
                 }
                 isStreaming = false
                 streamingText = ""
-            case .condensation(let realizationId, let childThreadId):
-                let realization = model.engine.grimoire().first { $0.id == realizationId }
+                // QA only: a follow-up turn (`debug-turn2=…`) sent once, after
+                // the first reply settles — lets a scripted run give the crisp
+                // restatement the Mystagogue asks for before it fixes salt.
+                if let second = pendingSecondTurn {
+                    pendingSecondTurn = nil
+                    messages.append(.learner(id: UUID().uuidString, text: second))
+                    model.engine.sendTurn(second)
+                }
+            case .condensation(let realizationId, let childThreadId, let text):
+                // THE moment. The salt text rides on the event now (the bridge
+                // reads it from fix_salt's own result), so the card renders
+                // straight from it — no dependency on a grimoire read landing
+                // in time. If the streaming coda hasn't settled, land it first
+                // so the gold moment doesn't sit under an in-flight bubble.
+                if isStreaming {
+                    messages.append(.teacher(id: UUID().uuidString, text: streamingText, register: streamingRegister))
+                    isStreaming = false
+                    streamingText = ""
+                }
+                let salt = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !salt.isEmpty else { break }
                 let childPrompt = model.engine.mercury().first { $0.id == childThreadId }?.prompt
-                if let realization {
-                    withAnimation(Ember.Motion.condensation) {
-                        messages.append(.salt(id: realizationId, realization: realization, childPrompt: childPrompt))
-                    }
+                let cleanChild = (childPrompt == Thread.defaultChildQuestion) ? nil : childPrompt
+                withAnimation(Ember.Motion.condensation) {
+                    messages.append(.salt(id: realizationId, text: salt, childPrompt: cleanChild))
                 }
             case .error(let message):
                 // Surface, don't swallow. A partial reply already streamed
@@ -334,7 +368,7 @@ struct SessionScreen: View {
         // so opening the mic here is contradictory — it only pops the system
         // permission prompt over the very reply the hook exists to exercise.
         // Skip the Bellows on that path. Never affects a normal launch.
-        guard !ProcessInfo.processInfo.arguments.contains("debug-send-turn=1") else { return }
+        guard Self.debugTurnText == nil else { return }
 
         // The model may still be mid-download if the learner reaches a
         // session unusually fast after first launch (normally Initiation
@@ -490,7 +524,9 @@ private struct RealFallbackInput: View {
 enum SessionMessage: Identifiable {
     case teacher(id: String, text: String, register: ReplyRegister)
     case learner(id: String, text: String)
-    case salt(id: String, realization: Realization, childPrompt: String?)
+    /// The condensation moment: the fixed salt's own text (carried on the
+    /// event), plus the spiral question it opened, if any.
+    case salt(id: String, text: String, childPrompt: String?)
 
     var id: String {
         switch self {
@@ -508,7 +544,7 @@ enum SessionMessage: Identifiable {
 /// stays completely still — no repeat, no shimmer loop. Gold is reserved
 /// for exactly this.
 private struct SaltCard: View {
-    var realization: Realization
+    var text: String
     var childPrompt: String?
 
     var body: some View {
@@ -521,7 +557,7 @@ private struct SaltCard: View {
                     .textCase(.uppercase)
                     .foregroundStyle(Ember.C.gold)
             }
-            Text(realization.text)
+            Text(text)
                 .font(Ember.F.serif(18))
                 .foregroundStyle(Ember.C.ink)
                 .padding(.leading, 12)

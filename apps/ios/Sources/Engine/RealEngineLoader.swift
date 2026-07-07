@@ -322,8 +322,8 @@ private final class SessionEventBridge: AthanorCoreFFI.SessionEventListener, @un
             return .textDelta(text, register: register == "serif" ? .serif : .quick)
         case let .toolCall(kind):
             return .toolCall(kind: kind)
-        case let .condensation(realizationId, childThreadId):
-            return .condensation(realizationId: realizationId, childThreadId: childThreadId ?? "")
+        case let .condensation(realizationId, childThreadId, text):
+            return .condensation(realizationId: realizationId, childThreadId: childThreadId ?? "", text: text)
         case .turnComplete:
             return .turnComplete
         case let .error(message):
