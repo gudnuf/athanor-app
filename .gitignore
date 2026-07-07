@@ -1,0 +1,29 @@
+/target
+**/*.rs.bk
+.DS_Store
+
+# local secrets — never commit, never read into agent context
+.env
+.env.*
+!.env.example
+*.p12
+*.pem
+*.mobileprovision
+*.cer
+*.key
+keys/
+certs/
+
+# nix
+.direnv/
+
+# iOS build artifacts
+apps/ios/build/
+apps/ios/DerivedData/
+apps/ios/*.xcodeproj/
+apps/ios/Packages/*/Sources/**/*.swift
+apps/ios/Packages/*/*.xcframework/
+apps/ios/project.local.yml
+
+# simulator/QA capture evidence
+/screenshots/

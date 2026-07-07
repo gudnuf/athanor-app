@@ -1,0 +1,32 @@
+[package]
+name = "ffi"
+version = "0.1.0"
+edition = "2021"
+
+# Proc-macro mode only — no build.rs, no UDL, no `uniffi` build-dependency.
+# Scaffolding is generated entirely by `uniffi::setup_scaffolding!()` plus the
+# `#[derive(uniffi::...)]` / `#[uniffi::export]` attributes at compile time.
+# Swift bindings are produced separately by the `uniffi-bindgen` CLI, which is
+# not a build-dependency of this crate.
+[lib]
+crate-type = ["cdylib", "staticlib", "lib"]
+
+[dependencies]
+uniffi = { version = "0.31", features = ["tokio"] }
+athanor-core = { path = "../athanor-core" }
+tokio = { workspace = true, features = ["sync"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
+
+# Dev-only helper binary that runs `uniffi-bindgen` to generate the Swift
+# bindings from a compiled library. Gated behind a feature so `uniffi`'s `cli`
+# feature (and its extra deps) never lands in the shipped cdylib/staticlib
+# built for iOS.
+[features]
+uniffi-bindgen-cli = ["uniffi/cli"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "uniffi-bindgen.rs"
+required-features = ["uniffi-bindgen-cli"]
