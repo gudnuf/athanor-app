@@ -1,0 +1,35 @@
+mask: adamas
+mode: trace
+thread_id: <present, redacted (uuid v7 is non-deterministic)>
+
+=== section 1: identity (opaque) ===
+<<IDENTITY: opaque prose asset, not snapshotted>>
+
+=== section 2: condensation (opaque) ===
+<<CONDENSATION: opaque prose asset, not snapshotted>>
+
+=== section 3: profile_injection (placeholder-fill, literal) ===
+# What the furnace knows (this session's context)
+
+These are the sections core-identity §1 reads. Empty means genuine
+not-knowing — do not fabricate a history.
+
+learner_name: Damian
+how_they_learn: dialogue-driven; demands proof
+active_domains: magnetism
+recent_salt:
+  (none yet — a young practice)
+ripe_mercury:
+  - [volatile] why does iron remember? (focal)
+last_trace: Traced hysteresis; opened whether memory is energetic.
+session_budget_min: 15
+
+
+=== section 4: mode asset "trace" (opaque) ===
+<<MODE trace: opaque prose asset, not snapshotted>>
+
+=== section 5: mask asset "adamas" (opaque) ===
+<<MASK adamas: opaque prose asset, not snapshotted>>
+
+=== section 6: tools (placeholder-fill, literal) ===
+Tools available this session: fix_salt, open_thread, evaporate_thread, kindle_passage, weave_domains, update_memory.

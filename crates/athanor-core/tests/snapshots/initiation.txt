@@ -1,0 +1,32 @@
+mask: initiation
+mode: initiation
+thread_id: none
+
+=== section 1: identity (opaque) ===
+<<IDENTITY: opaque prose asset, not snapshotted>>
+
+=== section 2: condensation (opaque) ===
+<<CONDENSATION: opaque prose asset, not snapshotted>>
+
+=== section 3: profile_injection (placeholder-fill, literal) ===
+# What the furnace knows (this session's context)
+
+These are the sections core-identity §1 reads. Empty means genuine
+not-knowing — do not fabricate a history.
+
+learner_name: (not yet known — pre-initiation)
+how_they_learn: (not yet observed)
+active_domains: (none yet)
+recent_salt:
+  (none yet — a young practice)
+ripe_mercury:
+  (nothing ripe — open from a fresh vein, or begin anew)
+last_trace: (no prior session)
+session_budget_min: 15
+
+
+=== section 4: initiation script (opaque) ===
+<<INITIATION: opaque prose asset, not snapshotted>>
+
+=== section 5: tools (placeholder-fill, literal) ===
+Tools available this session: fix_salt, open_thread, evaporate_thread, kindle_passage, weave_domains, update_memory.

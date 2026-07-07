@@ -166,6 +166,79 @@ fn tool_availability_line() -> String {
     )
 }
 
+/// A named section of an assembled prompt, in emission order — the label is
+/// a stable structural tag (never the section's prose), so callers (the
+/// Task 14 snapshot suite) can redact prose sections by label without
+/// string-splitting the joined `system_prompt` on [`SEP`] — which is not
+/// safe in general, since asset markdown itself contains `---` dividers
+/// that collide with the separator text.
+pub const SECTION_IDENTITY: &str = "identity";
+pub const SECTION_CONDENSATION: &str = "condensation";
+pub const SECTION_PROFILE_INJECTION: &str = "profile_injection";
+pub const SECTION_MODE: &str = "mode";
+pub const SECTION_MASK: &str = "mask";
+pub const SECTION_INITIATION: &str = "initiation";
+pub const SECTION_TOOLS: &str = "tools";
+
+/// Builds the labeled sections for a session prompt (`assemble`'s layering),
+/// without joining them. The single source of truth both `assemble_with_budget`
+/// and the snapshot suite build on.
+fn session_sections(
+    mask: &str,
+    mode: &str,
+    thread_id: Option<&str>,
+    store: &Store,
+    budget_min: u32,
+) -> Vec<(&'static str, String)> {
+    vec![
+        (SECTION_IDENTITY, assets::IDENTITY.trim_end().to_string()),
+        (
+            SECTION_CONDENSATION,
+            assets::CONDENSATION.trim_end().to_string(),
+        ),
+        (
+            SECTION_PROFILE_INJECTION,
+            profile_injection(store, thread_id, budget_min),
+        ),
+        (
+            SECTION_MODE,
+            assets::mode_asset(mode)
+                .unwrap_or("")
+                .trim_end()
+                .to_string(),
+        ),
+        (
+            SECTION_MASK,
+            assets::mask_asset(mask)
+                .unwrap_or("")
+                .trim_end()
+                .to_string(),
+        ),
+        (SECTION_TOOLS, tool_availability_line()),
+    ]
+}
+
+/// Builds the labeled sections for the initiation prompt (`assemble_initiation`'s
+/// layering), without joining them.
+fn initiation_sections(store: &Store) -> Vec<(&'static str, String)> {
+    vec![
+        (SECTION_IDENTITY, assets::IDENTITY.trim_end().to_string()),
+        (
+            SECTION_CONDENSATION,
+            assets::CONDENSATION.trim_end().to_string(),
+        ),
+        (
+            SECTION_PROFILE_INJECTION,
+            profile_injection(store, None, DEFAULT_SESSION_BUDGET_MIN),
+        ),
+        (
+            SECTION_INITIATION,
+            assets::INITIATION.trim_end().to_string(),
+        ),
+        (SECTION_TOOLS, tool_availability_line()),
+    ]
+}
+
 /// Assembles the session system prompt for a `(mask, mode, thread)` against the
 /// current store, with the default session budget.
 ///
@@ -185,26 +258,18 @@ pub fn assemble_with_budget(
     store: &Store,
     budget_min: u32,
 ) -> SessionPlan {
-    let parts: Vec<String> = vec![
-        assets::IDENTITY.trim_end().to_string(),
-        assets::CONDENSATION.trim_end().to_string(),
-        profile_injection(store, thread_id, budget_min),
-        assets::mode_asset(mode)
-            .unwrap_or("")
-            .trim_end()
-            .to_string(),
-        assets::mask_asset(mask)
-            .unwrap_or("")
-            .trim_end()
-            .to_string(),
-        tool_availability_line(),
-    ];
+    let sections = session_sections(mask, mode, thread_id, store, budget_min);
+    let system_prompt = sections
+        .into_iter()
+        .map(|(_, body)| body)
+        .collect::<Vec<_>>()
+        .join(SEP);
 
     SessionPlan {
         mask: mask.to_string(),
         mode: mode.to_string(),
         thread_id: thread_id.map(str::to_string),
-        system_prompt: parts.join(SEP),
+        system_prompt,
     }
 }
 
@@ -213,20 +278,40 @@ pub fn assemble_with_budget(
 /// selected yet — the cold start is about the learner, not a subject
 /// (initiation.md). Runs against an empty profile by design.
 pub fn assemble_initiation(store: &Store) -> SessionPlan {
-    let parts: Vec<String> = vec![
-        assets::IDENTITY.trim_end().to_string(),
-        assets::CONDENSATION.trim_end().to_string(),
-        profile_injection(store, None, DEFAULT_SESSION_BUDGET_MIN),
-        assets::INITIATION.trim_end().to_string(),
-        tool_availability_line(),
-    ];
+    let sections = initiation_sections(store);
+    let system_prompt = sections
+        .into_iter()
+        .map(|(_, body)| body)
+        .collect::<Vec<_>>()
+        .join(SEP);
 
     SessionPlan {
         mask: "initiation".to_string(),
         mode: "initiation".to_string(),
         thread_id: None,
-        system_prompt: parts.join(SEP),
+        system_prompt,
     }
+}
+
+/// Test/eval support (Task 14 snapshot suite): the same layering `assemble`
+/// uses, but as labeled sections instead of one joined string — so a
+/// consumer can redact prose sections by structural label rather than
+/// string-splitting on [`SEP`] (unsafe in general; see [`SECTION_IDENTITY`]
+/// et al.). Not `#[cfg(test)]` because the snapshot suite lives in a
+/// separate integration-test crate (`tests/prompt_snapshots.rs`), which only
+/// sees `pub` items.
+pub fn assemble_sections(
+    mask: &str,
+    mode: &str,
+    thread_id: Option<&str>,
+    store: &Store,
+) -> Vec<(&'static str, String)> {
+    session_sections(mask, mode, thread_id, store, DEFAULT_SESSION_BUDGET_MIN)
+}
+
+/// [`assemble_sections`] for the initiation prompt.
+pub fn assemble_initiation_sections(store: &Store) -> Vec<(&'static str, String)> {
+    initiation_sections(store)
 }
 
 #[cfg(test)]
