@@ -16,6 +16,7 @@
 use std::sync::Arc;
 
 use athanor_core::engine::{AcpPrompt, AcpUpdate, MockEngine, MystagogueEngine};
+use athanor_core::register::RegisterParser;
 use athanor_core::store::Store;
 use athanor_core::{close_session, Mystagogue};
 
@@ -57,6 +58,60 @@ fn check_session_lands(store: &Store, session_id: &str) -> CheckResult {
     }
 }
 
+/// Replays one `MockEngine` turn into a coalesced `Vec<Turn>`: contiguous text
+/// deltas become one `Assistant` turn, a `ToolCall` flushes the run and records
+/// the call (preserving stream order), and reply-register markers are STRIPPED
+/// through the same `RegisterParser` the Conductor runs.
+///
+/// The eval runner drives the engine directly, bypassing the Conductor — so it
+/// must strip the markers itself, or a live-engine transcript could carry a raw
+/// `<!--reading-->` into a grader or a fixture diff.
+async fn replay_engine_step(script: Vec<AcpUpdate>, mystagogue: &Mystagogue) -> Vec<Turn> {
+    let engine = MockEngine::new(script);
+    // `MockEngine::run_turn` ignores the prompt (the script drives everything);
+    // we still hand it the real tool specs.
+    let prompt = AcpPrompt {
+        system: String::new(),
+        turns: Vec::new(),
+        tools: Mystagogue::tool_specs(),
+    };
+
+    let mut local_turns: Vec<Turn> = Vec::new();
+    let mut buffer = String::new();
+    let mut register = RegisterParser::default();
+    engine
+        .run_turn(prompt, mystagogue, &mut |update| match update {
+            AcpUpdate::TextDelta { text, .. } => {
+                register.push(&text, &mut |chunk, _| buffer.push_str(&chunk));
+            }
+            AcpUpdate::ToolCall(call) => {
+                // Land any held-back marker-prefix as text before the tool
+                // interrupts the assistant run.
+                register.flush(&mut |chunk, _| buffer.push_str(&chunk));
+                if !buffer.is_empty() {
+                    local_turns.push(Turn::Assistant(std::mem::take(&mut buffer)));
+                }
+                local_turns.push(Turn::ToolCall {
+                    name: call.name.clone(),
+                    args: call.args.to_string(),
+                });
+            }
+            // The dispatched result isn't part of the eval transcript.
+            AcpUpdate::ToolResult(_) => {}
+            AcpUpdate::TurnComplete => {
+                register.flush(&mut |chunk, _| buffer.push_str(&chunk));
+            }
+        })
+        .await
+        .expect("mock engine turn");
+    // Safety net for a turn that never reached TurnComplete.
+    register.flush(&mut |chunk, _| buffer.push_str(&chunk));
+    if !buffer.is_empty() {
+        local_turns.push(Turn::Assistant(buffer));
+    }
+    local_turns
+}
+
 /// Replays one persona end-to-end: opens a fresh in-memory store and seed
 /// thread, opens the session under the persona's mask/mode, drives every
 /// `Step` through `MockEngine` (recording the full transcript — assistant
@@ -82,43 +137,7 @@ pub async fn run_persona(persona: &Persona) -> ScenarioReport {
         match step {
             Step::Learner(text) => turns.push(Turn::LearnerText(text)),
             Step::Engine(script) => {
-                let engine = MockEngine::new(script);
-                // `MockEngine::run_turn` ignores the prompt (the script drives
-                // everything); we still hand it the real tool specs.
-                let prompt = AcpPrompt {
-                    system: String::new(),
-                    turns: Vec::new(),
-                    tools: Mystagogue::tool_specs(),
-                };
-
-                // Coalesce contiguous TextDelta pieces into one Assistant
-                // turn, flushing whenever a ToolCall interrupts them — this
-                // preserves the actual stream order (text, then tool, then
-                // more text, ...) instead of reordering by update kind.
-                let mut local_turns: Vec<Turn> = Vec::new();
-                let mut buffer = String::new();
-                engine
-                    .run_turn(prompt, &mystagogue, &mut |update| match update {
-                        AcpUpdate::TextDelta { text, .. } => buffer.push_str(&text),
-                        AcpUpdate::ToolCall(call) => {
-                            if !buffer.is_empty() {
-                                local_turns.push(Turn::Assistant(std::mem::take(&mut buffer)));
-                            }
-                            local_turns.push(Turn::ToolCall {
-                                name: call.name.clone(),
-                                args: call.args.to_string(),
-                            });
-                        }
-                        // The dispatched result isn't part of the eval transcript.
-                        AcpUpdate::ToolResult(_) => {}
-                        AcpUpdate::TurnComplete => {}
-                    })
-                    .await
-                    .expect("mock engine turn");
-                if !buffer.is_empty() {
-                    local_turns.push(Turn::Assistant(buffer));
-                }
-                turns.extend(local_turns);
+                turns.extend(replay_engine_step(script, &mystagogue).await);
             }
         }
     }
@@ -166,6 +185,8 @@ pub fn gated_llm_judge_enabled() -> bool {
 mod tests {
     use super::*;
     use crate::personas::{all_personas, eager_parroter, silent_one, stuck_one, tangent_chaser};
+    use athanor_core::engine::AcpToolCall;
+    use serde_json::json;
 
     fn check<'a>(report: &'a ScenarioReport, name: &str) -> &'a CheckResult {
         report
@@ -173,6 +194,54 @@ mod tests {
             .iter()
             .find(|c| c.name == name)
             .unwrap_or_else(|| panic!("no '{name}' check in {report:?}"))
+    }
+
+    /// The rider on lane 13: the eval runner bypasses the Conductor, so it must
+    /// strip reply-register markers itself. A live-engine transcript must never
+    /// carry a raw `<!--reading-->` into a grader or fixture — even split across
+    /// deltas, and even when a tool call interrupts the reply.
+    #[tokio::test]
+    async fn reading_markers_are_stripped_from_eval_transcripts() {
+        let store = Arc::new(Store::open_in_memory("strip").unwrap());
+        store.open_thread("what is entropy?", None, None).unwrap();
+        let mystagogue = Mystagogue::new(Arc::clone(&store));
+
+        // A reply with a reading passage whose open marker is split across two
+        // deltas, and a tool call mid-reply.
+        let script = vec![
+            AcpUpdate::text_delta("A quick nudge. <!--rea"),
+            AcpUpdate::text_delta("ding-->A measured lesson.<!--/reading--> "),
+            AcpUpdate::ToolCall(AcpToolCall {
+                id: "1".into(),
+                name: "open_thread".into(),
+                args: json!({ "question": "and then?" }),
+            }),
+            AcpUpdate::text_delta("Back to it."),
+            AcpUpdate::TurnComplete,
+        ];
+        let turns = replay_engine_step(script, &mystagogue).await;
+
+        let assistant_text: String = turns
+            .iter()
+            .filter_map(|t| match t {
+                Turn::Assistant(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !assistant_text.contains("<!--"),
+            "no register marker leaks into the eval transcript: {assistant_text:?}"
+        );
+        assert!(
+            assistant_text.contains("A measured lesson.") && assistant_text.contains("Back to it."),
+            "the stripped prose is preserved: {assistant_text:?}"
+        );
+        assert!(
+            turns
+                .iter()
+                .any(|t| matches!(t, Turn::ToolCall { name, .. } if name == "open_thread")),
+            "the tool call is still recorded in stream order"
+        );
     }
 
     #[tokio::test]
