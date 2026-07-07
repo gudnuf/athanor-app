@@ -75,13 +75,17 @@ enum Ember {
 
     // MARK: - Motion budget
     //
-    // Spent on EXACTLY three things (rmp invariant — see the design spec's
-    // "Aesthetic" section): the furnace fire, the bellows embers, and the
-    // condensation moment. Everything else is calm and instant — no chrome
-    // transitions, no tab-switch animation, no streaming-text fades. Screens
-    // compose from this vocabulary rather than inventing their own curves;
-    // if a screen wants motion for anything not named here, that's a design
-    // question to raise, not a curve to write inline.
+    // Spent on a short, named list (rmp invariant — see the design spec's
+    // "Aesthetic" section): the furnace fire, the bellows embers, the
+    // condensation moment, and — added on the operator's navigation call — the
+    // surface turn (moving between Furnace/Mercury/Grimoire). That last one is
+    // NOT a new motion family: it is the same one spring family at its own
+    // duration, so navigation reads as "the room turning," not a stock
+    // tab-switch. Everything else stays calm and instant — no chrome
+    // transitions, no streaming-text fades. Screens compose from this
+    // vocabulary rather than inventing their own curves; if a screen wants
+    // motion for anything not named here, that's a design question to raise,
+    // not a curve to write inline.
     enum Motion {
         /// Named durations — the only numbers screens should reach for.
         enum Duration {
@@ -107,6 +111,10 @@ enum Ember {
         static let bellowsEmbers = spring(Duration.quick)
         /// The condensation moment — mercury fixing into salt (gold, once, on `fix_salt`).
         static let condensation = spring(Duration.slow)
+        /// Turning between surfaces (Furnace ↔ Mercury ↔ Grimoire) — the room
+        /// turning under the hand. Same spring family, a middle duration between
+        /// the bellows' twitch and the condensation's settle.
+        static let surfaceTurn = spring(0.4)
 
         /// Explicit "no animation" — reach for this everywhere else (tab
         /// switches, streaming text appends, sheet content swaps). Naming it

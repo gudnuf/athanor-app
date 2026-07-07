@@ -1,91 +1,106 @@
 import SwiftUI
 
-// Navigation shell: Furnace (root) → Session, Grimoire, Mercury are its three
-// destinations. E2–E5 fill in these screens' real content; E1 ships them as
-// placeholders wired into real navigation so later tasks only touch screen
-// bodies, never the shell.
+// Navigation shell. The Furnace is HOME — Mercury and Grimoire are chambers you
+// turn to from it, not sibling tabs. There is no bottom bar (the operator's
+// call: a persistent banner fights the app's ritual-object feel). Instead the
+// three surfaces live on one horizontal plane you turn through — Furnace at
+// centre, Grimoire a turn to the left, Mercury a turn to the right — reached by
+// swiping or by the quiet glyph marks in the Furnace's own margins. The Tabula
+// (a scroll you pull up) stays a sheet; a session (immersive) stays a cover.
 
-enum FurnaceTab: Hashable {
-    case furnace, mercury, grimoire
+enum FurnaceSurface: Hashable {
+    case grimoire, furnace, mercury
 }
 
 struct FurnaceShell: View {
     var model: AppModel
-    @State private var tab: FurnaceTab
+    @State private var surface: FurnaceSurface
     @State private var showTabula = false
     @State private var sessionActive: Bool
 
     init(model: AppModel) {
         self.model = model
         // Screenshot/QA automation hook only (mirrors murmur-rmp's `screen=`
-        // launch arg) — jumps straight to a tab or the session screen so
-        // screens can be captured without scripting real taps. Never
+        // launch arg) — turns straight to a surface or opens the session/scroll
+        // so screens can be captured without scripting real swipes. Never
         // affects a normal launch.
         let args = ProcessInfo.processInfo.arguments
         let screen = args.first(where: { $0.hasPrefix("screen=") })?.dropFirst("screen=".count)
-        _tab = State(initialValue: screen == "mercury" ? .mercury : screen == "grimoire" ? .grimoire : .furnace)
+        _surface = State(initialValue: screen == "mercury" ? .mercury : screen == "grimoire" ? .grimoire : .furnace)
         _sessionActive = State(initialValue: screen == "session")
         _showTabula = State(initialValue: screen == "tabula")
     }
 
     var body: some View {
-        Group {
-            switch tab {
-            case .furnace:
-                FurnaceScreen(model: model, onBegin: { sessionActive = true }, onTabula: { showTabula = true })
-            case .mercury:
-                MercuryScreen(model: model)
-            case .grimoire:
-                GrimoireScreen(model: model)
-            }
+        // One horizontal plane. Page order IS the spatial layout: Grimoire to
+        // the left of the Furnace, Mercury to its right. Swipe to turn; no page
+        // dots (that would just be the banner again, smaller).
+        TabView(selection: $surface) {
+            GrimoireScreen(model: model)
+                .overlay(alignment: .topTrailing) { HomeMark(onHome: turnHome) }
+                .tag(FurnaceSurface.grimoire)
+
+            FurnaceScreen(
+                model: model,
+                onBegin: { sessionActive = true },
+                onTabula: { showTabula = true },
+                onGrimoire: { turn(to: .grimoire) },
+                onMercury: { turn(to: .mercury) }
+            )
+            .tag(FurnaceSurface.furnace)
+
+            MercuryScreen(model: model)
+                .overlay(alignment: .topTrailing) { HomeMark(onHome: turnHome) }
+                .tag(FurnaceSurface.mercury)
         }
+        .tabViewStyle(.page(indexDisplayMode: .never))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Ember.C.ground.ignoresSafeArea())
-        // safeAreaInset (not a ZStack overlay) so screen content lays out
-        // above the tab bar instead of being clipped behind it.
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            EmberTabBar(tab: $tab)
-        }
         .fullScreenCover(isPresented: $sessionActive) {
             SessionScreen(model: model, onClose: { sessionActive = false })
         }
         .sheet(isPresented: $showTabula) {
             TabulaScreen(model: model)
         }
+        .task {
+            // Screenshot/recording QA hook only (same family as `screen=` /
+            // `autoplay=`): turns through the surfaces on a timer so the spring
+            // transition can be captured on video without a scripted swipe.
+            // Never fires on a normal launch.
+            guard ProcessInfo.processInfo.arguments.contains("autonav=1") else { return }
+            for next in [FurnaceSurface.mercury, .furnace, .grimoire, .furnace] {
+                try? await Task.sleep(for: .milliseconds(1100))
+                turn(to: next)
+            }
+        }
     }
+
+    /// Turn to a surface — the one spring family (the room turning under the
+    /// hand), never a bespoke curve.
+    private func turn(to s: FurnaceSurface) {
+        withAnimation(Ember.Motion.surfaceTurn) { surface = s }
+    }
+
+    private func turnHome() { turn(to: .furnace) }
 }
 
-/// Bottom tab bar — glyph-first, matching the mockups (🜍 Furnace, ☿ Mercury,
-/// 🜔 Grimoire). Status marks, not decoration (spec: "Glyphs").
-private struct EmberTabBar: View {
-    @Binding var tab: FurnaceTab
+/// The quiet way back from a chamber: the Furnace's own mark, top-trailing,
+/// where a chamber's header leaves room. Swiping back works too — this is the
+/// visible affordance for it. A full 44pt target around a small glyph.
+private struct HomeMark: View {
+    var onHome: () -> Void
 
     var body: some View {
-        HStack(spacing: 0) {
-            tabButton(.furnace, glyph: Ember.Glyph.furnace, label: "Furnace")
-            tabButton(.mercury, glyph: Ember.Glyph.mercury, label: "Mercury")
-            tabButton(.grimoire, glyph: Ember.Glyph.grimoire, label: "Grimoire")
-        }
-        .padding(.top, 10)
-        .padding(.bottom, 24)
-        .background(
-            Ember.C.raised
-                .overlay(alignment: .top) { Ember.C.hairline.frame(height: 1) }
-        )
-    }
-
-    private func tabButton(_ value: FurnaceTab, glyph: String, label: String) -> some View {
-        let active = tab == value
-        return Button {
-            tab = value
-        } label: {
-            VStack(spacing: 4) {
-                Text(glyph).font(.system(size: 20))
-                Text(label).font(Ember.F.sans(11, weight: .semibold))
-            }
-            .foregroundStyle(active ? Ember.C.heat : Ember.C.mutedDim)
-            .frame(maxWidth: .infinity)
+        Button(action: onHome) {
+            Text(Ember.Glyph.furnace)
+                .font(.system(size: 17))
+                .foregroundStyle(Ember.C.heat.opacity(0.8))
+                .frame(width: Ember.S.minTarget, height: Ember.S.minTarget)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .padding(.trailing, Ember.S.screenPad - 8)
+        .padding(.top, 8)
+        .accessibilityLabel("Return to the Furnace")
     }
 }

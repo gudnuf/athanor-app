@@ -10,6 +10,10 @@ struct FurnaceScreen: View {
     var model: AppModel
     var onBegin: () -> Void
     var onTabula: () -> Void
+    /// Turn to the Grimoire (the chamber a turn to the left).
+    var onGrimoire: () -> Void = {}
+    /// Turn to Mercury (the chamber a turn to the right).
+    var onMercury: () -> Void = {}
 
     private var fire: FireState { model.engine.furnaceState() }
     private var openThreads: [Thread] { model.engine.mercury().filter { $0.state == .volatile || $0.state == .condensing } }
@@ -72,6 +76,23 @@ struct FurnaceScreen: View {
             .padding(.horizontal, Ember.S.screenPad)
             .padding(.bottom, 20)
         }
+        // The chambers live in the Furnace's margins: a quiet glyph on each
+        // edge, at the door's height. They mark the way (and open it on tap);
+        // the same turn happens by swiping. Grimoire to the left, Mercury to
+        // the right — the marks sit on the side you'd swipe toward.
+        .overlay(alignment: .leading) {
+            ChamberMark(glyph: Ember.Glyph.grimoire, count: nil, action: onGrimoire)
+                .accessibilityLabel("Grimoire")
+        }
+        .overlay(alignment: .trailing) {
+            ChamberMark(glyph: Ember.Glyph.mercury, count: openThreads.count, action: onMercury)
+                .accessibilityLabel(mercuryMarkLabel)
+        }
+    }
+
+    private var mercuryMarkLabel: String {
+        let n = openThreads.count
+        return n == 0 ? "Mercury" : "Mercury, \(n) open \(n == 1 ? "thread" : "threads")"
     }
 
     /// 0...1 — the ember bed reflects held heat: more days tended, brighter
@@ -91,6 +112,37 @@ struct FurnaceScreen: View {
         case 2...3: return "the fire is holding"
         default: return "the fire is low"
         }
+    }
+}
+
+/// A door in the Furnace's margin: a single quiet glyph at the vertical
+/// mid-line, hugging one edge, with an optional small count riding above it
+/// (Mercury's open threads — "glyphs are status marks"). Dim at rest so it
+/// never competes with the fire; a full `minTarget` hit area around the small
+/// mark keeps it reachable. Tapping turns to that chamber; swiping does the
+/// same.
+private struct ChamberMark: View {
+    var glyph: String
+    var count: Int?
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 2) {
+                if let count, count > 0 {
+                    Text("\(count)")
+                        .font(Ember.F.sans(9, weight: .bold))
+                        .foregroundStyle(Ember.C.heat.opacity(0.7))
+                }
+                Text(glyph)
+                    .font(.system(size: 19))
+                    .foregroundStyle(Ember.C.mutedDim)
+            }
+            .frame(width: Ember.S.minTarget, height: Ember.S.minTarget)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 2)
     }
 }
 
