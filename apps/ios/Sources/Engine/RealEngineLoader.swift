@@ -63,7 +63,21 @@ enum RealEngineLoader {
     }
 
     /// On-device store path (Application Support/athanor.sqlite).
+    ///
+    /// Lived-in demo hook (mirrors FurnaceShell's `screen=` QA arg): a
+    /// `seed-db=<path>` launch argument overrides the store path so a build can
+    /// open a pre-seeded db produced by `athanor-cli seed`. This runs the REAL
+    /// engine against real seeded state — streams and reads render it exactly as
+    /// live use. Never affects a normal launch (no arg → the on-device path).
     private static func databasePath() -> String {
+        if let arg = ProcessInfo.processInfo.arguments
+            .first(where: { $0.hasPrefix("seed-db=") }) {
+            let path = String(arg.dropFirst("seed-db=".count))
+            if !path.isEmpty {
+                NSLog("[Athanor] opening seeded db from launch arg (lived-in demo)")
+                return path
+            }
+        }
         let fm = FileManager.default
         let dir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
