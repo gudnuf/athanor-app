@@ -82,12 +82,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut script_path: Option<String> = None;
     let mut db_path: Option<String> = None;
     let mut goose = false;
+    let mut turns: Vec<String> = Vec::new();
 
     while let Some(flag) = args.next() {
         match flag.as_str() {
             "--mask" => mask = next_value(&mut args, "--mask")?,
             "--mode" => mode = next_value(&mut args, "--mode")?,
             "--thread" => thread = Some(next_value(&mut args, "--thread")?),
+            "--turn" => turns.push(next_value(&mut args, "--turn")?),
             "--script" => script_path = Some(next_value(&mut args, "--script")?),
             "--db" => db_path = Some(next_value(&mut args, "--db")?),
             "--goose" => goose = true,
@@ -108,7 +110,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut stdout = std::io::stdout();
 
     if goose {
-        return run_goose(store, &mask, &mode, thread.as_deref(), &mut stdout).await;
+        return run_goose(store, &mask, &mode, thread.as_deref(), &turns, &mut stdout).await;
     }
 
     let script: Vec<AcpUpdate> = match &script_path {
@@ -219,11 +221,18 @@ async fn run_goose(
     mask: &str,
     mode: &str,
     thread: Option<&str>,
+    turns: &[String],
     out: &mut (dyn std::io::Write + Send),
 ) -> Result<(), Box<dyn std::error::Error>> {
     use athanor_core::engine::GooseEngine;
-    let engine = GooseEngine::new();
-    let outcome = athanor_cli::run_session(store, &engine, mask, mode, thread, out).await?;
+    let key = std::env::var("ANTHROPIC_API_KEY")
+        .map_err(|_| "ANTHROPIC_API_KEY must be set in the environment for --goose")?;
+    let engine = GooseEngine::new(key, None);
+    let outcome = if turns.is_empty() {
+        athanor_cli::run_session(store, &engine, mask, mode, thread, out).await?
+    } else {
+        athanor_cli::run_turns(store, &engine, mask, mode, thread, turns, out).await?
+    };
     eprintln!(
         "\n[session {} landed={} tools={:?}]",
         outcome.session_id, outcome.landed, outcome.tools_called
@@ -237,6 +246,7 @@ async fn run_goose(
     _mask: &str,
     _mode: &str,
     _thread: Option<&str>,
+    _turns: &[String],
     _out: &mut (dyn std::io::Write + Send),
 ) -> Result<(), Box<dyn std::error::Error>> {
     Err("--goose requires building with --features goose".into())

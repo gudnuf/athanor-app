@@ -71,6 +71,43 @@ pub async fn run_session(
     Ok(outcome)
 }
 
+/// Drives a MULTI-turn live session: each string in `turns` is fed as the next
+/// learner turn, the Mystagogue's reply streamed to `out`, then the session is
+/// landed. Used to reproduce/verify tool behavior (e.g. `fix_salt`) over a real
+/// engine + a seeded store from the command line, with full visibility.
+pub async fn run_turns(
+    store: Arc<Store>,
+    engine: &dyn MystagogueEngine,
+    mask: &str,
+    mode: &str,
+    thread_id: Option<&str>,
+    turns: &[String],
+    out: &mut (dyn std::io::Write + Send),
+) -> Result<SessionOutcome, Box<dyn std::error::Error>> {
+    let mut conductor = Conductor::begin(Arc::clone(&store), mask, mode, thread_id)?;
+    for (i, turn) in turns.iter().enumerate() {
+        let _ = writeln!(
+            out,
+            "\n─── learner turn {} ───\n{turn}\n─── mystagogue ───",
+            i + 1
+        );
+        conductor
+            .run_turn(engine, Some(turn), &mut |update| {
+                if let AcpUpdate::TextDelta(text) = &update {
+                    let _ = out.write_all(text.as_bytes());
+                }
+            })
+            .await?;
+        let _ = writeln!(out);
+    }
+    let outcome = if conductor.landed() {
+        conductor.close(DEFAULT_SESSION_MINUTES)?
+    } else {
+        outcome_without_landing(&conductor)
+    };
+    Ok(outcome)
+}
+
 /// Snapshots a not-yet-landed conductor's accumulators into an outcome
 /// without consuming it (so the underlying session stays `open`, matching the
 /// pre-Conductor harness's behavior of only closing on `TurnComplete`).

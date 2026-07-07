@@ -123,7 +123,9 @@ impl Conductor {
         mode: String,
         thread_id: Option<String>,
     ) -> Self {
-        let mystagogue = Mystagogue::new(Arc::clone(&store));
+        // Hand the Mystagogue the session's focal thread so `fix_salt` can fall
+        // back to it when the model fumbles the id.
+        let mystagogue = Mystagogue::new(Arc::clone(&store)).with_focal_thread(thread_id.clone());
         Self {
             store,
             mystagogue,

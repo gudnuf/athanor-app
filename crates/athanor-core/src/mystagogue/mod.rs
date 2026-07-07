@@ -23,20 +23,76 @@ use std::sync::Arc;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use crate::domain::ThreadState;
 use crate::error::CoreError;
 use crate::store::Store;
 
 pub struct Mystagogue {
     store: Arc<Store>,
+    /// The session's focal thread, if it opened on one — the fallback target for
+    /// `fix_salt` when the model fumbles the `thread_id` (see
+    /// `resolve_salt_thread`). Set by the `Conductor` at session start.
+    focal_thread: Option<String>,
 }
 
 impl Mystagogue {
     pub fn new(store: Arc<Store>) -> Self {
-        Self { store }
+        Self {
+            store,
+            focal_thread: None,
+        }
+    }
+
+    /// Records the session's focal thread so `fix_salt` can fall back to it.
+    pub fn with_focal_thread(mut self, focal_thread: Option<String>) -> Self {
+        self.focal_thread = focal_thread;
+        self
     }
 
     pub fn store(&self) -> &Store {
         &self.store
+    }
+
+    /// Chooses the thread a `fix_salt` should condense, tolerating the model
+    /// fumbling the id (it can only see thread PROMPTS in the assembled prompt,
+    /// not uuids, and reliably invents refs like `ripe_mercury[0]`). In order:
+    /// the given id if it's a real, still-open thread; else the session's focal
+    /// thread; else the single ripest open thread; else a crisp error naming the
+    /// open threads. Salt is never dropped on the floor because of a bad id.
+    fn resolve_salt_thread(&self, given: Option<&str>) -> Result<String, CoreError> {
+        let fixable = |id: &str| -> bool {
+            matches!(
+                self.store.get_thread(id).map(|t| t.state),
+                Ok(ThreadState::Volatile) | Ok(ThreadState::Condensing)
+            )
+        };
+        if let Some(id) = given.map(str::trim).filter(|s| !s.is_empty()) {
+            if fixable(id) {
+                return Ok(id.to_string());
+            }
+        }
+        if let Some(focal) = self.focal_thread.as_deref() {
+            if fixable(focal) {
+                return Ok(focal.to_string());
+            }
+        }
+        if let Some(ripe) = self.store.ripe_threads(1)?.into_iter().next() {
+            return Ok(ripe.id);
+        }
+        let open: Vec<String> = self
+            .store
+            .open_threads()?
+            .into_iter()
+            .map(|t| t.prompt)
+            .collect();
+        Err(CoreError::BadState(format!(
+            "no open thread to fix salt against{}",
+            if open.is_empty() {
+                " (none are open)".to_string()
+            } else {
+                format!("; open threads: {}", open.join("; "))
+            }
+        )))
     }
 
     /// The tool specs exposed to the engine for prompt assembly (Task 10).
@@ -48,12 +104,12 @@ impl Mystagogue {
                 json_schema: json!({
                     "type": "object",
                     "properties": {
-                        "realization": { "type": "string", "description": "the immutable insight, once fixed" },
-                        "thread_id": { "type": "string", "description": "the thread this realization closes" },
+                        "realization": { "type": "string", "description": "the immutable insight, in the learner's own words" },
+                        "thread_id": { "type": "string", "description": "optional — the thread this realization condenses; omit to condense the current ripe thread (you see thread prompts, not ids, so prefer omitting it)" },
                         "domains": { "type": "array", "items": { "type": "string" }, "description": "domain names this realization touches" },
                         "child_question": { "type": "string", "description": "the next question this opens (optional; one is synthesized if absent)" }
                     },
-                    "required": ["realization", "thread_id"]
+                    "required": ["realization"]
                 }),
             },
             AcpToolSpec {
@@ -115,8 +171,13 @@ impl Mystagogue {
         match name {
             "fix_salt" => {
                 let a: FixSaltArgs = serde_json::from_value(args)?;
+                // Tolerate a fumbled/omitted thread id — the model can't see
+                // uuids, only prompts. Resolve to the real thread this salt
+                // condenses (given → focal → ripest) so a good realization is
+                // never lost to a bad reference.
+                let thread_id = self.resolve_salt_thread(a.thread_id.as_deref())?;
                 let realization = self.store.fix_salt(
-                    &a.thread_id,
+                    &thread_id,
                     &a.realization,
                     &a.domains,
                     a.child_question.as_deref(),
@@ -182,7 +243,11 @@ impl ToolDispatch for Mystagogue {
 #[derive(Deserialize)]
 struct FixSaltArgs {
     realization: String,
-    thread_id: String,
+    /// Optional: the model only sees thread prompts, not uuids, so a missing or
+    /// fumbled id resolves to the session's focal/ripest thread
+    /// (`resolve_salt_thread`).
+    #[serde(default)]
+    thread_id: Option<String>,
     #[serde(default)]
     domains: Vec<String>,
     #[serde(default)]
@@ -222,7 +287,6 @@ struct UpdateMemoryArgs {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::ThreadState;
 
     // `Arc<Store>` per the plan's `Mystagogue::new` signature. `Store` is now
     // `Send + Sync` (its `Connection` sits behind a `ReentrantMutex`), so the
@@ -237,6 +301,76 @@ mod tests {
             name: name.into(),
             args,
         }
+    }
+
+    // ---- fix_salt thread resolution (lane 9: model can't see uuids) ----
+
+    #[tokio::test]
+    async fn fix_salt_with_a_fumbled_thread_id_falls_back_to_the_focal_thread() {
+        let store = Store::open_in_memory("dev").unwrap();
+        let focal = store
+            .open_thread("why does it collapse?", None, None)
+            .unwrap();
+        let other = store.open_thread("a different thread", None, None).unwrap();
+        let myst = Mystagogue::new(store_arc(store)).with_focal_thread(Some(focal.id.clone()));
+        // The model invents a ref it saw in the prompt — not a real uuid.
+        let res = myst
+            .dispatch(call(
+                "fix_salt",
+                json!({ "realization": "the collapse is overproofing", "thread_id": "ripe_mercury[0]" }),
+            ))
+            .await;
+        assert!(
+            res.value.get("realization_id").is_some(),
+            "salt fixed anyway: {:?}",
+            res.value
+        );
+        // It condensed the FOCAL thread, not the other one.
+        assert_eq!(
+            myst.store().get_thread(&focal.id).unwrap().state,
+            ThreadState::Fixed
+        );
+        assert_eq!(
+            myst.store().get_thread(&other.id).unwrap().state,
+            ThreadState::Volatile
+        );
+    }
+
+    #[tokio::test]
+    async fn fix_salt_with_no_thread_id_condenses_the_ripest_open_thread() {
+        let store = Store::open_in_memory("dev").unwrap();
+        let ripe = store.open_thread("the ripe one", None, None).unwrap();
+        store
+            .set_thread_state(&ripe.id, ThreadState::Condensing)
+            .unwrap();
+        store
+            .open_thread("a younger volatile one", None, None)
+            .unwrap();
+        // No focal thread, and the model omits thread_id entirely.
+        let myst = Mystagogue::new(store_arc(store));
+        let res = myst
+            .dispatch(call("fix_salt", json!({ "realization": "it clicked" })))
+            .await;
+        assert!(res.value.get("realization_id").is_some(), "{:?}", res.value);
+        assert_eq!(
+            myst.store().get_thread(&ripe.id).unwrap().state,
+            ThreadState::Fixed,
+            "the condensing (ripest) thread was chosen"
+        );
+    }
+
+    #[tokio::test]
+    async fn fix_salt_with_no_open_threads_errors_crisply() {
+        let store = Store::open_in_memory("dev").unwrap();
+        let myst = Mystagogue::new(store_arc(store));
+        let res = myst
+            .dispatch(call(
+                "fix_salt",
+                json!({ "realization": "nowhere to put it" }),
+            ))
+            .await;
+        let err = res.value["error"].as_str().unwrap();
+        assert!(err.contains("no open thread"), "crisp error: {err}");
     }
 
     // ---- the load-bearing spiral test (plan Task 9, Step 1) ----
