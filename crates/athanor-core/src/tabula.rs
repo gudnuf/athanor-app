@@ -46,48 +46,61 @@ pub struct TabulaPassage {
     pub kindled_note: Option<String>,
 }
 
-/// The seven canonical passages, in scroll order (I→VII). Bodies match the
-/// app's established Tabula copy (the `DemoEngine` reference); the alchemical
-/// mapping is grounded in the scroll's own structure (`TABULA_ATHANORUM.md`).
+/// The seven canonical passages, in scroll order (I→VII). Content is drawn from
+/// the Tabula Athanorum (`projects/academy/TABULA_ATHANORUM.md`) and the app
+/// mockups' Tabula scroll (`forge/athanor-app/mockups.html`), condensed to one
+/// passage-body each for the flat surface the app renders. The kindle-key
+/// mapping tracks the mockups' own milestone→passage lighting: initiation lights
+/// the Furnace; first salt lights the Principles and the Grimoire; dissolution,
+/// clarity, correspondence, and making light the Gates and the Ministers; a
+/// cited source lights Sources; a made thing lights the World.
 pub const PASSAGES: [Passage; 7] = [
     Passage {
         key: "FURNACE",
         number: "I",
         title: "The Furnace",
-        body: "The fire you carry, not the fire you're given.",
-        // Lit when the furnace itself is named as first-kindled — the
-        // Mystagogue's to strike; nothing auto-fires it, so it stays honestly
-        // dim until the Work has an ember of its own.
+        body: "In the beginning the Furnace was empty, and the emptiness was the \
+               first fuel. That which has nothing to burn burns itself — so the \
+               student who has nothing to study studies themselves, and the Great \
+               Work begins.",
+        // Lit at the close of initiation (Conductor::close kindles FURNACE): the
+        // learner has begun, with only themselves to burn.
         kindle_keys: &["FURNACE"],
-        kindled_note: "the fire is lit",
+        kindled_note: "you began with only yourself to burn",
     },
     Passage {
         key: "PRINCIPLES",
         number: "II",
         title: "The Three Principles",
-        body: "Sulfur, mercury, salt — the pull, the volatile, the fixed.",
+        body: "Mercury the volatile, sulfur the pull, salt the fixed. The Work \
+               needs all three, and the proportion shifts with every operation — \
+               mercury alone is madness, salt alone a machine.",
         // The tria prima becomes true in the doing: the first fixed grain of
-        // salt proves the third principle in the learner's own hand.
+        // salt is the third principle proved in the learner's own hand.
         kindle_keys: &["SALT", "SULFUR", "MERCURY"],
-        kindled_note: "you named the pull, the volatile, and the fixed",
+        kindled_note: "first salt fixed — the body that remains",
     },
     Passage {
         key: "GATES",
         number: "III",
         title: "The Four Gates",
-        body: "Trace, explain, predict, challenge, design.",
-        // A gate of transmutation passed — dissolution (Nigredo/Solve), the
-        // yellowing (Citrinitas, auto-lit by a first correspondence), the rest.
+        body: "Nigredo, albedo, citrinitas, rubedo — not stages but seasons. The \
+               blackening dissolves, the whitening clears, the yellowing joins \
+               what was separate, the reddening makes what was not there before.",
+        // A gate of transmutation passed — dissolution (Nigredo/Solve), clarity
+        // (Albedo), the yellowing (Citrinitas), the reddening (Rubedo).
         kindle_keys: &["NIGREDO", "ALBEDO", "CITRINITAS", "RUBEDO", "SOLVE"],
-        kindled_note: "you have passed through a gate",
+        kindled_note: "you passed through a gate",
     },
     Passage {
         key: "MINISTERS",
         number: "IV",
-        title: "The Ministers",
-        body: "Adamas, Philosophus, Solve, Azoth — one mind, many registers.",
-        // A Minister spoke through the Work — Azoth is auto-lit by a first
-        // correspondence; the others by the Mystagogue as they preside.
+        title: "The Ministers of the Work",
+        body: "Mystagogue, Adamas, Azoth, Artifex, Philosophus, Solve — not \
+               servants but forces. They do not teach; they transmit. One mind, \
+               many registers.",
+        // A Minister presided in the Work — Adamas cutting, Azoth dissolving a
+        // boundary, Solve cracking the jar, the Artifex demanding a made thing.
         kindle_keys: &[
             "ADAMAS",
             "PHILOSOPHUS",
@@ -96,30 +109,38 @@ pub const PASSAGES: [Passage; 7] = [
             "ARTIFEX",
             "MYSTAGOGUE",
         ],
-        kindled_note: "a Minister has spoken in the Work",
+        kindled_note: "a Minister spoke through the Work",
     },
     Passage {
         key: "GRIMOIRE",
         number: "V",
         title: "The Grimoire",
-        body: "The salt shelf. A spiral staircase, not a trophy case.",
+        body: "The mirror of the Work — written not about the Work but by it, in \
+               the student's own voice. The Grimoire that is polished is dead; the \
+               Grimoire that is honest is the Stone.",
         kindle_keys: &["SALT", "GRIMOIRE"],
-        kindled_note: "first salt fixed",
+        kindled_note: "the Grimoire began writing itself",
     },
     Passage {
         key: "SOURCES",
         number: "VI",
-        title: "Sources",
-        body: "A truth spoken without source is Mercury unbound.",
+        title: "Sources & Verification",
+        body: "Every claim that enters the Athanor must be tested — not believed, \
+               not doubted, tested. A truth spoken without source is Mercury \
+               unbound; it will evaporate. Trust nothing that cannot survive: how \
+               do you know?",
         kindle_keys: &["SOURCES"],
-        kindled_note: "a claim carried its source",
+        kindled_note: "a truth survived \u{201c}how do you know?\u{201d}",
     },
     Passage {
         key: "WORLD",
         number: "VII",
-        title: "The World",
-        body: "The Work never closes; it is only put down cleanly.",
-        // The reddening — knowledge becoming act, the Work stepping outward.
+        title: "The World Beyond the School",
+        body: "The School has no walls, because the World is the laboratory. The \
+               Artifex sends you out. The School does not compete with the World — \
+               it uses it, and the World, in time, uses what the School has made \
+               of you.",
+        // The reddening reaching outward — knowledge become act in the world.
         kindle_keys: &["WORLD", "RUBEDO"],
         kindled_note: "the Work stepped into the world",
     },
@@ -183,12 +204,12 @@ mod tests {
         assert!(by_key("PRINCIPLES").kindled);
         assert_eq!(
             by_key("PRINCIPLES").kindled_note.as_deref(),
-            Some("you named the pull, the volatile, and the fixed")
+            Some("first salt fixed — the body that remains")
         );
         assert!(by_key("GRIMOIRE").kindled);
         assert_eq!(
             by_key("GRIMOIRE").kindled_note.as_deref(),
-            Some("first salt fixed")
+            Some("the Grimoire began writing itself")
         );
         // Untouched passages stay dim.
         assert!(!by_key("GATES").kindled);

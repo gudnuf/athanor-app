@@ -97,20 +97,31 @@ final class DemoEngine: AthanorEngineProtocol {
                born: Calendar.current.date(byAdding: .day, value: -7, to: Date())!, lastWorked: nil),
     ]
 
+    // Same seven canonical passages the real engine projects (athanor-core's
+    // `tabula` module) — kept in sync so the demo build shows the true scroll,
+    // not a thin stand-in. A beginner's kindling pattern (Furnace, Principles,
+    // Grimoire lit) so the screen shows both the warm and the dim states.
     private let seededTabula: [TabulaPassage] = [
-        TabulaPassage(id: "I", number: "I", title: "The Furnace", body: "The fire you carry, not the fire you're given.",
-                      kindled: true, kindledNote: "kindled · the fire is lit"),
-        TabulaPassage(id: "II", number: "II", title: "The Three Principles", body: "Sulfur, mercury, salt — the pull, the volatile, the fixed.",
-                      kindled: true, kindledNote: "kindled · you began with only yourself to burn"),
-        TabulaPassage(id: "III", number: "III", title: "The Four Gates", body: "Trace, explain, predict, challenge, design.",
+        TabulaPassage(id: "FURNACE", number: "I", title: "The Furnace",
+                      body: "In the beginning the Furnace was empty, and the emptiness was the first fuel. That which has nothing to burn burns itself — so the student who has nothing to study studies themselves, and the Great Work begins.",
+                      kindled: true, kindledNote: "you began with only yourself to burn"),
+        TabulaPassage(id: "PRINCIPLES", number: "II", title: "The Three Principles",
+                      body: "Mercury the volatile, sulfur the pull, salt the fixed. The Work needs all three, and the proportion shifts with every operation — mercury alone is madness, salt alone a machine.",
+                      kindled: true, kindledNote: "first salt fixed — the body that remains"),
+        TabulaPassage(id: "GATES", number: "III", title: "The Four Gates",
+                      body: "Nigredo, albedo, citrinitas, rubedo — not stages but seasons. The blackening dissolves, the whitening clears, the yellowing joins what was separate, the reddening makes what was not there before.",
                       kindled: false, kindledNote: nil),
-        TabulaPassage(id: "IV", number: "IV", title: "The Ministers", body: "Adamas, Philosophus, Solve, Azoth — one mind, many registers.",
+        TabulaPassage(id: "MINISTERS", number: "IV", title: "The Ministers of the Work",
+                      body: "Mystagogue, Adamas, Azoth, Artifex, Philosophus, Solve — not servants but forces. They do not teach; they transmit. One mind, many registers.",
                       kindled: false, kindledNote: nil),
-        TabulaPassage(id: "V", number: "V", title: "The Grimoire", body: "The salt shelf. A spiral staircase, not a trophy case.",
-                      kindled: true, kindledNote: "kindled · first salt fixed"),
-        TabulaPassage(id: "VI", number: "VI", title: "Sources", body: "A truth spoken without source is Mercury unbound.",
+        TabulaPassage(id: "GRIMOIRE", number: "V", title: "The Grimoire",
+                      body: "The mirror of the Work — written not about the Work but by it, in the student's own voice. The Grimoire that is polished is dead; the Grimoire that is honest is the Stone.",
+                      kindled: true, kindledNote: "the Grimoire began writing itself"),
+        TabulaPassage(id: "SOURCES", number: "VI", title: "Sources & Verification",
+                      body: "Every claim that enters the Athanor must be tested — not believed, not doubted, tested. A truth spoken without source is Mercury unbound; it will evaporate. Trust nothing that cannot survive: how do you know?",
                       kindled: false, kindledNote: nil),
-        TabulaPassage(id: "VII", number: "VII", title: "The World", body: "The Work never closes; it is only put down cleanly.",
+        TabulaPassage(id: "WORLD", number: "VII", title: "The World Beyond the School",
+                      body: "The School has no walls, because the World is the laboratory. The Artifex sends you out. The School does not compete with the World — it uses it, and the World, in time, uses what the School has made of you.",
                       kindled: false, kindledNote: nil),
     ]
 

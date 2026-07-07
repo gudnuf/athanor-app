@@ -320,6 +320,14 @@ impl Conductor {
         let thread_ids: Vec<String> = self.thread_id.clone().into_iter().collect();
         close_session(&self.store, &self.session_id, minutes, &thread_ids)?;
         self.store.add_trace(&self.session_id, &trace)?;
+        // Completing the initiation lights the Furnace (Tabula passage I): the
+        // learner has begun — the first ember that is their own. Derived from
+        // the existing initiation-close event, no new Mystagogue tool or
+        // user-facing mechanic (mirrors how `fix_salt` kindles SALT). Kindling
+        // is first-wins, so re-initiation never re-fires it.
+        if self.is_initiation() {
+            self.store.kindle_passage("FURNACE", None)?;
+        }
         Ok(self.into_outcome())
     }
 
@@ -582,6 +590,62 @@ mod tests {
         );
         let outcome = conductor.close(DEFAULT_SESSION_MINUTES).unwrap();
         assert!(outcome.transcript.contains("Welcome."));
+    }
+
+    #[tokio::test]
+    async fn closing_the_initiation_lights_the_furnace_passage() {
+        let store = store_arc();
+        let mut conductor = Conductor::begin_initiation(Arc::clone(&store)).unwrap();
+        let engine = MockEngine::new(vec![
+            AcpUpdate::TextDelta("Welcome.".into()),
+            AcpUpdate::TurnComplete,
+        ]);
+        conductor.open_turn(&engine, &mut |_| {}).await.unwrap();
+
+        // Before close, the Furnace is cold.
+        assert!(
+            !store
+                .tabula()
+                .unwrap()
+                .iter()
+                .any(|p| p.key == "FURNACE" && p.kindled),
+            "the Furnace passage is dim until initiation completes"
+        );
+
+        conductor.close(DEFAULT_SESSION_MINUTES).unwrap();
+
+        assert!(
+            store.kindled().unwrap().contains(&"FURNACE".to_string()),
+            "completing initiation kindled FURNACE"
+        );
+        let furnace = store
+            .tabula()
+            .unwrap()
+            .into_iter()
+            .find(|p| p.key == "FURNACE")
+            .unwrap();
+        assert!(furnace.kindled, "the Furnace passage (I) is now lit");
+        assert!(furnace.kindled_note.is_some());
+    }
+
+    #[tokio::test]
+    async fn closing_an_ordinary_session_does_not_light_the_furnace() {
+        let store = store_arc();
+        let mut conductor =
+            Conductor::begin(Arc::clone(&store), "philosophus", "explain", None).unwrap();
+        let engine = MockEngine::new(vec![
+            AcpUpdate::TextDelta("Say more.".into()),
+            AcpUpdate::TurnComplete,
+        ]);
+        conductor
+            .run_turn(&engine, Some("a thought"), &mut |_| {})
+            .await
+            .unwrap();
+        conductor.close(DEFAULT_SESSION_MINUTES).unwrap();
+        assert!(
+            !store.kindled().unwrap().contains(&"FURNACE".to_string()),
+            "only the initiation lights the Furnace, not an ordinary session"
+        );
     }
 
     /// A second `run_turn` after `open_turn` must re-seed the ritual opening

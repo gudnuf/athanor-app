@@ -78,7 +78,10 @@ mod tests {
         let warm = store.tabula().unwrap();
         let grimoire = warm.iter().find(|p| p.key == "GRIMOIRE").unwrap();
         assert!(grimoire.kindled);
-        assert_eq!(grimoire.kindled_note.as_deref(), Some("first salt fixed"));
+        assert_eq!(
+            grimoire.kindled_note.as_deref(),
+            Some("the Grimoire began writing itself")
+        );
         // A passage with no kindled key stays dim.
         assert!(!warm.iter().find(|p| p.key == "WORLD").unwrap().kindled);
     }

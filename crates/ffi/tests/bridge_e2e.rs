@@ -160,7 +160,10 @@ async fn scripted_turn_fixes_salt_streams_condensation_then_reads_round_trip() {
     );
     let grimoire = tabula.iter().find(|p| p.key == "GRIMOIRE").unwrap();
     assert!(grimoire.kindled, "fixing salt lit the Grimoire: {tabula:?}");
-    assert_eq!(grimoire.kindled_note.as_deref(), Some("first salt fixed"));
+    assert_eq!(
+        grimoire.kindled_note.as_deref(),
+        Some("the Grimoire began writing itself")
+    );
     assert!(
         !grimoire.title.is_empty() && !grimoire.body.is_empty(),
         "passages carry their canonical content"
