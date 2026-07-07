@@ -606,7 +606,11 @@ mod tests {
             AcpUpdate::TurnComplete,
         ]);
         conductor
-            .run_turn(&reply_engine, Some("I keep circling back to why iron forgets."), &mut |_| {})
+            .run_turn(
+                &reply_engine,
+                Some("I keep circling back to why iron forgets."),
+                &mut |_| {},
+            )
             .await
             .unwrap();
 

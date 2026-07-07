@@ -492,9 +492,9 @@ mod tests {
             .iter()
             .find(|msgs| {
                 msgs.iter().any(|m| {
-                    m.content.iter().any(|c| {
-                        matches!(c, MessageContent::Text(t) if t.text == "second learner turn")
-                    })
+                    m.content.iter().any(
+                        |c| matches!(c, MessageContent::Text(t) if t.text == "second learner turn"),
+                    )
                 })
             })
             .expect("one call should carry the driving user turn");
@@ -506,9 +506,10 @@ mod tests {
         // message-level equality.
         let role_for_text = |wanted: &str| -> Option<Role> {
             chat_call.iter().find_map(|m| {
-                let has_it = m.content.iter().any(
-                    |c| matches!(c, MessageContent::Text(t) if t.text == wanted),
-                );
+                let has_it = m
+                    .content
+                    .iter()
+                    .any(|c| matches!(c, MessageContent::Text(t) if t.text == wanted));
                 has_it.then(|| m.role.clone())
             })
         };
