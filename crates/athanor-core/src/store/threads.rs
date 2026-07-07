@@ -94,6 +94,21 @@ impl Store {
         rows.collect::<Result<Vec<_>, _>>().map_err(CoreError::from)
     }
 
+    /// Every volatile/condensing thread, for the Mercury screen — same
+    /// evaporated/fixed exclusion and same ordering as `ripe_threads` (oldest
+    /// `last_worked` first, never-worked ranks first) but unbounded, since
+    /// Mercury shows the whole open-question pool, not just the next ones to
+    /// pick up.
+    pub fn open_threads(&self) -> Result<Vec<Thread>, CoreError> {
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {THREAD_COLS} FROM threads
+             WHERE deleted_at IS NULL AND state IN ('volatile', 'condensing')
+             ORDER BY last_worked IS NOT NULL, last_worked ASC"
+        ))?;
+        let rows = stmt.query_map([], thread_from_row)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(CoreError::from)
+    }
+
     pub fn get_thread(&self, id: &str) -> Result<Thread, CoreError> {
         self.conn()
             .query_row(
@@ -183,5 +198,70 @@ mod tests {
         let store = Store::open_in_memory("d").unwrap();
         let err = store.get_thread("no-such-id").unwrap_err();
         assert!(matches!(err, CoreError::NotFound(_)));
+    }
+
+    #[test]
+    fn open_threads_excludes_evaporated_and_fixed() {
+        let store = Store::open_in_memory("d").unwrap();
+        let volatile = store.open_thread("v", None, None).unwrap();
+        let condensing = store.open_thread("c", None, None).unwrap();
+        store
+            .set_thread_state(&condensing.id, ThreadState::Condensing)
+            .unwrap();
+        let fixed = store.open_thread("f", None, None).unwrap();
+        store
+            .set_thread_state(&fixed.id, ThreadState::Condensing)
+            .unwrap();
+        store
+            .set_thread_state(&fixed.id, ThreadState::Fixed)
+            .unwrap();
+        let evaporated = store.open_thread("e", None, None).unwrap();
+        store.evaporate_thread(&evaporated.id).unwrap();
+
+        let open = store.open_threads().unwrap();
+        let ids: Vec<_> = open.iter().map(|t| t.id.clone()).collect();
+        assert!(ids.contains(&volatile.id));
+        assert!(ids.contains(&condensing.id));
+        assert!(!ids.contains(&fixed.id), "fixed threads are settled");
+        assert!(
+            !ids.contains(&evaporated.id),
+            "evaporated threads were let go"
+        );
+    }
+
+    #[test]
+    fn open_threads_orders_never_worked_first_then_oldest_last_worked() {
+        let store = Store::open_in_memory("d").unwrap();
+        let never_worked = store.open_thread("never", None, None).unwrap();
+        let worked_recently = store.open_thread("recent", None, None).unwrap();
+        store
+            .conn
+            .execute(
+                "UPDATE threads SET last_worked = 200 WHERE id = ?1",
+                rusqlite::params![worked_recently.id],
+            )
+            .unwrap();
+        let worked_long_ago = store.open_thread("long-ago", None, None).unwrap();
+        store
+            .conn
+            .execute(
+                "UPDATE threads SET last_worked = 100 WHERE id = ?1",
+                rusqlite::params![worked_long_ago.id],
+            )
+            .unwrap();
+
+        let open = store.open_threads().unwrap();
+        let ids: Vec<_> = open.iter().map(|t| t.id.clone()).collect();
+        assert_eq!(
+            ids,
+            vec![never_worked.id, worked_long_ago.id, worked_recently.id],
+            "never-worked first, then oldest last_worked"
+        );
+    }
+
+    #[test]
+    fn open_threads_empty_store_is_empty() {
+        let store = Store::open_in_memory("d").unwrap();
+        assert!(store.open_threads().unwrap().is_empty());
     }
 }

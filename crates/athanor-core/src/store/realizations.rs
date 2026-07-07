@@ -21,7 +21,7 @@
 
 use rusqlite::params;
 
-use crate::domain::{Realization, Thread, ThreadState};
+use crate::domain::{GrimoireEntry, Realization, Thread, ThreadState};
 use crate::error::CoreError;
 use crate::ids::new_id;
 
@@ -191,14 +191,64 @@ impl Store {
         let rows = stmt.query_map(params![id], |r| r.get(0))?;
         rows.collect::<Result<Vec<_>, _>>().map_err(CoreError::from)
     }
+
+    /// Domain *names* linked to a realization, in insertion order (join over
+    /// `realization_domains` -> `domains`). Read-only helper for
+    /// `list_realizations`.
+    fn realization_domain_names(&self, id: &str) -> Result<Vec<String>, CoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT d.name FROM realization_domains rd
+             JOIN domains d ON d.id = rd.domain_id
+             WHERE rd.realization_id = ?1 ORDER BY rd.rowid",
+        )?;
+        let rows = stmt.query_map(params![id], |r| r.get(0))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(CoreError::from)
+    }
+
+    /// The Grimoire: every realization, chronological (`date` ASC, then
+    /// `created_at` ASC to break same-day ties), each carrying its linked
+    /// domain names and its (already-present) `child_thread_id` spiral link.
+    /// Read-only projection — realizations are append-only/immutable, so this
+    /// never races a writer.
+    pub fn list_realizations(&self) -> Result<Vec<GrimoireEntry>, CoreError> {
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {REALIZATION_COLS} FROM realizations ORDER BY date ASC, created_at ASC"
+        ))?;
+        let rows = stmt.query_map([], realization_from_row)?;
+        let realizations = rows
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(CoreError::from)?;
+        realizations
+            .into_iter()
+            .map(|realization| {
+                let domains = self.realization_domain_names(&realization.id)?;
+                Ok(GrimoireEntry {
+                    realization,
+                    domains,
+                })
+            })
+            .collect::<Result<Vec<_>, CoreError>>()
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Arc;
+
     use super::*;
+    use crate::store::Clock;
 
     fn parent_thread(store: &Store, domain: Option<&str>) -> Thread {
         store.open_thread("what is entropy?", domain, None).unwrap()
+    }
+
+    /// A clock that advances by one second on every call, so successive
+    /// `fix_salt`s land at strictly increasing `date`s without needing a
+    /// fresh store per call.
+    fn ticking_clock(start: u64) -> Clock {
+        let counter = AtomicU64::new(start);
+        Arc::new(move || counter.fetch_add(1, Ordering::SeqCst))
     }
 
     #[test]
@@ -353,5 +403,59 @@ mod tests {
             realization_count, 0,
             "no realization on an evaporated thread"
         );
+    }
+
+    #[test]
+    fn list_realizations_is_chronological_with_domains_and_child_link() {
+        let store = Store::open_in_memory("d")
+            .unwrap()
+            .with_clock(ticking_clock(1_000));
+        let t1 = parent_thread(&store, None);
+        let r1 = store
+            .fix_salt(&t1.id, "first", &["Alpha".to_string()], None)
+            .unwrap();
+        let t2 = parent_thread(&store, None);
+        let r2 = store
+            .fix_salt(&t2.id, "second", &["Beta".to_string()], None)
+            .unwrap();
+
+        let entries = store.list_realizations().unwrap();
+        assert_eq!(entries.len(), 2, "both realizations landed");
+        assert_eq!(entries[0].realization.id, r1.id, "earlier date sorts first");
+        assert_eq!(entries[1].realization.id, r2.id);
+        assert_eq!(entries[0].domains, vec!["Alpha".to_string()]);
+        assert_eq!(entries[1].domains, vec!["Beta".to_string()]);
+        assert!(
+            entries[0].realization.child_thread_id.is_some(),
+            "the spiral link is exposed on the read"
+        );
+    }
+
+    #[test]
+    fn list_realizations_multiple_domains_preserve_insertion_order() {
+        let store = Store::open_in_memory("d").unwrap();
+        let parent = parent_thread(&store, None);
+        let realization = store
+            .fix_salt(
+                &parent.id,
+                "cross-domain",
+                &["Zeta".to_string(), "Alpha".to_string()],
+                None,
+            )
+            .unwrap();
+        let entries = store.list_realizations().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].realization.id, realization.id);
+        assert_eq!(
+            entries[0].domains,
+            vec!["Zeta".to_string(), "Alpha".to_string()],
+            "insertion order, not alphabetical"
+        );
+    }
+
+    #[test]
+    fn list_realizations_empty_store_is_empty() {
+        let store = Store::open_in_memory("d").unwrap();
+        assert!(store.list_realizations().unwrap().is_empty());
     }
 }

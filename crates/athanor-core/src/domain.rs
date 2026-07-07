@@ -115,6 +115,30 @@ pub struct Correspondence {
     pub device_id: String,
 }
 
+/// Grimoire read (Task B2): a realization plus the domain *names* linked to
+/// it (join over `realization_domains`/`domains`, insertion order). The
+/// realization already carries `child_thread_id` — the spiral link — so no
+/// separate field is needed here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GrimoireEntry {
+    pub realization: Realization,
+    pub domains: Vec<String>,
+}
+
+/// Furnace heat state (Task B2), read by the home screen: `wisdom_days` is
+/// the running total (see `tending.rs`); `last_tended_day`/`tended_today`
+/// tell the ember whether the fire was fed today; `recent` is a small
+/// most-recent-first tending window (see `RECENT_TENDING_WINDOW` in
+/// `store/tending.rs`) sized for the Furnace's recency-aware copy ("the fire
+/// is warm" vs "the fire is low") without a second round-trip.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FireState {
+    pub wisdom_days: u64,
+    pub last_tended_day: Option<String>,
+    pub tended_today: bool,
+    pub recent: Vec<Tending>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Session {
     pub id: String,
