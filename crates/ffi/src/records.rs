@@ -46,6 +46,10 @@ pub struct OpenThread {
     pub id: String,
     pub prompt: String,
     pub domain_id: Option<String>,
+    /// The domain's human NAME (resolved from `domain_id` in `mercury()`), for
+    /// display. `None` when the thread has no domain. The UI shows this, never
+    /// the raw id.
+    pub domain_name: Option<String>,
     /// The thread lifecycle state, lower-cased (`volatile`/`condensing`/…).
     pub state: String,
     pub born: u64,
@@ -122,6 +126,9 @@ impl From<Thread> for OpenThread {
             id: t.id,
             prompt: t.prompt,
             domain_id: t.domain_id,
+            // Resolved by `mercury()` (needs the domain table); the raw
+            // `From` leaves it None.
+            domain_name: None,
             state: t.state.as_str().to_string(),
             born: t.born,
             last_worked: t.last_worked,

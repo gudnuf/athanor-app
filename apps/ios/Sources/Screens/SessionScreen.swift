@@ -326,6 +326,13 @@ struct SessionScreen: View {
     /// that's the one seam this screen needs; a no-key real build still
     /// gets real ears even while `sendTurn` reaches DemoEngine's fallback.
     private func beginRealBellows() async {
+        // The `debug-send-turn=1` QA hook is explicitly the AUDIO-FREE path (it
+        // stands in for a learner turn where there's no mic/acoustic loopback),
+        // so opening the mic here is contradictory — it only pops the system
+        // permission prompt over the very reply the hook exists to exercise.
+        // Skip the Bellows on that path. Never affects a normal launch.
+        guard !ProcessInfo.processInfo.arguments.contains("debug-send-turn=1") else { return }
+
         // The model may still be mid-download if the learner reaches a
         // session unusually fast after first launch (normally Initiation
         // covers this wait) — poll briefly rather than giving up on a single

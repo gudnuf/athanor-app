@@ -138,11 +138,27 @@ impl AthanorEngine {
     }
 
     /// The Mercury read: open threads (volatile + condensing)
-    /// (`Store::open_threads`).
+    /// (`Store::open_threads`), each with its domain's human NAME resolved from
+    /// the domain table so the UI never has to show a raw domain id.
     pub fn mercury(&self) -> Result<Vec<OpenThread>, EngineError> {
+        let names: std::collections::HashMap<String, String> = self
+            .store
+            .list_domains()
+            .map_err(|e| EngineError::Read(e.to_string()))?
+            .into_iter()
+            .map(|d| (d.id, d.name))
+            .collect();
         self.store
             .open_threads()
-            .map(|v| v.into_iter().map(OpenThread::from).collect())
+            .map(|v| {
+                v.into_iter()
+                    .map(|t| {
+                        let mut o = OpenThread::from(t);
+                        o.domain_name = o.domain_id.as_ref().and_then(|id| names.get(id).cloned());
+                        o
+                    })
+                    .collect()
+            })
             .map_err(|e| EngineError::Read(e.to_string()))
     }
 

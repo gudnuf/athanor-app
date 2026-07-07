@@ -81,8 +81,54 @@ enum RealEngineLoader {
         let fm = FileManager.default
         let dir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("athanor.sqlite").path
+        let live = dir.appendingPathComponent("athanor.sqlite")
+
+        #if DEBUG
+        seedFromDevFixtureIfNeeded(liveDB: live, fileManager: fm)
+        #endif
+
+        return live.path
     }
+
+    #if DEBUG
+    /// Dev-only lived-in default: on a FRESH real build (no live db yet), copy
+    /// the operator's local seed fixture into place so every screen opens
+    /// inhabited with real academy material — no `seed-db=` launch arg to
+    /// remember. Strictly guarded:
+    ///   - `#if DEBUG` only: release builds never compile this.
+    ///   - No-clobber: if a live db already exists, it is left untouched (a real
+    ///     session's history is never overwritten).
+    ///   - Opt-in by presence: does nothing unless generate.sh baked a fixture
+    ///     path (`ATHANOR_DEV_SEED_DB`) AND that file exists on disk (so a
+    ///     device/CI build with no host fixture simply falls through to empty).
+    /// The seeded data lives only in the gitignored fixture; nothing is committed.
+    private static func seedFromDevFixtureIfNeeded(liveDB: URL, fileManager fm: FileManager) {
+        guard !fm.fileExists(atPath: liveDB.path) else { return } // never clobber
+        guard let fixture = Bundle.main.object(forInfoDictionaryKey: "ATHANOR_DEV_SEED_DB") as? String,
+              !fixture.isEmpty, fm.fileExists(atPath: fixture) else { return }
+        do {
+            try fm.copyItem(atPath: fixture, toPath: liveDB.path)
+            // Bring along the sqlite sidecars if the fixture carries them (WAL
+            // mode) so the copy opens consistent; absent ones are simply skipped.
+            for suffix in ["-wal", "-shm"] {
+                let src = fixture + suffix
+                if fm.fileExists(atPath: src) {
+                    try? fm.copyItem(atPath: src, toPath: liveDB.path + suffix)
+                }
+            }
+            // A seeded install represents an ALREADY-established practice (the
+            // fixture carries months of history), so skip the first-launch
+            // initiation — landing straight on the inhabited Furnace instead of
+            // "I don't know you yet." This runs during engine construction,
+            // before AppModel reads the flag. Key mirrors AppModel.initiationKey;
+            // dev-only, only on the seed path.
+            UserDefaults.standard.set(true, forKey: "athanor.hasCompletedInitiation")
+            NSLog("[Athanor] dev: seeded a fresh live db from the lived-in fixture")
+        } catch {
+            NSLog("[Athanor] dev: could not seed from fixture (\(error)); starting empty")
+        }
+    }
+    #endif
     #endif
 }
 
@@ -197,7 +243,9 @@ final class AthanorCoreEngine: AthanorEngineProtocol {
             Thread(
                 id: t.id,
                 prompt: t.prompt,
-                domain: t.domainId ?? "",
+                // The domain's human NAME (resolved core-side), never the raw
+                // id — the Mercury row shows this as the domain tag.
+                domain: t.domainName ?? "",
                 state: ThreadState(rawValue: t.state) ?? .volatile,
                 born: Date(timeIntervalSince1970: Double(t.born)),
                 lastWorked: t.lastWorked.map { Date(timeIntervalSince1970: Double($0)) }

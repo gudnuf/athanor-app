@@ -60,6 +60,10 @@ pub struct SeedReport {
     pub correspondences: usize,
     pub tending_days: usize,
     pub profile_sections: usize,
+    /// Tabula passage keys kindled to mirror what the seeded actions would have
+    /// kindled through the live tools (SALT via fix_salt; CITRINITAS/AZOTH via
+    /// weave; FURNACE for a begun practice). Counts only.
+    pub kindled_passages: usize,
     pub skipped: usize,
 }
 
@@ -245,6 +249,21 @@ pub fn seed_from(
         }
     }
 
+    // Parity kindles for correspondences: the live `weave_domains` TOOL kindles
+    // CITRINITAS (the yellowing — domains rhyming) and AZOTH (the Minister who
+    // dissolves the boundary) on every weave; the raw store method the seeder
+    // calls does not, so the seeder reproduces it here (kindling semantics live
+    // at the tool layer, not the store — the seeder's job is to leave the db in
+    // the state the live tools would have). First-wins, so once is enough. This
+    // lights Tabula III (the Four Gates) and IV (the Ministers).
+    if report.correspondences > 0 {
+        for key in ["CITRINITAS", "AZOTH"] {
+            if store.kindle_passage(key, None)? {
+                report.kindled_passages += 1;
+            }
+        }
+    }
+
     // ── session history → tending days (fire) ────────────────────────────
     if let Some(state) = read_opt(&academy_dir.join("STATE.md"))? {
         let mut seen_days: HashSet<String> = existing_tending_days;
@@ -266,6 +285,18 @@ pub fn seed_from(
             report.tending_days += 1;
         }
     }
+
+    // Parity kindle for the Furnace (Tabula I): a lived install with real
+    // tending history has, by definition, been begun — the live app kindles
+    // FURNACE at initiation close, and you cannot accumulate tended days
+    // without having passed through it. Seeding that history therefore implies
+    // a lit Furnace. (Only when there IS tending history — a contentless seed
+    // leaves it dim.) First-wins.
+    if report.tending_days > 0 && store.kindle_passage("FURNACE", None)? {
+        report.kindled_passages += 1;
+    }
+    // SALT is already kindled by `store.fix_salt` during realization seeding
+    // (lighting Tabula II + V) — no separate parity kindle needed.
 
     // ── profile sections ─────────────────────────────────────────────────
     clock.set(seed_now());
@@ -426,6 +457,60 @@ mod tests {
         assert_eq!(
             store.get_profile_section("how_i_learn").unwrap(),
             "by feel then sharpen."
+        );
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn seeding_kindles_the_passages_its_actions_imply() {
+        let root = tmp_root();
+        synthetic_academy(&root);
+        let (store, clock) = seeded_store();
+        let report = seed_from(&store, &clock, &root).unwrap();
+
+        // The fixture has realizations (→ SALT via fix_salt), correspondences
+        // (→ CITRINITAS + AZOTH parity kindle), and tending days (→ FURNACE).
+        assert!(report.realizations > 0 && report.correspondences > 0 && report.tending_days > 0);
+
+        let by_key = |k: &str| {
+            store
+                .tabula()
+                .unwrap()
+                .into_iter()
+                .find(|p| p.key == k)
+                .unwrap()
+        };
+        // Lit by the seeded practice — exactly what the live tools would light.
+        assert!(
+            by_key("FURNACE").kindled,
+            "tending history begins the Work (I)"
+        );
+        assert!(by_key("PRINCIPLES").kindled, "first salt fixed (II)");
+        assert!(
+            by_key("GATES").kindled,
+            "a correspondence is the yellowing (III)"
+        );
+        assert!(
+            by_key("MINISTERS").kindled,
+            "Azoth dissolved a boundary (IV)"
+        );
+        assert!(by_key("GRIMOIRE").kindled, "the salt shelf filled (V)");
+        // Still the Mystagogue's to light — no honest seed event kindles these.
+        assert!(
+            !by_key("SOURCES").kindled,
+            "VI stays dim until a source is cited"
+        );
+        assert!(
+            !by_key("WORLD").kindled,
+            "VII stays dim until something is made"
+        );
+
+        // Re-seeding never re-fires kindling (first-wins).
+        let second = seed_from(&store, &clock, &root).unwrap();
+        assert_eq!(
+            second.kindled_passages, 0,
+            "kindling is first-wins on re-seed"
         );
 
         fs::remove_dir_all(&root).ok();

@@ -156,7 +156,7 @@ fn run_seed(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn std::e
     println!(
         "seeded {db_path}:\n  domains={} realizations={} spiral_children={} \
 open_threads={} condensing={} correspondences={} tending_days={} \
-profile_sections={} skipped={}",
+profile_sections={} kindled_passages={} skipped={}",
         report.domains,
         report.realizations,
         report.spiral_children,
@@ -165,6 +165,7 @@ profile_sections={} skipped={}",
         report.correspondences,
         report.tending_days,
         report.profile_sections,
+        report.kindled_passages,
         report.skipped,
     );
     Ok(())

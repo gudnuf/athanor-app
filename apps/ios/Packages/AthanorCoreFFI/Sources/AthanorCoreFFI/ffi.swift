@@ -562,7 +562,8 @@ public protocol AthanorEngineProtocol: AnyObject, Sendable {
     
     /**
      * The Mercury read: open threads (volatile + condensing)
-     * (`Store::open_threads`).
+     * (`Store::open_threads`), each with its domain's human NAME resolved from
+     * the domain table so the UI never has to show a raw domain id.
      */
     func mercury() throws  -> [OpenThread]
     
@@ -688,7 +689,8 @@ open func grimoire()throws  -> [GrimoireGrain]  {
     
     /**
      * The Mercury read: open threads (volatile + condensing)
-     * (`Store::open_threads`).
+     * (`Store::open_threads`), each with its domain's human NAME resolved from
+     * the domain table so the UI never has to show a raw domain id.
      */
 open func mercury()throws  -> [OpenThread]  {
     return try  FfiConverterSequenceTypeOpenThread.lift(try rustCallWithError(FfiConverterTypeEngineError_lift) {
@@ -1739,6 +1741,12 @@ public struct OpenThread: Equatable, Hashable {
     public var prompt: String
     public var domainId: String?
     /**
+     * The domain's human NAME (resolved from `domain_id` in `mercury()`), for
+     * display. `None` when the thread has no domain. The UI shows this, never
+     * the raw id.
+     */
+    public var domainName: String?
+    /**
      * The thread lifecycle state, lower-cased (`volatile`/`condensing`/…).
      */
     public var state: String
@@ -1753,6 +1761,11 @@ public struct OpenThread: Equatable, Hashable {
     // declare one manually.
     public init(id: String, prompt: String, domainId: String?, 
         /**
+         * The domain's human NAME (resolved from `domain_id` in `mercury()`), for
+         * display. `None` when the thread has no domain. The UI shows this, never
+         * the raw id.
+         */domainName: String?, 
+        /**
          * The thread lifecycle state, lower-cased (`volatile`/`condensing`/…).
          */state: String, born: UInt64, lastWorked: UInt64?, 
         /**
@@ -1761,6 +1774,7 @@ public struct OpenThread: Equatable, Hashable {
         self.id = id
         self.prompt = prompt
         self.domainId = domainId
+        self.domainName = domainName
         self.state = state
         self.born = born
         self.lastWorked = lastWorked
@@ -1786,6 +1800,7 @@ public struct FfiConverterTypeOpenThread: FfiConverterRustBuffer {
                 id: FfiConverterString.read(from: &buf), 
                 prompt: FfiConverterString.read(from: &buf), 
                 domainId: FfiConverterOptionString.read(from: &buf), 
+                domainName: FfiConverterOptionString.read(from: &buf), 
                 state: FfiConverterString.read(from: &buf), 
                 born: FfiConverterUInt64.read(from: &buf), 
                 lastWorked: FfiConverterOptionUInt64.read(from: &buf), 
@@ -1797,6 +1812,7 @@ public struct FfiConverterTypeOpenThread: FfiConverterRustBuffer {
         FfiConverterString.write(value.id, into: &buf)
         FfiConverterString.write(value.prompt, into: &buf)
         FfiConverterOptionString.write(value.domainId, into: &buf)
+        FfiConverterOptionString.write(value.domainName, into: &buf)
         FfiConverterString.write(value.state, into: &buf)
         FfiConverterUInt64.write(value.born, into: &buf)
         FfiConverterOptionUInt64.write(value.lastWorked, into: &buf)
@@ -2772,7 +2788,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_ffi_checksum_method_athanorengine_grimoire() != 13223) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_ffi_checksum_method_athanorengine_mercury() != 39448) {
+    if (uniffi_ffi_checksum_method_athanorengine_mercury() != 14886) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_ffi_checksum_method_athanorengine_tabula() != 14998) {

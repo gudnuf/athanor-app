@@ -139,6 +139,11 @@ async fn scripted_turn_fixes_salt_streams_condensation_then_reads_round_trip() {
     );
     assert_eq!(mercury[0].state, "volatile");
     assert_eq!(
+        mercury[0].domain_name.as_deref(),
+        Some("thermodynamics"),
+        "mercury projects the domain's human NAME (resolved from id), not a raw id"
+    );
+    assert_eq!(
         mercury[0].parent_realization_id.as_deref(),
         Some(condensation_rid.as_str()),
         "the open thread is the spiral child of the fixed realization"
