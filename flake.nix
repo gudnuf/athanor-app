@@ -29,7 +29,7 @@
         };
       in {
         devShells.default = pkgs.mkShell {
-          packages = [ rustToolchain pkgs.rust-analyzer pkgs.cmake pkgs.clang just ];
+          packages = [ rustToolchain pkgs.rust-analyzer pkgs.cmake pkgs.clang pkgs.just ];
           # bindgen (whisper-rs-sys) needs libclang on its path for `--features whisper`:
           LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
         };
