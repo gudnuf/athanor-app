@@ -2,15 +2,21 @@ import SwiftUI
 
 // The dialogue + the Bellows. Placeholder for E1 — E4 fills in the real
 // ember-bed/transcript/endpointing UI. This much is real: it drives
-// `AthanorEngineProtocol` (begin → sendTurn → events), so E4 replaces
-// rendering, not wiring.
+// `AthanorEngineProtocol` (begin → sendTurn → events) and renders the
+// streamed reply via `StreamingText` as deltas actually arrive (word by
+// word, no jump) — so E4 replaces the ember-bed/audio wiring, not the
+// streaming-render contract.
 struct SessionScreen: View {
     var model: AppModel
     var onClose: () -> Void
 
-    @State private var lines: [String] = []
+    /// Finalized turns (completed on `.turnComplete`).
+    @State private var lines: [(text: String, register: ReplyRegister)] = []
+    /// The turn currently streaming in, if any. Rendered by the same
+    /// `StreamingText` view as finalized lines — appending here is instant
+    /// (Ember.Motion.none), never re-laying-out what's already on screen.
+    @State private var streaming: (text: String, register: ReplyRegister)?
     @State private var condensed = false
-    @State private var stream: AsyncStream<SessionEvent>?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -26,9 +32,10 @@ struct SessionScreen: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                        Text(line)
-                            .font(Ember.F.serif(19))
-                            .foregroundStyle(Ember.C.ink)
+                        StreamingText(text: line.text, register: line.register)
+                    }
+                    if let streaming {
+                        StreamingText(text: streaming.text, register: streaming.register)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -58,15 +65,22 @@ struct SessionScreen: View {
 
     private func begin() async {
         guard let s = try? model.engine.beginSession(threadId: nil) else { return }
-        stream = s
         model.engine.sendTurn("(session opens)")
         for await event in s {
             switch event {
-            case .textDelta(let text, _):
-                lines.append(text)
+            case .textDelta(let chunk, let register):
+                // Accumulate deltas exactly as they arrive — never buffer a
+                // whole line before showing it. Same behavior the real
+                // engine's token stream will drive.
+                streaming = (text: (streaming?.text ?? "") + chunk, register: register)
             case .condensation:
                 condensed = true
-            case .turnComplete, .toolCall, .error:
+            case .turnComplete:
+                if let streaming {
+                    lines.append(streaming)
+                }
+                streaming = nil
+            case .toolCall, .error:
                 break
             }
         }
