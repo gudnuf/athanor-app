@@ -6,11 +6,13 @@
 mod bias;
 mod chunk;
 mod decoder;
+mod endpoint;
 mod finalize;
 #[cfg(feature = "whisper")]
 mod whisper;
 
 pub use decoder::{Decoder, RawSegment, ScriptedDecoder};
+pub use endpoint::{EndpointConfig, Endpointer};
 #[cfg(feature = "whisper")]
 pub use whisper::WhisperDecoder;
 
@@ -36,6 +38,12 @@ pub struct SttConfig {
     pub language: String,
     /// Hard cap on vocabulary terms injected via initial_prompt (spec: ≤100).
     pub max_bias_terms: usize,
+    /// Optional energy-based endpointing (design doc "Voice — the Bellows",
+    /// delta 1): auto-fires "utterance ended" after sustained trailing
+    /// silence, so the shell doesn't need to send an explicit DONE. `None`
+    /// (default) disables it entirely — `push_pcm`/`poll`/`end` behave
+    /// exactly as before; this is additive, not a replacement for `end()`.
+    pub endpoint: Option<EndpointConfig>,
 }
 
 impl Default for SttConfig {
@@ -46,6 +54,7 @@ impl Default for SttConfig {
             sample_rate: 16_000,
             language: "en".into(),
             max_bias_terms: 100,
+            endpoint: None,
         }
     }
 }
@@ -77,6 +86,7 @@ pub enum SttError {
     Config(String),
 }
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use chunk::Chunker;
@@ -95,12 +105,21 @@ pub struct SttStream {
     bias_prompt: Option<String>,
     input: Mutex<Vec<f32>>, // pending PCM handed off from the audio thread
     engine: Mutex<Engine>,
+    // Endpointing (additive, optional — see `SttConfig::endpoint`). Fed the
+    // same raw PCM as `input`, upstream of the Chunker, since silence can
+    // span a chunk boundary.
+    endpointer: Mutex<Option<endpoint::Endpointer>>,
+    utterance_ended: AtomicBool,
 }
 
 impl SttStream {
     pub fn with_decoder(decoder: Box<dyn Decoder>, cfg: SttConfig, vocab: &[String]) -> Self {
         let bias_prompt = bias::build_bias_prompt(vocab, cfg.max_bias_terms);
         let chunker = Chunker::new(cfg.sample_rate, cfg.chunk_secs, cfg.overlap_secs);
+        let endpointer = cfg
+            .endpoint
+            .clone()
+            .map(|ecfg| endpoint::Endpointer::new(cfg.sample_rate, ecfg));
         SttStream {
             input: Mutex::new(Vec::new()),
             engine: Mutex::new(Engine {
@@ -111,6 +130,8 @@ impl SttStream {
                 captured_prompts: Vec::new(),
             }),
             bias_prompt,
+            endpointer: Mutex::new(endpointer),
+            utterance_ended: AtomicBool::new(false),
             cfg,
         }
     }
@@ -130,6 +151,31 @@ impl SttStream {
     /// thread (hand buffers over from the AVAudioEngine tap — research Q6).
     pub fn push_pcm(&self, pcm: &[f32]) {
         self.input.lock().unwrap().extend_from_slice(pcm);
+        if let Some(ep) = self.endpointer.lock().unwrap().as_mut() {
+            if ep.push(pcm) {
+                self.utterance_ended.store(true, Ordering::SeqCst);
+            }
+        }
+    }
+
+    /// True if endpointing (see `SttConfig::endpoint`) has detected the turn
+    /// ended (sustained trailing silence after a real utterance) since the
+    /// last call. Latched and auto-cleared on read: the shell polls this on
+    /// its `push_pcm` cadence and calls `end()` when it flips true — this
+    /// signal never calls `end()` itself, so the explicit-end API is
+    /// untouched. Always `false` when `cfg.endpoint` is `None`.
+    pub fn utterance_ended(&self) -> bool {
+        self.utterance_ended.swap(false, Ordering::SeqCst)
+    }
+
+    /// Reset endpointing state only (e.g. the shell starting a fresh turn
+    /// after acting on `utterance_ended()`, or a manual tap-to-send). Does
+    /// not touch buffered PCM or any finalized/pending transcript state.
+    pub fn reset_endpoint(&self) {
+        if let Some(ep) = self.endpointer.lock().unwrap().as_mut() {
+            ep.reset();
+        }
+        self.utterance_ended.store(false, Ordering::SeqCst);
     }
 
     /// Drain buffered PCM into the chunker and decode every window now ready,
@@ -249,6 +295,82 @@ mod tests {
     }
     fn text(v: &[FinalizedSegment]) -> Vec<&str> {
         v.iter().map(|s| s.text.as_str()).collect()
+    }
+
+    fn sine(n_samples: usize, freq_hz: f32, amplitude: f32) -> Vec<f32> {
+        let sr = SttConfig::default().sample_rate as f32;
+        (0..n_samples)
+            .map(|i| {
+                let t = i as f32 / sr;
+                amplitude * (2.0 * std::f32::consts::PI * freq_hz * t).sin()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn utterance_ended_is_always_false_when_endpointing_is_not_configured() {
+        // Default SttConfig has endpoint: None — push_pcm/poll/end must be
+        // unaffected, and utterance_ended must never latch.
+        let stream = SttStream::with_decoder(
+            Box::new(ScriptedDecoder::new(vec![])),
+            SttConfig::default(),
+            &[],
+        );
+        // Feed plenty of silence — if endpointing were somehow active this
+        // would fire; with it disabled it must stay false forever.
+        for _ in 0..100 {
+            stream.push_pcm(&vec![0.0; 480]);
+        }
+        assert!(!stream.utterance_ended());
+    }
+
+    #[test]
+    fn utterance_ended_latches_on_trailing_silence_and_clears_on_read() {
+        let cfg = SttConfig {
+            endpoint: Some(EndpointConfig::default()),
+            ..SttConfig::default()
+        };
+        let stream = SttStream::with_decoder(Box::new(ScriptedDecoder::new(vec![])), cfg, &[]);
+
+        // 12 windows (360 ms) of voiced audio — over the 300 ms guard.
+        for _ in 0..12 {
+            stream.push_pcm(&sine(480, 440.0, 0.5));
+            assert!(!stream.utterance_ended());
+        }
+        // 39 windows of silence: not yet.
+        for _ in 0..39 {
+            stream.push_pcm(&vec![0.0; 480]);
+            assert!(!stream.utterance_ended());
+        }
+        // 40th silence window (1200 ms total): latches true.
+        stream.push_pcm(&vec![0.0; 480]);
+        assert!(
+            stream.utterance_ended(),
+            "sustained trailing silence must latch utterance_ended"
+        );
+        // Reading it clears the latch.
+        assert!(!stream.utterance_ended(), "latch clears after being read");
+    }
+
+    #[test]
+    fn reset_endpoint_clears_latch_and_progress_without_touching_transcript_state() {
+        let cfg = SttConfig {
+            endpoint: Some(EndpointConfig::default()),
+            ..SttConfig::default()
+        };
+        let stream = SttStream::with_decoder(Box::new(ScriptedDecoder::new(vec![])), cfg, &[]);
+        for _ in 0..12 {
+            stream.push_pcm(&sine(480, 440.0, 0.5));
+        }
+        for _ in 0..40 {
+            stream.push_pcm(&vec![0.0; 480]);
+        }
+        // Don't read utterance_ended() yet — reset_endpoint should clear it.
+        stream.reset_endpoint();
+        assert!(
+            !stream.utterance_ended(),
+            "reset_endpoint clears a pending latch"
+        );
     }
 
     #[test]
