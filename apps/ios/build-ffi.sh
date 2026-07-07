@@ -50,13 +50,36 @@
 # libc++ link flags are declared in Package.swift's AthanorCoreFFI linkerSettings.
 set -euo pipefail
 
+# --- Run this from a LOGIN shell, NOT inside `nix develop` ---
+# This script manages its own devshell (each build_target uses `nix develop -c`).
+# If the WHOLE script is wrapped in `nix develop -c bash build-ffi.sh`, the
+# devshell presets DEVELOPER_DIR to a nix apple-sdk (`/nix/store/…-apple-sdk-*`,
+# MacOSX-only, NO iOS SDKs). The `: "${DEVELOPER_DIR:=…}"` default below then
+# keeps that nix value, so `xcrun --sdk iphonesimulator` fails with
+# "unable to find sdk: 'iphonesimulator'". Fail loudly instead of building
+# against the wrong SDK root.
+if [ -n "${IN_NIX_SHELL:-}" ] || case "${DEVELOPER_DIR:-}" in /nix/store/*) true ;; *) false ;; esac; then
+  echo "!! Run this from a login shell, NOT inside 'nix develop'." >&2
+  echo "!! It manages its own devshell blocks; a nix-preset DEVELOPER_DIR" >&2
+  echo "!! (${DEVELOPER_DIR:-<in-nix-shell>}) lacks the iOS SDKs." >&2
+  echo "!! Just run:  ./apps/ios/build-ffi.sh" >&2
+  exit 1
+fi
+
 cd "$(dirname "$0")/../.."   # repo root
 FFI_DIR="apps/ios/Packages/AthanorCoreFFI"
 BINDINGS_DIR="$(mktemp -d)"
 MERGE_DIR="$(mktemp -d)"
 trap 'rm -rf "$BINDINGS_DIR" "$MERGE_DIR"' EXIT
 
-: "${DEVELOPER_DIR:=$(xcode-select -p)}"
+# Default DEVELOPER_DIR to Xcode when unset (still overridable via env), but
+# split the assignment from `export` so `set -e` aborts if xcode-select fails.
+# A combined `export X=$(cmd)` always returns 0, swallowing the failure and
+# exporting an error string — the exact trap that masked the SDKROOT failure
+# below.
+if [ -z "${DEVELOPER_DIR:-}" ]; then
+  DEVELOPER_DIR="$(xcode-select -p)"
+fi
 export DEVELOPER_DIR
 
 # Merge libffi.a + the whisper/ggml static archives for one target into a single
@@ -100,7 +123,10 @@ build_target() {
     set -euo pipefail
     export PATH="/usr/bin:$PATH"
     export DEVELOPER_DIR="'"$DEVELOPER_DIR"'"
-    export SDKROOT=$(/usr/bin/xcrun --sdk '"$sdk"' --show-sdk-path)
+    # Split assignment from export so set -e catches an xcrun failure instead of
+    # exporting its error string as SDKROOT (see the header note).
+    SDKROOT=$(/usr/bin/xcrun --sdk '"$sdk"' --show-sdk-path)
+    export SDKROOT
     export CC_'"$envprefix"'=/usr/bin/clang
     export CXX_'"$envprefix"'=/usr/bin/clang++
     export AR_'"$envprefix"'=/usr/bin/ar
