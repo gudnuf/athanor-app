@@ -59,6 +59,16 @@ impl Decoder for WhisperDecoder {
         params.set_print_special(false);
         params.set_print_timestamps(false);
         params.set_translate(false);
+        // Suppress whisper's non-speech tokens at the sampling source so pure
+        // silence / ambient noise doesn't decode into bracketed markers
+        // ("[ Silence ]", "[BLANK_AUDIO]", "(silence)"). Otherwise those leak
+        // out as RawSegments, reach the Bellows transcript, and — worst — get
+        // sent to the live Mystagogue as the learner's utterance. `_nst` is the
+        // hardcoded non-speech token set (brackets, music/silence symbols);
+        // `suppress_blank` (default true, set explicitly here) keeps a blank
+        // leading token from opening a segment.
+        params.set_suppress_nst(true);
+        params.set_suppress_blank(true);
         if let Some(p) = initial_prompt {
             params.set_initial_prompt(p);
         }

@@ -1,4 +1,5 @@
 import SwiftUI
+import os
 
 // The dialogue + the Bellows, against DemoEngine (mirrors mockups-v2.html
 // screens 3 + 4). Real wiring, placeholder audio: this drives
@@ -19,6 +20,14 @@ struct SessionScreen: View {
     @State private var typedText = ""
     @FocusState private var typedFieldFocused: Bool
 
+    /// An engine/session error surfaced from the event stream (never a stock
+    /// alert): rendered as a calm, in-palette line rather than swallowed. The
+    /// transcript is preserved beneath it — a mid-session error doesn't erase
+    /// what was already said.
+    @State private var sessionError: String?
+
+    private static let log = Logger(subsystem: "com.gudnuf.athanor", category: "session")
+
     // Real Bellows (E4 real half) — nil in the demo build/path, where the
     // sine-stub `Bellows` view below is used unchanged.
     @State private var realBellows: (any BellowsController)?
@@ -34,25 +43,41 @@ struct SessionScreen: View {
         VStack(spacing: 0) {
             header
 
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 22) {
-                        ForEach(messages) { message in
-                            messageView(message).id(message.id)
+            // The transcript region ALWAYS renders something (never a blank
+            // void): a calm listening invitation before the first word lands,
+            // otherwise the streamed dialogue. An engine error surfaces as a
+            // calm in-palette line beneath whatever's there — never swallowed,
+            // never a stock alert.
+            if messages.isEmpty && !isStreaming {
+                ListeningInvitation(error: sessionError)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 22) {
+                            ForEach(messages) { message in
+                                messageView(message).id(message.id)
+                            }
+                            if isStreaming {
+                                StreamingText(text: streamingText, register: streamingRegister)
+                                    .id("streaming")
+                            }
+                            if let sessionError {
+                                SessionErrorLine(message: sessionError).id("error")
+                            }
                         }
-                        if isStreaming {
-                            StreamingText(text: streamingText, register: streamingRegister)
-                                .id("streaming")
-                        }
+                        .padding(.horizontal, Ember.S.screenPad)
+                        .padding(.vertical, 18)
                     }
-                    .padding(.horizontal, Ember.S.screenPad)
-                    .padding(.vertical, 18)
-                }
-                .onChange(of: streamingText) { _, _ in
-                    proxy.scrollTo("streaming", anchor: .bottom)
-                }
-                .onChange(of: messages.count) { _, _ in
-                    if let last = messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                    .onChange(of: streamingText) { _, _ in
+                        proxy.scrollTo("streaming", anchor: .bottom)
+                    }
+                    .onChange(of: messages.count) { _, _ in
+                        if let last = messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                    }
+                    .onChange(of: sessionError) { _, err in
+                        if err != nil { proxy.scrollTo("error", anchor: .bottom) }
+                    }
                 }
             }
 
@@ -68,6 +93,20 @@ struct SessionScreen: View {
                     typedText: $typedText,
                     fieldFocused: $typedFieldFocused,
                     onSendCooledNow: { realBellows.sendNow() },
+                    onSubmitTyped: submitTyped
+                )
+            } else if model.engine.isReal {
+                // Real build, real Bellows not up yet (model still downloading,
+                // or no mic path this launch). NEVER fall back to the demo sine
+                // bed here: its tap sends the literal "(bellows: demo utterance)"
+                // string, which on the real engine would be posted to the live
+                // Mystagogue as the learner's actual words. Instead offer the
+                // legitimate real-path affordance — the typed field, always
+                // available — with the quiet warming presence covering the wait.
+                RealFallbackInput(
+                    downloadState: model.modelDownloader.state,
+                    typedText: $typedText,
+                    fieldFocused: $typedFieldFocused,
                     onSubmitTyped: submitTyped
                 )
             } else {
@@ -180,10 +219,30 @@ struct SessionScreen: View {
     private func submitTyped() {
         let trimmed = typedText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        sessionError = nil
         messages.append(.learner(id: UUID().uuidString, text: trimmed))
         typedText = ""
         showKeyboard = false
         model.engine.sendTurn(trimmed)
+    }
+
+    /// True when `text` carries no actual speech — only whisper non-speech
+    /// markers like "[ Silence ]", "[BLANK_AUDIO]", "(silence)", or runs of
+    /// them ("[ Silence ] [BLANK_AUDIO]"). Strips every `[...]`/`(...)` group
+    /// and asks whether anything spoken is left; a genuine utterance always
+    /// leaves words behind ("I think (maybe) yes" survives), so this can't eat
+    /// real speech.
+    ///
+    /// NOTE: this is a presentation-layer guard, not STT logic — the durable
+    /// fix belongs in `crates/stt` (drop non-speech segments at the source).
+    /// Kept minimal here so a live turn on the Simulator (ambient silence →
+    /// "[BLANK_AUDIO]") isn't polluted before that lands.
+    static func isNonSpeechArtifact(_ text: String) -> Bool {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return true }
+        let stripped = t.replacing(/[\[(][^\[\]()]*[\])]/, with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return stripped.isEmpty
     }
 
     private func close() {
@@ -195,7 +254,16 @@ struct SessionScreen: View {
     }
 
     private func begin() async {
-        guard let stream = try? model.engine.beginSession(threadId: nil) else { return }
+        let stream: AsyncStream<SessionEvent>
+        do {
+            stream = try model.engine.beginSession(threadId: nil)
+        } catch {
+            // The session couldn't even open — surface it calmly instead of
+            // leaving the learner on a screen that never comes alive.
+            Self.log.error("beginSession failed: \(error.localizedDescription, privacy: .public)")
+            sessionError = "The fire wouldn't catch just now. Close and try again."
+            return
+        }
         // DemoEngine's canned script only advances on a `sendTurn` call, so a
         // synthetic kickoff plays its opening line with no real interaction
         // yet. The REAL engine's Conductor opens the Socratic turn itself
@@ -212,6 +280,7 @@ struct SessionScreen: View {
                     isStreaming = true
                     streamingRegister = register
                     streamingText = ""
+                    sessionError = nil // a reply is flowing again — clear any prior error
                 }
                 streamingText += chunk
             case .turnComplete:
@@ -228,7 +297,17 @@ struct SessionScreen: View {
                         messages.append(.salt(id: realizationId, realization: realization, childPrompt: childPrompt))
                     }
                 }
-            case .toolCall, .error:
+            case .error(let message):
+                // Surface, don't swallow. A partial reply already streamed
+                // stays as a finalized line; the error sits calmly below it.
+                Self.log.error("session turn error: \(message, privacy: .public)")
+                if isStreaming, !streamingText.isEmpty {
+                    messages.append(.teacher(id: UUID().uuidString, text: streamingText, register: streamingRegister))
+                }
+                isStreaming = false
+                streamingText = ""
+                sessionError = "The Mystagogue lost the thread for a moment. Say it again when you're ready."
+            case .toolCall:
                 break
             }
         }
@@ -271,8 +350,17 @@ struct SessionScreen: View {
             case .amplitude(let level):
                 withAnimation(Ember.Motion.bellowsEmbers) { amplitude = level }
             case .previewTail(let text):
-                livePreview = text
+                // Drop whisper's non-speech markers ("[ Silence ]",
+                // "[BLANK_AUDIO]", "(silence)"…) from the live shimmer so the
+                // preview reads as speech, not decoder chatter — otherwise the
+                // sim's ambient silence fills the transcript with brackets.
+                livePreview = Self.isNonSpeechArtifact(text) ? "" : text
             case .finalizedAppend(let text):
+                // Belt-and-suspenders alongside whisper's own `suppress_nst`
+                // (crates/stt): drop any whole-segment non-speech marker that
+                // still slips through, so it can't become the learner's
+                // utterance (it would be sent verbatim to the live Mystagogue).
+                guard !Self.isNonSpeechArtifact(text) else { break }
                 liveCooled = liveCooled.isEmpty ? text : liveCooled + " " + text
                 livePreview = ""
             case .utteranceEnded:
@@ -290,9 +378,100 @@ struct SessionScreen: View {
         let text = liveCooled.trimmingCharacters(in: .whitespacesAndNewlines)
         liveCooled = ""
         livePreview = ""
-        guard !text.isEmpty else { return }
+        guard !text.isEmpty, !Self.isNonSpeechArtifact(text) else { return }
+        sessionError = nil
         messages.append(.learner(id: UUID().uuidString, text: text))
         model.engine.sendTurn(text)
+    }
+}
+
+// MARK: - Never-blank states
+
+/// Shown in the transcript region before the first word lands (or if a session
+/// fails to open at all). The point: entering a session ALWAYS renders an
+/// intentional, calm listening state — the fire is lit and waiting — never a
+/// black void. No budgeted motion (the ember bed below carries the life); this
+/// is a still, in-palette invitation.
+private struct ListeningInvitation: View {
+    var error: String?
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Text(Ember.Glyph.fireMask)
+                .font(.system(size: 30))
+                .foregroundStyle(Ember.C.heat.opacity(0.85))
+            if let error {
+                Text(error)
+                    .font(Ember.F.serif(16, italic: true))
+                    .foregroundStyle(Ember.C.muted)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("The fire is lit.")
+                    .font(Ember.F.serif(19))
+                    .foregroundStyle(Ember.C.ink)
+                Text("Speak when you're ready — or tap the keyboard.")
+                    .font(Ember.F.serif(14, italic: true))
+                    .foregroundStyle(Ember.C.mutedDim)
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .padding(.horizontal, Ember.S.screenPad + 12)
+    }
+}
+
+/// A mid-session error, surfaced calmly inline beneath the transcript (serif,
+/// muted, in-palette) — never a stock alert, never a swallow. The conversation
+/// above it stays intact.
+private struct SessionErrorLine: View {
+    var message: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text(Ember.Glyph.fireMask)
+                .foregroundStyle(Ember.C.heat.opacity(0.7))
+            Text(message)
+                .font(Ember.F.serif(14, italic: true))
+                .foregroundStyle(Ember.C.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, 6)
+    }
+}
+
+/// Real-build input when the real Bellows isn't up yet (whisper model still
+/// downloading, or no mic path this launch). The typed field is the always-
+/// available legitimate real-path affordance; the quiet `WarmingLine` covers
+/// the model wait without a spinner. Deliberately NOT the demo sine bed — that
+/// path's tap injects a canned string into the LIVE engine.
+private struct RealFallbackInput: View {
+    var downloadState: ModelDownloader.State
+    @Binding var typedText: String
+    var fieldFocused: FocusState<Bool>.Binding
+    var onSubmitTyped: () -> Void
+
+    var body: some View {
+        VStack(spacing: 10) {
+            WarmingLine(state: downloadState)
+
+            HStack(spacing: 10) {
+                TextField("Say it your way…", text: $typedText, axis: .vertical)
+                    .focused(fieldFocused)
+                    .font(Ember.F.sans(15))
+                    .foregroundStyle(Ember.C.ink)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(Ember.C.raised2, in: RoundedRectangle(cornerRadius: 12))
+                Button("Send", action: onSubmitTyped)
+                    .font(Ember.F.sans(14, weight: .semibold))
+                    .foregroundStyle(Ember.C.heat)
+            }
+        }
+        .padding(.horizontal, Ember.S.screenPad)
+        .padding(.top, 16)
+        .padding(.bottom, 12)
+        .overlay(alignment: .top) { Ember.C.hairline.frame(height: 1) }
     }
 }
 

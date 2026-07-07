@@ -255,7 +255,11 @@ struct InitiationScreen: View {
 /// screen-level motion here stays E3's (none) plus whatever Initiation
 /// itself already spends. Invisible once ready, and quietly honest on
 /// failure rather than stuck mid-progress forever.
-private struct WarmingLine: View {
+///
+/// Internal (not private): SessionScreen's real-path input fallback reuses
+/// this so a "Tend the fire" session opened before the whisper model finished
+/// downloading shows the same quiet warming presence instead of nothing.
+struct WarmingLine: View {
     var state: ModelDownloader.State
 
     var body: some View {
