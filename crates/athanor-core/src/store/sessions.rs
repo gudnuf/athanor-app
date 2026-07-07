@@ -1,5 +1,7 @@
 //! Sessions: the dialogue container + its selected mask/mode. Row CRUD lands
-//! here; the open/closed/abandoned state-machine methods land in Task 7.
+//! here; `close_session`/`abandon_session` (the state-machine entry points,
+//! Task 7) live in `session.rs` and call the `mark_session_*` row-writers
+//! below.
 
 use rusqlite::params;
 
@@ -54,6 +56,30 @@ impl Store {
             return Err(CoreError::NotFound(format!("session {session_id}")));
         }
         Ok(())
+    }
+
+    /// Sets state='closed', ended_at=now. Raw row-writer; `close_session`
+    /// (session.rs) is the one that also records tending for the day.
+    pub(crate) fn mark_session_closed(&self, id: &str) -> Result<Session, CoreError> {
+        self.mark_session_ended(id, "closed")
+    }
+
+    /// Sets state='abandoned', ended_at=now. Raw row-writer; `abandon_session`
+    /// (session.rs) is the one that also returns the thread to volatile.
+    pub(crate) fn mark_session_abandoned(&self, id: &str) -> Result<Session, CoreError> {
+        self.mark_session_ended(id, "abandoned")
+    }
+
+    fn mark_session_ended(&self, id: &str, state: &str) -> Result<Session, CoreError> {
+        let now = self.now();
+        let changed = self.conn.execute(
+            "UPDATE sessions SET state = ?1, ended_at = ?2, updated_at = ?2 WHERE id = ?3",
+            params![state, now, id],
+        )?;
+        if changed == 0 {
+            return Err(CoreError::NotFound(format!("session {id}")));
+        }
+        self.get_session(id)
     }
 
     pub(crate) fn get_session(&self, id: &str) -> Result<Session, CoreError> {

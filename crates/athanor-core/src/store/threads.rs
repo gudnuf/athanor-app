@@ -1,7 +1,9 @@
 //! Mercury: threads (open questions). state in {volatile,condensing,fixed,evaporated}.
 //!
-//! `set_thread_state` here is unconditional (no transition validation) —
-//! Task 7 adds the transition-legality checks on top of this raw setter.
+//! `set_thread_state` validates the requested move against
+//! `ThreadState::can_transition_to` (see `session.rs`) before writing —
+//! Task 7 layers this transition-legality check on top of what was
+//! previously a raw, unconditional setter.
 
 use rusqlite::params;
 
@@ -47,9 +49,18 @@ impl Store {
         self.get_thread(&id)
     }
 
-    /// Sets the thread's state directly. Task 7 layers transition validation
-    /// on top of this — this is the raw setter the state machine calls.
+    /// Sets the thread's state, first checking the move is legal per
+    /// `ThreadState::can_transition_to` (the state DAG lives in `session.rs`).
+    /// Returns `CoreError::BadState` on an illegal transition.
     pub fn set_thread_state(&self, id: &str, state: ThreadState) -> Result<Thread, CoreError> {
+        let current = self.get_thread(id)?;
+        if !current.state.can_transition_to(state) {
+            return Err(CoreError::BadState(format!(
+                "illegal thread transition: {} -> {}",
+                current.state.as_str(),
+                state.as_str()
+            )));
+        }
         let now = self.now();
         let changed = self.conn.execute(
             "UPDATE threads SET state = ?1, updated_at = ?2 WHERE id = ?3 AND deleted_at IS NULL",
@@ -138,6 +149,9 @@ mod tests {
             .unwrap();
         let fixed = store.open_thread("f", None, None).unwrap();
         store
+            .set_thread_state(&fixed.id, ThreadState::Condensing)
+            .unwrap();
+        store
             .set_thread_state(&fixed.id, ThreadState::Fixed)
             .unwrap();
 
@@ -146,6 +160,21 @@ mod tests {
         assert!(ids.contains(&volatile.id));
         assert!(ids.contains(&condensing.id));
         assert!(!ids.contains(&fixed.id));
+    }
+
+    #[test]
+    fn set_thread_state_rejects_illegal_transition() {
+        let store = Store::open_in_memory("d").unwrap();
+        let t = store.open_thread("q", None, None).unwrap();
+        store
+            .set_thread_state(&t.id, ThreadState::Condensing)
+            .unwrap();
+        store.set_thread_state(&t.id, ThreadState::Fixed).unwrap();
+        // fixed -> volatile is not a legal move.
+        let err = store
+            .set_thread_state(&t.id, ThreadState::Volatile)
+            .unwrap_err();
+        assert!(matches!(err, CoreError::BadState(_)));
     }
 
     #[test]

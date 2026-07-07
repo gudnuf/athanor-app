@@ -12,9 +12,11 @@
 pub mod domain;
 pub mod error;
 pub mod ids;
+pub mod session;
 pub mod store;
 
 pub use error::CoreError;
+pub use session::{abandon_session, close_session};
 pub use store::Store;
 
 pub mod engine;
