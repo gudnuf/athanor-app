@@ -104,6 +104,17 @@ impl Store {
         self.get_session(id)
     }
 
+    /// Per-mask last-used timestamp: `(mask, MAX(created_at))` over every
+    /// session, one row per distinct mask. Feeds the home-screen mask-affinity
+    /// heat (lane 14) — the mask the Mystagogue last wore runs warm, others
+    /// cool, an unused mask stays cold iron.
+    pub(crate) fn mask_usage(&self) -> Result<Vec<(String, u64)>, CoreError> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare("SELECT mask, MAX(created_at) FROM sessions GROUP BY mask")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, u64>(1)?)))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(CoreError::from)
+    }
+
     pub(crate) fn get_session(&self, id: &str) -> Result<Session, CoreError> {
         self.conn()
             .query_row(

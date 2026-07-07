@@ -12,6 +12,7 @@
 pub mod conductor;
 pub mod domain;
 pub mod error;
+pub mod heat;
 pub mod ids;
 pub mod mask;
 pub mod mystagogue;

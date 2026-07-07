@@ -4,7 +4,40 @@
 //! type crosses the boundary, no `serde_json::Value`.
 
 use athanor_core::domain::{FireState, GrimoireEntry, Tending, Thread};
+use athanor_core::heat::HomeHeat as CoreHomeHeat;
 use athanor_core::tabula::TabulaPassage as CoreTabulaPassage;
+
+/// The home screen's per-door heat (lane 14) — a projection of core `HomeHeat`.
+/// Each field is a 0..1 temperature the glyph renderer draws; heat is COMPUTED
+/// in core from real store facts, so the UI never invents a number.
+#[derive(uniffi::Record, Clone, Debug, PartialEq)]
+pub struct HomeHeat {
+    pub furnace: f32,
+    pub bellows: f32,
+    pub mercury: f32,
+    pub grimoire: f32,
+    pub tabula: f32,
+    pub adamas: f32,
+    pub philosophus: f32,
+    pub solve: f32,
+    pub azoth: f32,
+}
+
+impl From<CoreHomeHeat> for HomeHeat {
+    fn from(h: CoreHomeHeat) -> Self {
+        HomeHeat {
+            furnace: h.furnace,
+            bellows: h.bellows,
+            mercury: h.mercury,
+            grimoire: h.grimoire,
+            tabula: h.tabula,
+            adamas: h.adamas,
+            philosophus: h.philosophus,
+            solve: h.solve,
+            azoth: h.azoth,
+        }
+    }
+}
 
 /// Furnace heat for the home screen — a projection of core `FireState`.
 #[derive(uniffi::Record, Clone, Debug, PartialEq)]

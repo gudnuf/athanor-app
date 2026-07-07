@@ -14,7 +14,7 @@ use std::sync::Arc;
 use athanor_core::engine::{AcpUpdate, MockEngine, MystagogueEngine};
 use athanor_core::Store;
 
-use crate::records::{FurnaceState, GrimoireGrain, OpenThread, TabulaPassage};
+use crate::records::{FurnaceState, GrimoireGrain, HomeHeat, OpenThread, TabulaPassage};
 
 /// Errors that cross the FFI boundary as a thrown error rather than a panic
 /// (no panics across FFI). `flat_error`: Swift receives the variant plus its
@@ -125,6 +125,16 @@ impl AthanorEngine {
         self.store
             .fire_state()
             .map(FurnaceState::from)
+            .map_err(|e| EngineError::Read(e.to_string()))
+    }
+
+    /// The home screen's per-door heat (lane 14): every door's 0..1 temperature,
+    /// computed in core from real store facts (`Store::home_heat`). Heat is the
+    /// notification system — no badges or counts anywhere.
+    pub fn home_heat(&self) -> Result<HomeHeat, EngineError> {
+        self.store
+            .home_heat()
+            .map(HomeHeat::from)
             .map_err(|e| EngineError::Read(e.to_string()))
     }
 

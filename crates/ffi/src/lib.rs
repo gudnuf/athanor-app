@@ -17,7 +17,7 @@ pub mod session;
 
 pub use engine::{AthanorEngine, EngineError, TierConfig};
 pub use events::{SessionEvent, SessionEventListener};
-pub use records::{FurnaceState, GrimoireGrain, OpenThread, TendingDay};
+pub use records::{FurnaceState, GrimoireGrain, HomeHeat, OpenThread, TendingDay};
 pub use session::SessionHandle;
 
 #[uniffi::export]

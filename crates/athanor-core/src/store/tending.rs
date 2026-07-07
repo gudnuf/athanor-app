@@ -62,6 +62,19 @@ impl Store {
         Ok(())
     }
 
+    /// The epoch-seconds timestamp of the most recent tending row, or `None` if
+    /// the fire has never been fed. Feeds the home-screen Bellows/Furnace heat
+    /// (lane 14) — urgency rises with days since this.
+    pub(crate) fn last_tended_at(&self) -> Result<Option<u64>, CoreError> {
+        Ok(self
+            .conn()
+            .query_row("SELECT MAX(created_at) FROM tending", [], |r| {
+                r.get::<_, Option<u64>>(0)
+            })
+            .ok()
+            .flatten())
+    }
+
     /// Count of distinct days tended — the wisdom accounting is "did I show
     /// up today," not "how many minutes total."
     pub fn wisdom_days(&self) -> Result<u64, CoreError> {
