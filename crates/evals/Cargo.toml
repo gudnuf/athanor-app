@@ -6,8 +6,9 @@ publish = false
 
 [dependencies]
 athanor-core = { path = "../athanor-core" }
+async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tokio = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true }

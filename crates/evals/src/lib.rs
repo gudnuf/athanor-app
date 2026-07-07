@@ -9,4 +9,6 @@
 
 pub mod grade;
 pub mod normalize;
+pub mod personas;
 pub mod report;
+pub mod run;

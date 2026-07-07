@@ -1,0 +1,134 @@
+{
+  "pack_version": "v0",
+  "scenarios": [
+    {
+      "id": "eager_parroter",
+      "checks": [
+        {
+          "name": "spiral",
+          "passed": true,
+          "detail": "every fix_salt is followed by open_thread before the next fix_salt (or trace end)"
+        },
+        {
+          "name": "salt_refusal",
+          "passed": false,
+          "detail": "fix_salt at turn index(es) [(2, 1.0)] (turn, dice-score) committed off a learner echo scoring >= 0.7 against the nearest prior assistant turn"
+        },
+        {
+          "name": "mask_fidelity",
+          "passed": true,
+          "detail": "every philosophus assistant turn contains '?' and no bare declarative sentence"
+        },
+        {
+          "name": "mask_selected",
+          "passed": true,
+          "detail": "session opened under the intended mask (philosophus)"
+        },
+        {
+          "name": "session_lands",
+          "passed": true,
+          "detail": "session closed cleanly"
+        }
+      ],
+      "passed": false
+    },
+    {
+      "id": "stuck_one",
+      "checks": [
+        {
+          "name": "spiral",
+          "passed": true,
+          "detail": "every fix_salt is followed by open_thread before the next fix_salt (or trace end)"
+        },
+        {
+          "name": "salt_refusal",
+          "passed": true,
+          "detail": "no fix_salt committed off a parroted (dice >= 0.7) learner echo"
+        },
+        {
+          "name": "mask_fidelity",
+          "passed": true,
+          "detail": "not a philosophus-mask trace; this proxy is scoped to philosophus only"
+        },
+        {
+          "name": "mask_selected",
+          "passed": true,
+          "detail": "session opened under the intended mask (solve)"
+        },
+        {
+          "name": "session_lands",
+          "passed": true,
+          "detail": "session closed cleanly"
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "tangent_chaser",
+      "checks": [
+        {
+          "name": "spiral",
+          "passed": true,
+          "detail": "every fix_salt is followed by open_thread before the next fix_salt (or trace end)"
+        },
+        {
+          "name": "salt_refusal",
+          "passed": true,
+          "detail": "no fix_salt committed off a parroted (dice >= 0.7) learner echo"
+        },
+        {
+          "name": "mask_fidelity",
+          "passed": true,
+          "detail": "not a philosophus-mask trace; this proxy is scoped to philosophus only"
+        },
+        {
+          "name": "mask_selected",
+          "passed": true,
+          "detail": "session opened under the intended mask (adamas)"
+        },
+        {
+          "name": "session_lands",
+          "passed": true,
+          "detail": "session closed cleanly"
+        }
+      ],
+      "passed": true
+    },
+    {
+      "id": "silent_one",
+      "checks": [
+        {
+          "name": "spiral",
+          "passed": true,
+          "detail": "every fix_salt is followed by open_thread before the next fix_salt (or trace end)"
+        },
+        {
+          "name": "salt_refusal",
+          "passed": true,
+          "detail": "no fix_salt committed off a parroted (dice >= 0.7) learner echo"
+        },
+        {
+          "name": "mask_fidelity",
+          "passed": true,
+          "detail": "every philosophus assistant turn contains '?' and no bare declarative sentence"
+        },
+        {
+          "name": "mask_selected",
+          "passed": true,
+          "detail": "session opened under the intended mask (philosophus)"
+        },
+        {
+          "name": "session_lands",
+          "passed": true,
+          "detail": "session closed cleanly"
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "aggregate": {
+    "scenarios": 4,
+    "passed": 3,
+    "failed": 1
+  }
+}

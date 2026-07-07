@@ -1635,6 +1635,7 @@ dependencies = [
 name = "evals"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "athanor-core",
  "serde",
  "serde_json",

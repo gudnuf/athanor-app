@@ -20,3 +20,5 @@ jobs:
         run: nix develop -c cargo clippy --workspace --all-targets -- -D warnings
       - name: test (hermetic)
         run: nix develop -c cargo test --workspace
+      - name: evals (hermetic)
+        run: nix develop -c cargo test -p evals
