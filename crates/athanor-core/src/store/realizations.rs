@@ -69,6 +69,16 @@ impl Store {
         // Parent must exist; the child thread inherits its domain.
         let parent = self.get_thread(thread_id)?;
 
+        // No salt on a dead or already-settled thread: a Fixed thread has
+        // already yielded its realization, and an Evaporated one was let go.
+        // Guard early so a doomed transaction never synthesizes a child.
+        if matches!(parent.state, ThreadState::Fixed | ThreadState::Evaporated) {
+            return Err(CoreError::BadState(format!(
+                "cannot fix salt on a {} thread {thread_id}",
+                parent.state.as_str()
+            )));
+        }
+
         let rid = new_id();
         let now = self.now();
 
@@ -101,7 +111,15 @@ impl Store {
             params![child.id, rid],
         )?;
 
-        // (d) the parent thread is now Fixed.
+        // (d) condense-then-fix the parent. The thread-state DAG (session.rs)
+        // forbids a direct Volatile -> Fixed hop, so a still-volatile thread
+        // takes the legal two-step path Volatile -> Condensing -> Fixed; a
+        // thread already Condensing goes straight to Fixed. Both hops commit
+        // inside THIS one transaction — the condensation moment happened in the
+        // conversation that led here, and fix_salt is that moment made durable.
+        if parent.state == ThreadState::Volatile {
+            self.set_thread_state(thread_id, ThreadState::Condensing)?;
+        }
         self.set_thread_state(thread_id, ThreadState::Fixed)?;
 
         // (e) kindle the SALT passage (first-wins; no-op if already kindled).
@@ -202,7 +220,9 @@ mod tests {
         // child inherits the parent thread's domain.
         assert_eq!(child.domain_id.as_deref(), Some(domain.id.as_str()));
 
-        // parent thread is now Fixed.
+        // parent thread is now Fixed — a Volatile parent is condensed then
+        // fixed inside fix_salt's single transaction (the DAG forbids a direct
+        // Volatile -> Fixed hop), so the observable end state is Fixed.
         let reloaded_parent = store.get_thread(&parent.id).unwrap();
         assert_eq!(reloaded_parent.state, ThreadState::Fixed);
 
@@ -272,5 +292,56 @@ mod tests {
             store.try_mutate_realization(&realization.id, "tampered"),
             Err(CoreError::Immutable(_))
         ));
+    }
+
+    #[test]
+    fn fix_salt_on_condensing_parent_goes_straight_to_fixed() {
+        let store = Store::open_in_memory("d").unwrap();
+        let parent = parent_thread(&store, None);
+        // Already mid-condensation: fix_salt makes the single legal hop to Fixed.
+        store
+            .set_thread_state(&parent.id, ThreadState::Condensing)
+            .unwrap();
+        let realization = store.fix_salt(&parent.id, "settled", &[], None).unwrap();
+        assert!(realization.child_thread_id.is_some());
+        assert_eq!(
+            store.get_thread(&parent.id).unwrap().state,
+            ThreadState::Fixed
+        );
+    }
+
+    #[test]
+    fn fix_salt_rejects_a_fixed_parent() {
+        let store = Store::open_in_memory("d").unwrap();
+        let parent = parent_thread(&store, None);
+        store.fix_salt(&parent.id, "first", &[], None).unwrap();
+        // The parent is now Fixed; a second fix_salt has no salt to draw.
+        let err = store.fix_salt(&parent.id, "again", &[], None).unwrap_err();
+        assert!(matches!(err, CoreError::BadState(_)));
+        // exactly one realization, and no orphaned child from the rejected call.
+        let realization_count: i64 = store
+            .conn
+            .query_row("SELECT count(*) FROM realizations", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(realization_count, 1, "the rejected call wrote nothing");
+    }
+
+    #[test]
+    fn fix_salt_rejects_an_evaporated_parent() {
+        let store = Store::open_in_memory("d").unwrap();
+        let parent = parent_thread(&store, None);
+        store.evaporate_thread(&parent.id).unwrap();
+        let err = store
+            .fix_salt(&parent.id, "from the void", &[], None)
+            .unwrap_err();
+        assert!(matches!(err, CoreError::BadState(_)));
+        let realization_count: i64 = store
+            .conn
+            .query_row("SELECT count(*) FROM realizations", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            realization_count, 0,
+            "no realization on an evaporated thread"
+        );
     }
 }
