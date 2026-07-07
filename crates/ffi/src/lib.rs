@@ -9,6 +9,8 @@
 
 uniffi::setup_scaffolding!();
 
+mod bellows;
+
 #[uniffi::export]
 pub fn furnace_lit() -> String {
     athanor_core::furnace_lit()
