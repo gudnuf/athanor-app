@@ -74,20 +74,30 @@ fn epoch_secs_for_day(date: &str) -> u64 {
     (days * 86_400) as u64
 }
 
-/// Closes a session: marks it `closed`, then records `minutes`/`thread_ids`
-/// against today's tending row (upsert-add — see `record_tending`). This is
-/// the only place `wisdom_days` moves: the first close of a new UTC day adds
-/// a tending row (and so a wisdom day); later closes the same day merge into
-/// the existing row.
+/// Closes a session: always marks it `closed`, and — only when `tended` —
+/// records `minutes`/`thread_ids` against today's tending row (upsert-add —
+/// see `record_tending`). This is the only place `wisdom_days` moves: the
+/// first tended close of a new UTC day adds a tending row (and so a wisdom
+/// day); later tended closes the same day merge into the existing row.
+///
+/// `tended` is the product invariant "wisdom only comes from days actually
+/// tended": a session that did no real work (opened and closed with no
+/// learner exchange — e.g. the learner tapped "Tend the fire" then closed, or
+/// a `screen=session` QA launch) must NOT advance wisdom. The caller
+/// (`Conductor::close`) passes whether any turn actually happened. Marking the
+/// row closed still happens either way so no session is left dangling.
 pub fn close_session(
     store: &Store,
     session_id: &str,
     minutes: u32,
     thread_ids: &[String],
+    tended: bool,
 ) -> Result<(), CoreError> {
     store.mark_session_closed(session_id)?;
-    let day = today_utc(store.now());
-    store.record_tending(&day, minutes, thread_ids)?;
+    if tended {
+        let day = today_utc(store.now());
+        store.record_tending(&day, minutes, thread_ids)?;
+    }
     Ok(())
 }
 
@@ -134,11 +144,11 @@ mod tests {
             .create_session(None, "philosophus", "explain")
             .unwrap();
         assert_eq!(store.wisdom_days().unwrap(), 0);
-        close_session(&store, &s.id, 7 /*minutes*/, &[]).unwrap();
+        close_session(&store, &s.id, 7 /*minutes*/, &[], true).unwrap();
         assert_eq!(store.wisdom_days().unwrap(), 1);
         // a SECOND session same day adds minutes but NOT a new wisdom day
         let s2 = store.create_session(None, "adamas", "challenge").unwrap();
-        close_session(&store, &s2.id, 5, &[]).unwrap();
+        close_session(&store, &s2.id, 5, &[], true).unwrap();
         assert_eq!(
             store.wisdom_days().unwrap(),
             1,
@@ -154,15 +164,38 @@ mod tests {
         let s = store
             .create_session(None, "philosophus", "explain")
             .unwrap();
-        close_session(&store, &s.id, 7, &[]).unwrap();
+        close_session(&store, &s.id, 7, &[], true).unwrap();
         assert_eq!(store.wisdom_days().unwrap(), 1);
 
         let store = store.with_clock(fixed_day("2026-07-07", 0));
         let s2 = store
             .create_session(None, "philosophus", "explain")
             .unwrap();
-        close_session(&store, &s2.id, 5, &[]).unwrap();
+        close_session(&store, &s2.id, 5, &[], true).unwrap();
         assert_eq!(store.wisdom_days().unwrap(), 2);
+    }
+
+    #[test]
+    fn closing_an_untended_session_marks_closed_but_adds_no_wisdom() {
+        // The bug: a session opened and closed with no real exchange (tended =
+        // false) must NOT advance wisdom — but it must still be marked closed
+        // so nothing is left dangling. "Wisdom only comes from days actually
+        // tended."
+        let store = Store::open_in_memory("dev")
+            .unwrap()
+            .with_clock(fixed_day("2026-07-06", 0));
+        let s = store
+            .create_session(None, "philosophus", "explain")
+            .unwrap();
+        assert_eq!(store.wisdom_days().unwrap(), 0);
+        close_session(&store, &s.id, 0, &[], false).unwrap();
+        assert_eq!(
+            store.wisdom_days().unwrap(),
+            0,
+            "an untended session records no tending"
+        );
+        assert!(store.tending_days().unwrap().is_empty());
+        assert_eq!(store.get_session(&s.id).unwrap().state, "closed");
     }
 
     #[test]
@@ -171,7 +204,7 @@ mod tests {
             .unwrap()
             .with_clock(fixed_day("2026-07-06", 100));
         let s = store.create_session(None, "mystagogue", "trace").unwrap();
-        close_session(&store, &s.id, 3, &[]).unwrap();
+        close_session(&store, &s.id, 3, &[], true).unwrap();
         let reloaded = store.get_session(&s.id).unwrap();
         assert_eq!(reloaded.state, "closed");
         assert_eq!(

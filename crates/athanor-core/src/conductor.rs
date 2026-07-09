@@ -378,7 +378,14 @@ impl Conductor {
     pub fn close(self, minutes: u32) -> Result<ConductorOutcome, CoreError> {
         let trace = self.synthesize_trace();
         let thread_ids: Vec<String> = self.thread_id.clone().into_iter().collect();
-        close_session(&self.store, &self.session_id, minutes, &thread_ids)?;
+        // Wisdom only comes from days actually tended: a session with no turn
+        // (opened then closed with no exchange) records NO tending. `turns` is
+        // non-empty exactly when a real exchange happened — the learner's own
+        // input (`run_turn`) or the initiation's synthesized opening
+        // (`open_turn`); an ordinary session that never ran a turn leaves it
+        // empty and so must not advance the fire.
+        let tended = !self.turns.is_empty();
+        close_session(&self.store, &self.session_id, minutes, &thread_ids, tended)?;
         self.store.add_trace(&self.session_id, &trace)?;
         // Completing the initiation lights the Furnace (Tabula passage I): the
         // learner has begun — the first ember that is their own. Derived from
@@ -786,6 +793,52 @@ mod tests {
             .unwrap();
         assert!(furnace.kindled, "the Furnace passage (I) is now lit");
         assert!(furnace.kindled_note.is_some());
+    }
+
+    #[tokio::test]
+    async fn closing_a_session_with_no_turn_does_not_advance_wisdom() {
+        // The tending-on-launch bug: opening a session and closing it with no
+        // exchange (learner taps "Tend the fire" then closes, or a
+        // `screen=session` QA launch) previously recorded a tending row,
+        // bumping wisdom without any real work. It must not.
+        let store = store_arc();
+        assert_eq!(store.wisdom_days().unwrap(), 0);
+        let conductor =
+            Conductor::begin(Arc::clone(&store), "philosophus", "explain", None).unwrap();
+        let session_id = conductor.session_id().to_string();
+        conductor.close(DEFAULT_SESSION_MINUTES).unwrap();
+
+        assert_eq!(
+            store.wisdom_days().unwrap(),
+            0,
+            "a session that did no work must not advance wisdom"
+        );
+        assert!(store.tending_days().unwrap().is_empty());
+        // …but the session is still properly closed, not left dangling.
+        assert_eq!(store.get_session(&session_id).unwrap().state, "closed");
+    }
+
+    #[tokio::test]
+    async fn closing_a_session_that_had_a_real_turn_advances_wisdom() {
+        // The other side of the invariant: a genuine exchange DOES tend the
+        // fire, so the fix must not suppress legitimate tending on close.
+        let store = store_arc();
+        let mut conductor =
+            Conductor::begin(Arc::clone(&store), "philosophus", "explain", None).unwrap();
+        let engine = MockEngine::new(vec![
+            AcpUpdate::text_delta("Say more."),
+            AcpUpdate::TurnComplete,
+        ]);
+        conductor
+            .run_turn(&engine, Some("a real thought"), &mut |_| {})
+            .await
+            .unwrap();
+        conductor.close(DEFAULT_SESSION_MINUTES).unwrap();
+        assert_eq!(
+            store.wisdom_days().unwrap(),
+            1,
+            "a session with a real exchange tends the fire"
+        );
     }
 
     #[tokio::test]

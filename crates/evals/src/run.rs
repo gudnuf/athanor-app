@@ -47,7 +47,7 @@ fn check_mask_selected(expected: &str, actual: &str) -> CheckResult {
 /// (most pointed for the silent one) is "the plane lands," not "the model
 /// fills silence with a lecture."
 fn check_session_lands(store: &Store, session_id: &str) -> CheckResult {
-    let result = close_session(store, session_id, 1, &[]);
+    let result = close_session(store, session_id, 1, &[], true);
     CheckResult {
         name: "session_lands".into(),
         passed: result.is_ok(),
