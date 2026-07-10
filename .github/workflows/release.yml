@@ -94,6 +94,10 @@ on:
         description: 'Upload the signed build to TestFlight (false = dry-run: build + sign + export .ipa only)'
         type: boolean
         default: false
+      unsigned_rehearsal:
+        description: 'No-secrets rehearsal: exercise nix + xcframework + generate + archive with signing OFF. Answers "does build-ffi.sh survive the runner" before Apple secrets exist. Skips sign/export/upload.'
+        type: boolean
+        default: false
 
 concurrency:
   group: release-${{ github.ref }}
@@ -174,6 +178,7 @@ jobs:
           echo "Build number: ${{ github.run_number }}"
 
       - name: Materialize ASC API key
+        if: ${{ github.event.inputs.unsigned_rehearsal != 'true' }}
         env:
           ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
           ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
@@ -193,12 +198,14 @@ jobs:
           chmod 600 "$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_API_KEY_ID}.p8"
 
       - name: Import Apple Distribution certificate
+        if: ${{ github.event.inputs.unsigned_rehearsal != 'true' }}
         uses: Apple-Actions/import-codesign-certs@v3
         with:
           p12-file-base64: ${{ secrets.APPLE_CERT_P12 }}
           p12-password: ${{ secrets.APPLE_CERT_PASSWORD }}
 
       - name: Download App Store provisioning profile
+        if: ${{ github.event.inputs.unsigned_rehearsal != 'true' }}
         uses: Apple-Actions/download-provisioning-profiles@v3
         with:
           bundle-id: com.gudnuf.athanor
@@ -236,6 +243,7 @@ jobs:
             | sort -u
 
       - name: Write ExportOptions.plist
+        if: ${{ github.event.inputs.unsigned_rehearsal != 'true' }}
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
@@ -272,8 +280,9 @@ jobs:
           ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           MARKETING_VERSION_OVERRIDE: ${{ steps.version.outputs.marketing_version }}
+          UNSIGNED_REHEARSAL: ${{ github.event.inputs.unsigned_rehearsal }}
         run: |
-          if [ -z "$APPLE_TEAM_ID" ]; then
+          if [ "$UNSIGNED_REHEARSAL" != "true" ] && [ -z "$APPLE_TEAM_ID" ]; then
             echo "::error::APPLE_TEAM_ID secret not set"
             exit 1
           fi
@@ -296,19 +305,34 @@ jobs:
           else
             BUILD_SETTINGS+=("MARKETING_VERSION=$DEFAULT_MARKETING_VERSION")
           fi
-          set -o pipefail && xcodebuild archive \
-            -project apps/ios/Athanor.xcodeproj \
-            -scheme Athanor \
-            -destination 'generic/platform=iOS' \
-            -archivePath "$RUNNER_TEMP/Athanor.xcarchive" \
-            -allowProvisioningUpdates \
-            -authenticationKeyID "$ASC_API_KEY_ID" \
-            -authenticationKeyIssuerID "$ASC_API_ISSUER_ID" \
-            -authenticationKeyPath "$RUNNER_TEMP/private_keys/AuthKey.p8" \
-            "${BUILD_SETTINGS[@]}" \
-            | xcbeautify
+          if [ "$UNSIGNED_REHEARSAL" = "true" ]; then
+            # No-secrets rehearsal: prove nix + xcframework + generate + compile
+            # on the runner. Signing OFF; no auth args; nothing exportable.
+            set -o pipefail && xcodebuild archive \
+              -project apps/ios/Athanor.xcodeproj \
+              -scheme Athanor \
+              -destination 'generic/platform=iOS' \
+              -archivePath "$RUNNER_TEMP/Athanor.xcarchive" \
+              CODE_SIGNING_ALLOWED=NO \
+              "CURRENT_PROJECT_VERSION=${{ github.run_number }}" \
+              "MARKETING_VERSION=0.0.1" \
+              | xcbeautify
+          else
+            set -o pipefail && xcodebuild archive \
+              -project apps/ios/Athanor.xcodeproj \
+              -scheme Athanor \
+              -destination 'generic/platform=iOS' \
+              -archivePath "$RUNNER_TEMP/Athanor.xcarchive" \
+              -allowProvisioningUpdates \
+              -authenticationKeyID "$ASC_API_KEY_ID" \
+              -authenticationKeyIssuerID "$ASC_API_ISSUER_ID" \
+              -authenticationKeyPath "$RUNNER_TEMP/private_keys/AuthKey.p8" \
+              "${BUILD_SETTINGS[@]}" \
+              | xcbeautify
+          fi
 
       - name: Export signed .ipa
+        if: ${{ github.event.inputs.unsigned_rehearsal != 'true' }}
         run: |
           set -o pipefail && xcodebuild -exportArchive \
             -archivePath "$RUNNER_TEMP/Athanor.xcarchive" \
