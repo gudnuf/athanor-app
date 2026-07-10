@@ -1,0 +1,373 @@
+# TestFlight release pipeline — Athanor iOS (Rust core + apps/ios SwiftUI shell).
+#
+# Modeled on the factory blueprint (~/athanor/forge/factory-apps/release-pipeline.md,
+# owner keeper:murmur) and the battle-tested damsac/sitewalk release.yml (builds
+# #24-27). Read WORKFLOW_NOTES.md (docs/plans/) alongside this file: it records
+# every deviation from sitewalk's proven file and why. The block comments below
+# are the short version.
+#
+# ============================================================================
+# NEVER recreate this file. `github.run_number` is per-workflow-FILE; deleting
+# and re-adding release.yml restarts the build counter at 1 and collides with
+# (MARKETING_VERSION, build) pairs already on App Store Connect. Rewrite IN
+# PLACE forever. (Factory gotcha e.)
+# ============================================================================
+#
+# WHAT'S IDENTICAL to sitewalk (the proven signing blueprint):
+#   - archive with AUTOMATIC signing (CODE_SIGN_STYLE=Automatic +
+#     -allowProvisioningUpdates + ASC API key -> Apple cloud-generates the
+#     Distribution cert & profile).
+#   - export with MANUAL signing (ExportOptions signingStyle=manual, explicit
+#     provisioningProfiles dict, cert imported via import-codesign-certs, profile
+#     via download-provisioning-profiles, NO -allowProvisioningUpdates on export —
+#     cloud signing fails there under an App Manager key).
+#   - build number = github.run_number; tag v* overrides MARKETING_VERSION.
+#   - the brew install||true / brew link --overwrite pattern.
+#   - altool upload with the UPLOAD SUCCEEDED / failure-marker guard (gotcha a).
+#   - three lanes: push main = internal, tag v* = external, dispatch = dry-run.
+#
+# WHAT'S DIFFERENT for Athanor (full rationale in WORKFLOW_NOTES.md):
+#   1. INSTALLS NIX and runs apps/ios/build-ffi.sh unmodified. Athanor's
+#      build-ffi.sh drives its OWN `nix develop -c` blocks per target (goose +
+#      whisper cross-compile) and has NO rustup fallback — unlike sitewalk's,
+#      which auto-detects nix. The nix path IS the proven local path, so the
+#      lowest-risk CI is to reproduce it: install nix, run the script from a
+#      plain login shell (the script's guard REQUIRES it not be wrapped in
+#      `nix develop` — a nix-preset DEVELOPER_DIR lacks the iOS SDKs).
+#   2. NO whisper-model fetch step. Athanor downloads the whisper model at
+#      RUNTIME (Sources/Engine/ModelDownloader.swift, URLSession) — nothing is
+#      bundled at build time — so sitewalk's fetch-whisper-model.sh + model
+#      cache steps have no analogue here.
+#   3. NO `rustup target add`. The flake devShell pins the rust toolchain WITH
+#      the iOS targets (aarch64-apple-ios{,-sim}); build-ffi.sh uses nix cargo,
+#      never rustup.
+#   4. Generates via ./generate.sh (which writes the gitignored project.local.yml
+#      and runs `xcodegen --spec project-real.yml`), NOT a standalone
+#      project-release.yml. generate.sh is the same script local dogfood uses.
+#   5. CODE_SIGNING_ALLOWED=YES is forced on the archive. project.yml sets
+#      CODE_SIGNING_ALLOWED=NO at the target base (dev/sim convenience); without
+#      the override the archive "succeeds" and silently produces an UNSIGNED app
+#      (factory gotcha: disabled-signing leak).
+#   6. The ANTHROPIC_API_KEY reaches the build via generate.sh's env (baked into
+#      project.local.yml -> $(ANTHROPIC_API_KEY) plist expansion), NOT as an
+#      xcodebuild build setting. It is OPTIONAL: absent, the app links the real
+#      core but falls back to the DemoEngine at runtime (RealEngineLoader.swift
+#      resolveKey()==nil -> DemoEngine). See the external-tester caveat below.
+#
+# !! EXTERNAL-TESTER KEY CAVEAT (read before flipping the external lane on):
+#    generate.sh bakes ANTHROPIC_API_KEY into the BUILT APP's Info.plist. That is
+#    fine for single-device / internal dogfood, but a multi-tester TestFlight
+#    build would DISTRIBUTE the key to every tester. A key-free bundle needs a
+#    runtime paste-field flow that is NOT built yet. So: internal lane MAY carry
+#    the key (repo secret ANTHROPIC_API_KEY); the external lane's key story must
+#    be resolved (paste-field, or a throwaway/proxied key) BEFORE real external
+#    distribution. With the secret unset the workflow still builds green — the
+#    app just runs the demo engine.
+#
+# Required GitHub secrets (stamped per-repo by keeper:murmur's
+# stamp-apple-secrets.sh; names are the factory standard):
+#   APPLE_TEAM_ID          Apple Developer Team ID (factory shares 98GXNZ6NKZ)
+#   ASC_API_KEY_ID         App Store Connect API key ID (App Manager role)
+#   ASC_API_ISSUER_ID      App Store Connect issuer UUID
+#   ASC_API_KEY_P8         Full contents of AuthKey_*.p8 (text, not base64)
+#   APPLE_CERT_P12         base64 Apple Distribution cert + private key (.p12)
+#   APPLE_CERT_PASSWORD    password for the .p12
+#   ANTHROPIC_API_KEY      OPTIONAL LLM key (see caveat above); absent => demo.
+
+name: Release
+
+on:
+  push:
+    # NOTE (meta, 2026-07-10): the `branches: [main]` internal lane is DISABLED
+    # until keeper:murmur stamps the Apple secrets — with them absent, every
+    # main merge would produce a red Release run. When secrets land, restore:
+    #     branches: [main]
+    # together with this paths-ignore block (path filters apply to BRANCH
+    # pushes only — tag pushes always fire; docs/meta merges must not burn a
+    # build number):
+    #     paths-ignore: ['docs/**', '**.md', '.gitignore']
+    # Edit IN PLACE — never recreate this file (run_number is per-file).
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      upload:
+        description: 'Upload the signed build to TestFlight (false = dry-run: build + sign + export .ipa only)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # arm64 macOS (Apple Silicon). macos-14 and macos-15 images are arm64;
+    # macos-latest currently resolves to an arm64 image. Pinned Xcode below.
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          # Matches the local nous toolchain (Xcode 26.2, iOS 26.2 SDK) that the
+          # pre-signing chain was rehearsed against. build-ffi.sh reads whatever
+          # `xcode-select -p` points at, so this pin also fixes the SDK the Rust
+          # cross-build links against.
+          xcode-version: '26.2'
+
+      # --- Nix: required by build-ffi.sh (deviation #1). Installed from a plain
+      # runner; build-ffi.sh must NOT be wrapped in `nix develop` (its guard
+      # rejects a nix-preset DEVELOPER_DIR, which lacks the iOS SDKs). The script
+      # invokes `nix develop -c` per target itself.
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+        with:
+          extra-conf: |
+            experimental-features = nix-command flakes
+
+      - name: Cache Homebrew packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/Homebrew
+            /opt/homebrew/Cellar/xcodegen
+            /opt/homebrew/Cellar/xcbeautify
+          key: brew-${{ runner.os }}-xcodegen-xcbeautify
+
+      - name: Install tools
+        run: |
+          # xcodegen is invoked by generate.sh OUTSIDE nix; xcbeautify prettifies
+          # xcodebuild output. cmake for the whisper build comes from the nix
+          # devShell, not here.
+          brew install xcodegen xcbeautify || true
+          brew link --overwrite xcodegen xcbeautify || true
+
+      - name: Determine version, lane, and upload flag
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+            if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::Tag '$TAG' does not match v<major>.<minor>.<patch>"
+              exit 1
+            fi
+            MARKETING_VERSION="${TAG#v}"
+            LANE=external
+            UPLOAD=true
+            echo "Release lane: external (tag $TAG -> MARKETING_VERSION=$MARKETING_VERSION)"
+          elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            MARKETING_VERSION=""
+            LANE=manual
+            UPLOAD="${{ github.event.inputs.upload }}"
+            echo "Release lane: manual (upload=$UPLOAD)"
+          else
+            MARKETING_VERSION=""
+            LANE=internal
+            UPLOAD=true
+            echo "Release lane: internal (MARKETING_VERSION from DEFAULT_MARKETING_VERSION below)"
+          fi
+          {
+            echo "marketing_version=$MARKETING_VERSION"
+            echo "lane=$LANE"
+            echo "upload=$UPLOAD"
+          } >> "$GITHUB_OUTPUT"
+          echo "Build number: ${{ github.run_number }}"
+
+      - name: Materialize ASC API key
+        env:
+          ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
+          ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
+        run: |
+          if [ -z "$ASC_API_KEY_P8" ]; then
+            echo "::error::ASC_API_KEY_P8 secret not set"
+            exit 1
+          fi
+          # For xcodebuild -authenticationKeyPath (archive step).
+          mkdir -p "$RUNNER_TEMP/private_keys"
+          printf '%s' "$ASC_API_KEY_P8" > "$RUNNER_TEMP/private_keys/AuthKey.p8"
+          chmod 600 "$RUNNER_TEMP/private_keys/AuthKey.p8"
+          # For `xcrun altool --upload-app`, which auto-discovers the key by ID
+          # from ~/.appstoreconnect/private_keys/AuthKey_<KEYID>.p8.
+          mkdir -p "$HOME/.appstoreconnect/private_keys"
+          printf '%s' "$ASC_API_KEY_P8" > "$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_API_KEY_ID}.p8"
+          chmod 600 "$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_API_KEY_ID}.p8"
+
+      - name: Import Apple Distribution certificate
+        uses: Apple-Actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.APPLE_CERT_P12 }}
+          p12-password: ${{ secrets.APPLE_CERT_PASSWORD }}
+
+      - name: Download App Store provisioning profile
+        uses: Apple-Actions/download-provisioning-profiles@v3
+        with:
+          bundle-id: com.gudnuf.athanor
+          profile-type: IOS_APP_STORE
+          issuer-id: ${{ secrets.ASC_API_ISSUER_ID }}
+          api-key-id: ${{ secrets.ASC_API_KEY_ID }}
+          api-private-key: ${{ secrets.ASC_API_KEY_P8 }}
+
+      - name: Build AthanorCoreFFI xcframework (real core, via nix)
+        run: |
+          # build-ffi.sh drives its own `nix develop -c` blocks. Run from this
+          # plain login shell — NOT `nix develop -c bash build-ffi.sh` (guard).
+          # It builds BOTH the sim and device slices (--features goose,whisper);
+          # it takes no flags. Device-only would halve the whisper compile but
+          # requires editing the script — tracked as an open item, not done here.
+          bash apps/ios/build-ffi.sh
+
+      - name: Generate Xcode project (real-core spec)
+        env:
+          # Optional. Absent => generate.sh writes an empty key => app falls back
+          # to DemoEngine at runtime. See the EXTERNAL-TESTER KEY CAVEAT header.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          cd apps/ios
+          # generate.sh reads $ANTHROPIC_API_KEY from the env (never printed),
+          # writes the gitignored project.local.yml, and runs
+          # `xcodegen generate --spec project-real.yml`.
+          ./generate.sh
+
+      - name: Debug build settings
+        run: |
+          xcodebuild -project apps/ios/Athanor.xcodeproj -scheme Athanor \
+            -showBuildSettings -configuration Release 2>/dev/null \
+            | grep -E "^\s+(CODE_SIGN|DEVELOPMENT_TEAM|PROVISIONING|PRODUCT_BUNDLE_ID|MARKETING_VERSION|CURRENT_PROJECT_VERSION)" \
+            | sort -u
+
+      - name: Write ExportOptions.plist
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          # The provisioningProfiles value is the profile NAME as it appears in
+          # the portal. "Athanor App Store" is the expected name for the App
+          # Store profile Isaac creates for com.gudnuf.athanor — it MUST match.
+          cat > "$RUNNER_TEMP/ExportOptions.plist" << EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>app-store-connect</string>
+            <key>destination</key>
+            <string>export</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>teamID</key>
+            <string>$APPLE_TEAM_ID</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>com.gudnuf.athanor</key>
+              <string>Athanor App Store</string>
+            </dict>
+            <key>uploadSymbols</key>
+            <true/>
+          </dict>
+          </plist>
+          EOF
+
+      - name: Archive
+        env:
+          ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
+          ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          MARKETING_VERSION_OVERRIDE: ${{ steps.version.outputs.marketing_version }}
+        run: |
+          if [ -z "$APPLE_TEAM_ID" ]; then
+            echo "::error::APPLE_TEAM_ID secret not set"
+            exit 1
+          fi
+          # Starting MARKETING_VERSION for the internal/manual lanes. Athanor has
+          # no prior TestFlight history, so 0.1.0 is a clean floor; a v* tag
+          # overrides it. Bump this floor only ABOVE anything ever uploaded
+          # (TestFlight silently shadows lower versions — factory gotcha d).
+          DEFAULT_MARKETING_VERSION=0.1.0
+          BUILD_SETTINGS=(
+            "CODE_SIGN_STYLE=Automatic"
+            "DEVELOPMENT_TEAM=$APPLE_TEAM_ID"
+            "CURRENT_PROJECT_VERSION=${{ github.run_number }}"
+            # project.yml sets CODE_SIGNING_ALLOWED=NO for dev/sim convenience;
+            # force it ON for the distribution archive or xcodebuild silently
+            # produces an UNSIGNED app that fails export/upload.
+            "CODE_SIGNING_ALLOWED=YES"
+          )
+          if [ -n "$MARKETING_VERSION_OVERRIDE" ]; then
+            BUILD_SETTINGS+=("MARKETING_VERSION=$MARKETING_VERSION_OVERRIDE")
+          else
+            BUILD_SETTINGS+=("MARKETING_VERSION=$DEFAULT_MARKETING_VERSION")
+          fi
+          set -o pipefail && xcodebuild archive \
+            -project apps/ios/Athanor.xcodeproj \
+            -scheme Athanor \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/Athanor.xcarchive" \
+            -allowProvisioningUpdates \
+            -authenticationKeyID "$ASC_API_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_API_ISSUER_ID" \
+            -authenticationKeyPath "$RUNNER_TEMP/private_keys/AuthKey.p8" \
+            "${BUILD_SETTINGS[@]}" \
+            | xcbeautify
+
+      - name: Export signed .ipa
+        run: |
+          set -o pipefail && xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/Athanor.xcarchive" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            | xcbeautify
+
+      - name: Upload .ipa artifact
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: Athanor-${{ steps.version.outputs.lane }}-${{ github.run_number }}-ipa
+          path: ${{ runner.temp }}/export/*.ipa
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Upload to TestFlight
+        if: ${{ steps.version.outputs.upload == 'true' }}
+        env:
+          ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
+          ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
+        run: |
+          set -o pipefail
+          IPA=$(find "$RUNNER_TEMP/export" -maxdepth 1 -name '*.ipa' | head -1)
+          if [ -z "$IPA" ]; then
+            echo "::error::No .ipa found in $RUNNER_TEMP/export — nothing to upload"
+            exit 1
+          fi
+          echo "Uploading $IPA to TestFlight"
+          LOG="$RUNNER_TEMP/altool-upload.log"
+          # altool has historically exited 0 on VALIDATION REJECTION (factory
+          # gotcha a). Belt-and-suspenders: tee the output, honor its exit code,
+          # AND require the literal UPLOAD SUCCEEDED line while failing on
+          # explicit failure markers only (a bare `error` grep matches Apple's
+          # success line "UPLOAD SUCCEEDED with no errors").
+          xcrun altool --upload-app --type ios --file "$IPA" \
+            --apiKey "$ASC_API_KEY_ID" --apiIssuer "$ASC_API_ISSUER_ID" \
+            2>&1 | tee "$LOG"
+          STATUS=${PIPESTATUS[0]}
+          if [ "$STATUS" -ne 0 ]; then
+            echo "::error::altool exited $STATUS — upload failed"
+            exit "$STATUS"
+          fi
+          if grep -qiE 'UPLOAD FAILED|ERROR: \[|\*\*\* Error' "$LOG"; then
+            echo "::error::altool exited 0 but its output reports a failure — treating as a failed upload"
+            exit 1
+          fi
+          if ! grep -qi 'UPLOAD SUCCEEDED' "$LOG"; then
+            echo "::error::altool exited 0 but never printed UPLOAD SUCCEEDED — treating as a failed upload"
+            exit 1
+          fi
+
+      - name: Dry-run notice
+        if: ${{ steps.version.outputs.upload != 'true' }}
+        run: |
+          echo "::notice::Dry-run (upload=false): built, signed, and exported the .ipa artifact but did NOT upload to TestFlight. Re-run with upload=true, or push to main / a v* tag, to publish."
+
+      - name: Clean up API keys
+        if: ${{ always() }}
+        run: |
+          rm -f "$RUNNER_TEMP/private_keys/AuthKey.p8"
+          rm -f "$HOME"/.appstoreconnect/private_keys/AuthKey_*.p8
