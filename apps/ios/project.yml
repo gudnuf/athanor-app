@@ -45,8 +45,12 @@ targets:
         NSMicrophoneUsageDescription: "Athanor listens to your Bellows so the Mystagogue can hear you tend your domains."
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+        # App Store compliance: only exempt encryption (HTTPS/system TLS).
+        # Without this, every uploaded build stalls on manual export compliance.
+        ITSAppUsesNonExemptEncryption: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.gudnuf.athanor
         CODE_SIGNING_ALLOWED: "NO"
         TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

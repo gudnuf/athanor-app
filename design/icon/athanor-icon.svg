@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Athanor app icon — "Fire Over Hearth · Deep Bloom" (treatment C, round 2,
+       operator-approved 2026-07-10). Source of truth for AppIcon.appiconset;
+       regenerate via design/icon/generate.sh. -->
+  <defs>
+    <radialGradient id="ground" cx="50%" cy="62%" r="75%">
+      <stop offset="0" stop-color="#2a1706" stop-opacity=".9"/>
+      <stop offset=".6" stop-color="#160e05" stop-opacity=".6"/>
+      <stop offset="1" stop-color="#0c0906" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="bloom" cx="50%" cy="56%" r="60%">
+      <stop offset="0" stop-color="#ff9a3d" stop-opacity=".85"/>
+      <stop offset=".7" stop-color="#a34a0e" stop-opacity=".19"/>
+      <stop offset="1" stop-color="#a34a0e" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="100" height="100" fill="#0c0906"/>
+  <rect width="100" height="100" fill="url(#ground)"/>
+  <circle cx="50" cy="52" r="41" fill="url(#bloom)"/>
+  <g stroke="#ffd9a0" stroke-width="4.6" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <polygon points="50,23 75,65 25,65"/>
+    <line x1="36" y1="77" x2="64" y2="77"/>
+  </g>
+  <circle cx="50" cy="55.5" r="4.6" fill="#ff9a3d"/>
+  <circle cx="50" cy="55.5" r="2.1" fill="#ffecd0"/>
+</svg>
