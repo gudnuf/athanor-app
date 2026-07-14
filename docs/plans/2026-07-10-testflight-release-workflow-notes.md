@@ -118,7 +118,7 @@ cross-build links against.
 - **Secrets not yet stamped.** keeper:murmur's `stamp-apple-secrets.sh
   gudnuf/athanor-app` (waiting on dam seeding `~/secrets/apple`). No live run is
   possible until then. `ANTHROPIC_API_KEY` is an additional optional secret.
-- **Isaac's ASC clicks:** create the app record (`com.gudnuf.athanor`, team
+- **Isaac's ASC clicks:** create the app record (`com.damsac.athanor`, team
   `98GXNZ6NKZ`) and create/download an **App Store distribution provisioning
   profile named `Athanor App Store`** (the ExportOptions `provisioningProfiles`
   value MUST match that name). Then enable internal-tester auto-distribution.

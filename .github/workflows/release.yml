@@ -208,7 +208,7 @@ jobs:
         if: ${{ github.event.inputs.unsigned_rehearsal != 'true' }}
         uses: Apple-Actions/download-provisioning-profiles@v3
         with:
-          bundle-id: com.gudnuf.athanor
+          bundle-id: com.damsac.athanor
           profile-type: IOS_APP_STORE
           issuer-id: ${{ secrets.ASC_API_ISSUER_ID }}
           api-key-id: ${{ secrets.ASC_API_KEY_ID }}
@@ -249,7 +249,7 @@ jobs:
         run: |
           # The provisioningProfiles value is the profile NAME as it appears in
           # the portal. "Athanor App Store" is the expected name for the App
-          # Store profile Isaac creates for com.gudnuf.athanor — it MUST match.
+          # Store profile Isaac creates for com.damsac.athanor — it MUST match.
           cat > "$RUNNER_TEMP/ExportOptions.plist" << EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -265,7 +265,7 @@ jobs:
             <string>$APPLE_TEAM_ID</string>
             <key>provisioningProfiles</key>
             <dict>
-              <key>com.gudnuf.athanor</key>
+              <key>com.damsac.athanor</key>
               <string>Athanor App Store</string>
             </dict>
             <key>uploadSymbols</key>

@@ -54,7 +54,7 @@ profile headlessly with the existing certificate.
 APP=$(find ~/Library/Developer/Xcode/DerivedData -path '*Debug-iphoneos/Athanor.app' -newer /tmp -print -quit 2>/dev/null || \
       find ~/Library/Developer/Xcode/DerivedData -path '*Debug-iphoneos/Athanor.app' -print -quit)
 xcrun devicectl device install app --device 'Damians-iPhone.coredevice.local' "$APP"
-xcrun devicectl device process launch --device 'Damians-iPhone.coredevice.local' com.gudnuf.athanor
+xcrun devicectl device process launch --device 'Damians-iPhone.coredevice.local' com.damsac.athanor
 ```
 
 ## 5. First-run notes on device

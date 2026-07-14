@@ -7,7 +7,7 @@ import Security
 // No key material lives in code or project files — this only ever touches
 // the Keychain item, never a file, env var, or plist that gets committed.
 enum KeychainKeyStore {
-    private static let service = "com.gudnuf.athanor"
+    private static let service = "com.damsac.athanor"
     private static let account = "anthropic-api-key"
 
     static func load() -> String? {

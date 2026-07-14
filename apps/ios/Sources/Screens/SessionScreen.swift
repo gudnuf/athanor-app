@@ -39,7 +39,7 @@ struct SessionScreen: View {
     /// what was already said.
     @State private var sessionError: String?
 
-    private static let log = Logger(subsystem: "com.gudnuf.athanor", category: "session")
+    private static let log = Logger(subsystem: "com.damsac.athanor", category: "session")
 
     /// QA only: a scripted follow-up turn (`debug-turn2=…`) fired once after the
     /// first reply settles. Nil on a normal launch.
