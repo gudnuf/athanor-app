@@ -41,6 +41,12 @@ targets:
         # the default. Same $(VAR) reference discipline; empty in a plain build.
         ATHANOR_DEV_SEED_DB_NORMY: "$(ATHANOR_DEV_SEED_DB_NORMY)"
         CFBundleDisplayName: Athanor
+        # Version keys MUST reference the build settings the release workflow
+        # injects (MARKETING_VERSION / CURRENT_PROJECT_VERSION=run_number).
+        # Hardcoded values here shipped every TestFlight build as version 1 —
+        # Apple rejects the second one (ENTITY_ERROR ... DUPLICATE, v0.1.1).
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UILaunchScreen: {}
         NSMicrophoneUsageDescription: "Athanor listens to your Bellows so the Mystagogue can hear you tend your domains."
         UISupportedInterfaceOrientations:
@@ -54,3 +60,6 @@ targets:
         CODE_SIGNING_ALLOWED: "NO"
         TARGETED_DEVICE_FAMILY: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # Local/dev defaults; the release workflow overrides both per build.
+        MARKETING_VERSION: "0.0.0"
+        CURRENT_PROJECT_VERSION: "0"
