@@ -83,6 +83,13 @@ struct SessionScreen: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 22) {
+                            // Once per demo session: a calm italic line above the
+                            // first scripted reply, so the conversation is never
+                            // mistaken for live. Stays pinned at the top of the
+                            // transcript (scrolls with history).
+                            if !model.engine.isReal {
+                                DemoNoticeLine().id("demo-notice")
+                            }
                             ForEach(messages) { message in
                                 messageView(message).id(message.id)
                             }
@@ -239,6 +246,12 @@ struct SessionScreen: View {
                 .buttonStyle(.plain)
                 Text("·").foregroundStyle(Ember.C.mutedDim)
                 Text(currentMode).foregroundStyle(Ember.C.muted)
+                // Persistent honest marker when the engine is the scripted
+                // DemoEngine (no key at build) — inherits the header's small-
+                // caps styling, muted so it's quiet but always in view.
+                if !model.engine.isReal {
+                    Text("· scripted demo").foregroundStyle(Ember.C.mutedDim)
+                }
                 Spacer()
                 Button("Close", action: close)
                     .foregroundStyle(Ember.C.heat)

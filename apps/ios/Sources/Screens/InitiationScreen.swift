@@ -38,7 +38,17 @@ struct InitiationScreen: View {
             Text(Ember.Glyph.furnace)
                 .font(.system(size: 34))
                 .foregroundStyle(Ember.C.heat)
+            // Persistent honest marker on the keyless/demo build — this screen
+            // has no header row, so the badge sits under the furnace glyph.
+            if !model.engine.isReal {
+                ScriptedDemoBadge()
+            }
             VStack(spacing: 16) {
+                // Once per demo initiation: the same calm italic line, above the
+                // first scripted reply.
+                if !model.engine.isReal {
+                    DemoNoticeLine()
+                }
                 ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
                     initiationLine(line, formatted: true) // settled — render markdown
                 }
