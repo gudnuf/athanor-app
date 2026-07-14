@@ -63,6 +63,15 @@ pub struct Endpointer {
     window_len: usize, // samples per analysis window
     partial: Vec<f32>, // sub-window carry buffer between push() calls
     state: State,
+    // Audio-domain clock (advances one `window_ms` per observed window). Used
+    // only to measure the last utterance-end latency for the metrics overlay:
+    // the audio-time gap between the final voiced sample and the moment the
+    // endpoint fired. This equals the trailing-silence the latch waited out —
+    // i.e. how long after the learner stopped talking the turn auto-sends — so
+    // the operator can *see* the configured latch taking effect on-device.
+    elapsed_ms: u64,
+    last_voiced_ms: u64,
+    last_latency_ms: u64,
 }
 
 impl Endpointer {
@@ -73,7 +82,17 @@ impl Endpointer {
             window_len,
             partial: Vec::new(),
             state: State::Idle,
+            elapsed_ms: 0,
+            last_voiced_ms: 0,
+            last_latency_ms: 0,
         }
+    }
+
+    /// Audio-domain latency (ms) of the most recent utterance-end fire: the gap
+    /// between the last voiced window and the window that latched the endpoint.
+    /// Zero until the first fire. Purely observational (metrics overlay).
+    pub fn last_latency_ms(&self) -> u64 {
+        self.last_latency_ms
     }
 
     /// Feed PCM. Returns `true` the instant this call's audio crosses the
@@ -100,6 +119,10 @@ impl Endpointer {
     pub fn reset(&mut self) {
         self.state = State::Idle;
         self.partial.clear();
+        // The audio clock and last-fire latency are session-level observability,
+        // not turn state — a fresh-turn reset must not zero the last measured
+        // latency (the overlay keeps showing the last real number). `elapsed_ms`
+        // keeps counting monotonically; only speech/silence progress resets.
     }
 
     #[cfg(test)]
@@ -110,6 +133,12 @@ impl Endpointer {
     fn observe_window(&mut self, window: &[f32]) -> bool {
         let voiced = rms(window) >= self.cfg.energy_threshold;
         let step_ms = self.cfg.window_ms;
+        self.elapsed_ms += step_ms;
+        if voiced {
+            // Stamp the most recent voiced moment; utterance-end latency is
+            // measured from here to the fire.
+            self.last_voiced_ms = self.elapsed_ms;
+        }
         match self.state {
             State::Idle => {
                 if voiced {
@@ -149,6 +178,9 @@ impl Endpointer {
                         // utterance) or give up on a too-short blip — either
                         // way, back to Idle so the next speech starts clean.
                         let fires = speech_ms >= self.cfg.min_utterance_ms;
+                        if fires {
+                            self.last_latency_ms = self.elapsed_ms - self.last_voiced_ms;
+                        }
                         self.state = State::Idle;
                         fires
                     } else {
@@ -263,6 +295,58 @@ mod tests {
             "40th silence window (1200 ms) must fire the endpoint"
         );
         assert!(ep.is_idle(), "state resets to Idle after firing");
+    }
+
+    #[test]
+    fn last_latency_ms_measures_trailing_silence_at_fire() {
+        // Default config: silence_ms=1200. After a real utterance, the fire's
+        // measured latency is the trailing-silence the latch waited out — the
+        // audio-time gap from last voiced window to the firing window.
+        let cfg = EndpointConfig::default();
+        let mut ep = Endpointer::new(SR, cfg.clone());
+        assert_eq!(ep.last_latency_ms(), 0, "no fire yet");
+        for _ in 0..12 {
+            ep.push(&sine(480, 440.0, 0.5));
+        }
+        let mut fired = false;
+        for _ in 0..40 {
+            if ep.push(&silence(480)) {
+                fired = true;
+            }
+        }
+        assert!(fired);
+        assert_eq!(
+            ep.last_latency_ms(),
+            cfg.silence_ms,
+            "latency equals the configured silence latch (last voiced -> fire)"
+        );
+    }
+
+    #[test]
+    fn lower_latch_fires_sooner_and_reports_smaller_latency() {
+        // Correctness of a *configured-down* latch: with silence_ms=750 the
+        // endpoint fires after 25 silence windows (750 ms), not 40, and reports
+        // the smaller latency. Proves the latch is honored end to end.
+        let cfg = EndpointConfig {
+            silence_ms: 750,
+            ..EndpointConfig::default()
+        };
+        let mut ep = Endpointer::new(SR, cfg);
+        for _ in 0..12 {
+            ep.push(&sine(480, 440.0, 0.5));
+        }
+        for i in 1..25 {
+            assert!(
+                !ep.push(&silence(480)),
+                "silence window {i} ({} ms) must not fire before 750 ms",
+                i * 30
+            );
+        }
+        assert!(
+            ep.push(&silence(480)),
+            "25th silence window (750 ms) fires the lowered latch"
+        );
+        assert_eq!(ep.last_latency_ms(), 750);
     }
 
     #[test]

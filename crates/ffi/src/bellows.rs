@@ -12,7 +12,18 @@
 //! shell pushes PCM off the realtime thread and polls on a background thread
 //! (Plan §2 cadences), exactly as `SttStream` documents.
 
-use stt::{FinalizedSegment, SttError, SttStream};
+use stt::{FinalizedSegment, SttError, SttMetrics, SttStream};
+
+/// The app's default endpoint silence latch (ms). Lowered from stt's library
+/// default of 1200 ms after real-device feedback that auto-send felt "slow":
+/// this is the gap of trailing silence the Bellows waits out before firing
+/// `utterance_ended`. ~800 ms keeps a natural end-of-thought pause from
+/// cutting the learner off mid-sentence while shaving ~400 ms off the felt
+/// send latency. Configurable per-open (see `open`'s `silence_latch_ms`).
+/// Referenced by the whisper-gated `open` and the tests; on the hermetic
+/// (no-whisper) lib build neither is compiled, so allow it to be unused there.
+#[cfg_attr(not(any(feature = "whisper", test)), allow(dead_code))]
+pub const DEFAULT_SILENCE_LATCH_MS: u64 = 800;
 
 /// A finalized, never-to-be-revised transcript segment crossing FFI. A thin
 /// `uniffi::Record` projection of `stt::FinalizedSegment` — we never send the
@@ -31,6 +42,34 @@ impl From<FinalizedSegment> for FfiSegment {
             start_ms: s.start_ms,
             end_ms: s.end_ms,
             text: s.text,
+        }
+    }
+}
+
+/// Responsiveness metrics for the dev overlay (operator's first-device
+/// feedback). A thin `uniffi::Record` projection of `stt::SttMetrics` — the
+/// core type never crosses FFI. All fields are read-only observability; see
+/// `stt::SttMetrics` for semantics. `realtime_factor` is an `f64` (< 1.0 =
+/// faster than realtime on-device).
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct FfiSttMetrics {
+    pub last_decode_ms: u64,
+    pub last_window_ms: u64,
+    pub realtime_factor: f64,
+    pub decode_passes: u64,
+    pub gpu_requested: bool,
+    pub utterance_end_latency_ms: u64,
+}
+
+impl From<SttMetrics> for FfiSttMetrics {
+    fn from(m: SttMetrics) -> Self {
+        FfiSttMetrics {
+            last_decode_ms: m.last_decode_ms,
+            last_window_ms: m.last_window_ms,
+            realtime_factor: m.realtime_factor,
+            decode_passes: m.decode_passes,
+            gpu_requested: m.gpu_requested,
+            utterance_end_latency_ms: m.utterance_end_latency_ms,
         }
     }
 }
@@ -97,12 +136,16 @@ impl BellowsHandle {
         BellowsHandle { stream }
     }
 
-    /// SttConfig the Bellows opens with: stt defaults plus endpointing on, so
-    /// `utterance_ended()` can drive silence auto-send. Shared by `open` and
-    /// the hermetic test so they exercise the identical configuration.
-    fn bellows_config() -> stt::SttConfig {
+    /// SttConfig the Bellows opens with: stt defaults plus endpointing on (so
+    /// `utterance_ended()` can drive silence auto-send), with the silence latch
+    /// set from `silence_latch_ms` — the felt "time to send" knob. Shared by
+    /// `open` and the hermetic test so they exercise the identical shape.
+    fn bellows_config(silence_latch_ms: u64) -> stt::SttConfig {
         stt::SttConfig {
-            endpoint: Some(stt::EndpointConfig::default()),
+            endpoint: Some(stt::EndpointConfig {
+                silence_ms: silence_latch_ms,
+                ..stt::EndpointConfig::default()
+            }),
             ..stt::SttConfig::default()
         }
     }
@@ -119,16 +162,21 @@ impl BellowsHandle {
 #[cfg(feature = "whisper")]
 #[uniffi::export]
 impl BellowsHandle {
+    /// `silence_latch_ms` is the trailing-silence gap before auto-send fires;
+    /// pass `DEFAULT_SILENCE_LATCH_MS` unless tuning. It is configurable here
+    /// (not hardcoded in the endpoint) so the shell/overlay can trade felt
+    /// responsiveness against end-of-thought pauses without a core rebuild.
     #[uniffi::constructor]
     pub fn open(
         model_path: String,
         bias_terms: Vec<String>,
         tier: BellowsTier,
+        silence_latch_ms: u64,
     ) -> Result<std::sync::Arc<Self>, BellowsError> {
         let _ = tier; // advisory; the resolved model_path already encodes it.
         let stream = SttStream::with_model(
             std::path::Path::new(&model_path),
-            Self::bellows_config(),
+            Self::bellows_config(silence_latch_ms),
             &bias_terms,
         )?;
         Ok(std::sync::Arc::new(Self::from_stream(stream)))
@@ -154,6 +202,13 @@ impl BellowsHandle {
     /// Volatile preview tail for the shimmer UI. Never persisted.
     pub fn preview_tail(&self) -> String {
         self.stream.preview_tail()
+    }
+
+    /// A snapshot of responsiveness metrics (decode ms, window ms, realtime
+    /// factor, decode passes, GPU/Metal requested, last utterance-end latency)
+    /// for the dev overlay. Cheap; safe from the poll thread.
+    pub fn metrics(&self) -> FfiSttMetrics {
+        self.stream.metrics().into()
     }
 
     /// True once since the last read if endpointing has latched sustained
@@ -208,9 +263,12 @@ mod tests {
     /// Build a BellowsHandle over a ScriptedDecoder — the same seam stt's own
     /// tests use, so the whole bridge is exercised with no model file.
     fn scripted_bellows(scripts: Vec<Vec<RawSegment>>, bias: &[String]) -> BellowsHandle {
+        // Explicit 1200 ms latch (40 windows) so the endpoint arithmetic in the
+        // tests below stays hand-countable and independent of the shipped
+        // default; a dedicated test exercises DEFAULT_SILENCE_LATCH_MS.
         let stream = SttStream::with_decoder(
             Box::new(ScriptedDecoder::new(scripts)),
-            BellowsHandle::bellows_config(),
+            BellowsHandle::bellows_config(1_200),
             bias,
         );
         BellowsHandle::from_stream(stream)
@@ -339,6 +397,54 @@ mod tests {
             !bellows.utterance_ended(),
             "reset_endpoint() clears a pending latch through the bridge"
         );
+    }
+
+    #[test]
+    fn default_latch_fires_faster_than_the_old_1200ms() {
+        // DEFAULT_SILENCE_LATCH_MS = 800 ms → fires at the 27th silence window
+        // (810 ms), where the old default needed the 40th (1200 ms). This is the
+        // felt "slow to send" fix, exercised through the bridge's config.
+        let stream = SttStream::with_decoder(
+            Box::new(ScriptedDecoder::new(vec![])),
+            BellowsHandle::bellows_config(DEFAULT_SILENCE_LATCH_MS),
+            &[],
+        );
+        let bellows = BellowsHandle::from_stream(stream);
+        for _ in 0..12 {
+            bellows.push_pcm(sine(WINDOW, 440.0, 0.5));
+        }
+        // 26 silence windows (780 ms) must not fire yet.
+        for _ in 0..26 {
+            bellows.push_pcm(vec![0.0; WINDOW]);
+            assert!(!bellows.utterance_ended(), "under 800 ms must not latch");
+        }
+        // 27th window (810 ms) crosses the 800 ms latch.
+        bellows.push_pcm(vec![0.0; WINDOW]);
+        assert!(
+            bellows.utterance_ended(),
+            "the lowered default latch fires by ~810 ms, not 1200 ms"
+        );
+        assert_eq!(
+            bellows.metrics().utterance_end_latency_ms,
+            810,
+            "metrics report the actual measured send latency"
+        );
+    }
+
+    #[test]
+    fn metrics_surface_a_decode_pass_through_the_bridge() {
+        let bellows = scripted_bellows(vec![vec![seg(0, 300, "hello")]], &[]);
+        assert_eq!(
+            bellows.metrics().decode_passes,
+            0,
+            "clean before any decode"
+        );
+        bellows.push_pcm(vec![0.0; 80_000]); // one 5 s window
+        bellows.poll().expect("decode");
+        let m = bellows.metrics();
+        assert_eq!(m.decode_passes, 1);
+        assert_eq!(m.last_window_ms, 5_000);
+        assert!(!m.gpu_requested, "scripted decoder never requests GPU");
     }
 
     #[test]

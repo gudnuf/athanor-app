@@ -26,6 +26,34 @@ pub struct FinalizedSegment {
     pub text: String,
 }
 
+/// Lightweight, read-only runtime metrics for the responsiveness overlay
+/// (operator's first-device feedback: "slow to pick up… doesn't feel
+/// responsive"). Pure observability — nothing here feeds back into decoding.
+/// The shell (or its os_log) reads a snapshot on its poll cadence.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SttMetrics {
+    /// Wall time of the most recent `decode()` call (ms). This is the number
+    /// that governs felt latency on-device.
+    pub last_decode_ms: u64,
+    /// Audio length of the most recently decoded window (ms). ~5000 for a full
+    /// rolling window, shorter for the flush tail.
+    pub last_window_ms: u64,
+    /// Realtime factor of the last decode: `decode_ms / window_ms`. < 1.0 means
+    /// the phone decodes faster than realtime (the on-device bar). > 1.0 means
+    /// it is falling behind and latency will accumulate.
+    pub realtime_factor: f64,
+    /// Count of decode passes since stream open (each ~one rolling window).
+    pub decode_passes: u64,
+    /// Whether the whisper backend REQUESTED GPU (Metal). True on real devices,
+    /// false on the iOS Simulator (ggml-metal traps there) and for the pure
+    /// test decoder. Proves the on-device Metal path is actually taken.
+    pub gpu_requested: bool,
+    /// Audio-domain latency of the last utterance-end fire (ms): how long after
+    /// the learner stopped speaking the turn auto-sent. Equals the endpoint
+    /// silence latch. Zero until the first endpointed turn.
+    pub utterance_end_latency_ms: u64,
+}
+
 #[derive(Clone, Debug)]
 pub struct SttConfig {
     /// Decode window length (spike default 5 s).
@@ -110,6 +138,9 @@ pub struct SttStream {
     // span a chunk boundary.
     endpointer: Mutex<Option<endpoint::Endpointer>>,
     utterance_ended: AtomicBool,
+    // Read-only responsiveness metrics (see `SttMetrics`). Updated on decode
+    // (poll/end) and on endpoint fire (push_pcm); read via `metrics()`.
+    metrics: Mutex<SttMetrics>,
 }
 
 impl SttStream {
@@ -132,8 +163,22 @@ impl SttStream {
             bias_prompt,
             endpointer: Mutex::new(endpointer),
             utterance_ended: AtomicBool::new(false),
+            metrics: Mutex::new(SttMetrics::default()),
             cfg,
         }
+    }
+
+    /// A snapshot of the current responsiveness metrics (see `SttMetrics`).
+    /// Cheap: a short lock and a clone. Safe to call from any thread.
+    pub fn metrics(&self) -> SttMetrics {
+        self.metrics.lock().unwrap().clone()
+    }
+
+    /// Record whether the underlying decoder requested GPU/Metal. Called once
+    /// by `with_model` (whisper backend); the pure test decoder leaves it false.
+    #[cfg(feature = "whisper")]
+    fn set_gpu_requested(&self, gpu: bool) {
+        self.metrics.lock().unwrap().gpu_requested = gpu;
     }
 
     #[cfg(feature = "whisper")]
@@ -144,7 +189,9 @@ impl SttStream {
     ) -> Result<Self, SttError> {
         cfg.validate()?; // reject overlap ≥ chunk before opening the model
         let decoder = whisper::WhisperDecoder::open(model, &cfg.language)?;
-        Ok(Self::with_decoder(Box::new(decoder), cfg, vocab))
+        let stream = Self::with_decoder(Box::new(decoder), cfg, vocab);
+        stream.set_gpu_requested(whisper::gpu_requested());
+        Ok(stream)
     }
 
     /// Buffer PCM. Cheap: a short lock, no decode. Call OFF the real-time audio
@@ -154,6 +201,7 @@ impl SttStream {
         if let Some(ep) = self.endpointer.lock().unwrap().as_mut() {
             if ep.push(pcm) {
                 self.utterance_ended.store(true, Ordering::SeqCst);
+                self.metrics.lock().unwrap().utterance_end_latency_ms = ep.last_latency_ms();
             }
         }
     }
@@ -239,7 +287,21 @@ impl SttStream {
             // with_model rejects overlap ≥ chunk up front so this can't underflow there.
             window_start_ms + self.chunk_len_ms().saturating_sub(self.overlap_ms())
         };
+        let window_ms = self.sample_to_ms(w.samples.len() as u64);
+        let started = std::time::Instant::now();
         let raw = eng.decode_with_prompt(&w.samples, self.bias_prompt.as_deref())?;
+        let decode_ms = started.elapsed().as_millis() as u64;
+        {
+            let mut m = self.metrics.lock().unwrap();
+            m.last_decode_ms = decode_ms;
+            m.last_window_ms = window_ms;
+            m.realtime_factor = if window_ms > 0 {
+                decode_ms as f64 / window_ms as f64
+            } else {
+                0.0
+            };
+            m.decode_passes += 1;
+        }
         emit(out, eng.finalizer.ingest(window_start_ms, &raw, horizon_ms));
         Ok(())
     }
@@ -436,6 +498,53 @@ mod tests {
             assert!(s.start_ms >= prev);
             prev = s.start_ms;
         }
+    }
+
+    #[test]
+    fn metrics_capture_decode_pass_and_window_length() {
+        // One 5 s window decoded → metrics reflect a decode pass whose window
+        // is 5000 ms; RTF = decode_ms/5000. gpu_requested stays false for the
+        // pure test decoder (no whisper backend).
+        let decoder = ScriptedDecoder::new(vec![vec![seg(0, 300, "hello")]]);
+        let stream = SttStream::with_decoder(Box::new(decoder), SttConfig::default(), &[]);
+        assert_eq!(
+            stream.metrics(),
+            SttMetrics::default(),
+            "clean before any decode"
+        );
+        stream.push_pcm(&vec![0.0; 80_000]); // exactly one 5 s window
+        stream.poll().unwrap();
+        let m = stream.metrics();
+        assert_eq!(m.decode_passes, 1, "one window decoded → one pass");
+        assert_eq!(m.last_window_ms, 5_000, "5 s window reported in ms");
+        assert!(!m.gpu_requested, "pure test decoder never requests GPU");
+        // realtime_factor is decode_ms/window_ms; decode_ms may be 0 on a fast
+        // scripted decoder, so only assert the relationship holds.
+        assert_eq!(m.realtime_factor, m.last_decode_ms as f64 / 5_000.0);
+    }
+
+    #[test]
+    fn metrics_record_utterance_end_latency_on_fire() {
+        let cfg = SttConfig {
+            endpoint: Some(EndpointConfig {
+                silence_ms: 750,
+                ..EndpointConfig::default()
+            }),
+            ..SttConfig::default()
+        };
+        let stream = SttStream::with_decoder(Box::new(ScriptedDecoder::new(vec![])), cfg, &[]);
+        for _ in 0..12 {
+            stream.push_pcm(&sine(480, 440.0, 0.5));
+        }
+        for _ in 0..25 {
+            stream.push_pcm(&vec![0.0; 480]);
+        }
+        assert!(stream.utterance_ended());
+        assert_eq!(
+            stream.metrics().utterance_end_latency_ms,
+            750,
+            "the lowered latch is visible in metrics"
+        );
     }
 
     #[test]

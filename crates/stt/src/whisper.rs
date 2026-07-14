@@ -13,6 +13,15 @@ pub struct WhisperDecoder {
     language: String,
 }
 
+/// Whether the whisper backend requests GPU (Metal). Single source of truth for
+/// the `use_gpu` policy below, so the metrics overlay can report the exact flag
+/// the context was built with: Metal ON everywhere EXCEPT the iOS Simulator
+/// (`target_abi = "sim"`), where ggml-metal traps. On a real device this is
+/// `true` — the overlay's "GPU" bit proves the on-device Metal path is taken.
+pub(crate) fn gpu_requested() -> bool {
+    !cfg!(target_abi = "sim")
+}
+
 impl WhisperDecoder {
     pub fn open(model: &Path, language: &str) -> Result<Self, SttError> {
         let mut params = WhisperContextParameters::default();
@@ -27,7 +36,7 @@ impl WhisperDecoder {
         // G2/G3 on-device gates, not this crate). CPU whisper on sim is
         // dev-only — RTF is irrelevant there; the <0.5 RTF bar only applies
         // on-device.
-        params.use_gpu(!cfg!(target_abi = "sim"));
+        params.use_gpu(gpu_requested());
         let ctx = WhisperContext::new_with_params(
             model
                 .to_str()
