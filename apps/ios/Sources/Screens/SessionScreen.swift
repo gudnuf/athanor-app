@@ -58,6 +58,15 @@ struct SessionScreen: View {
     /// Volatile preview tail (mercury-shimmer), replaced wholesale each tick.
     @State private var livePreview = ""
 
+    // Dev responsiveness overlay (STT lane): shows on-device decode/endpoint
+    // numbers the operator otherwise can't see on a TestFlight build. Gated by
+    // a QA launch arg (`stt-overlay=1`) OR a hidden triple-tap on the header —
+    // the only way to surface numbers on a signed build with no cable.
+    @State private var showDevOverlay = ProcessInfo.processInfo.arguments.contains("stt-overlay=1")
+    @State private var sttMetrics: SttMetricsSnapshot?
+    /// True while a tier download+reopen is in flight (overlay disables the row).
+    @State private var switchingTier = false
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -98,6 +107,17 @@ struct SessionScreen: View {
                         if err != nil { proxy.scrollTo("error", anchor: .bottom) }
                     }
                 }
+            }
+
+            if showDevOverlay {
+                SttOverlay(
+                    metrics: sttMetrics,
+                    tier: model.modelTier,
+                    switching: switchingTier,
+                    downloadState: model.modelDownloader.state,
+                    onSwitchTier: { switchTier(to: $0) },
+                    onClose: { showDevOverlay = false }
+                )
             }
 
             if let realBellows {
@@ -148,6 +168,16 @@ struct SessionScreen: View {
         }
         .task { await begin() }
         .task { await beginRealBellows() }
+        .task {
+            // Poll the Bellows metrics at ~2 Hz for the dev overlay. Cheap
+            // (a short lock + clone in Rust); only meaningful once the real
+            // controller exists. Runs for the screen's lifetime — the overlay
+            // just chooses whether to render the latest snapshot.
+            while !Task.isCancelled {
+                sttMetrics = realBellows?.currentMetrics()
+                try? await Task.sleep(for: .milliseconds(500))
+            }
+        }
         .task {
             // QA/screenshot hook only (same launch-arg family as `screen=` /
             // `autoplay=`): open the mask picker after a beat so the escape
@@ -216,6 +246,11 @@ struct SessionScreen: View {
             .font(Ember.F.sans(12, weight: .bold))
             .textCase(.uppercase)
             .tracking(1.2)
+            // Hidden affordance: triple-tap the register header toggles the STT
+            // dev overlay. TestFlight is the only place the operator can read
+            // on-device numbers, and there's no cable — this is that door.
+            .contentShape(Rectangle())
+            .onTapGesture(count: 3) { showDevOverlay.toggle() }
 
             Capsule()
                 .fill(Ember.C.raised2)
@@ -411,6 +446,32 @@ struct SessionScreen: View {
     /// that's the one seam this screen needs; a no-key real build still
     /// gets real ears even while `sendTurn` reaches DemoEngine's fallback.
     private func beginRealBellows() async {
+        await openBellows(tier: model.modelTier)
+    }
+
+    /// Dev overlay: switch the whisper model tier live. Reprovisions the chosen
+    /// tier (downloads if absent — `small.en` is ~182 MB) and reopens the
+    /// Bellows against it. No default change ships from here; this is the
+    /// operator's headroom lever, driven by the real RTF numbers the overlay
+    /// shows. The previous controller is stopped (which finishes its event
+    /// stream, unblocking the old `for await` in `openBellows`).
+    private func switchTier(to tier: ModelTier) {
+        guard tier != model.modelTier || realBellows == nil, !switchingTier else { return }
+        switchingTier = true
+        realBellows?.stop()
+        realBellows = nil
+        amplitude = 0
+        model.modelTier = tier // persisted by AppModel; downloader targets it
+        Task {
+            await model.modelDownloader.ensureModel(tier: tier)
+            await openBellows(tier: tier)
+            switchingTier = false
+        }
+    }
+
+    /// Opens (or reopens) the real Bellows against `tier` and consumes its
+    /// event stream until the controller finishes (stop() / screen teardown).
+    private func openBellows(tier: ModelTier) async {
         // The `debug-send-turn=1` QA hook is explicitly the AUDIO-FREE path (it
         // stands in for a learner turn where there's no mic/acoustic loopback),
         // so opening the mic here is contradictory — it only pops the system
@@ -433,7 +494,7 @@ struct SessionScreen: View {
         guard let modelPath else { return }
         let bias = BellowsBias.terms(engine: model.engine)
         guard let controller = BellowsFactory.makeRealController(
-            modelPath: modelPath, tier: model.modelTier, biasTerms: bias
+            modelPath: modelPath, tier: tier, biasTerms: bias
         ) else { return }
         realBellows = controller
         controller.start()
@@ -564,6 +625,115 @@ private struct RealFallbackInput: View {
         .padding(.top, 16)
         .padding(.bottom, 12)
         .overlay(alignment: .top) { Ember.C.hairline.frame(height: 1) }
+    }
+}
+
+// MARK: - STT dev overlay
+
+/// A tiny, in-palette readout of on-device STT responsiveness — the numbers the
+/// operator can't otherwise see on a signed TestFlight build (no cable). Small
+/// mono text, no design ceremony. Surfaced by `stt-overlay=1` or a triple-tap on
+/// the header. Also lets the operator switch the whisper tier live and read the
+/// realtime factor (RTF) their phone actually achieves before deciding on the
+/// accuracy/speed trade — headroom lever, no default change ships from here.
+private struct SttOverlay: View {
+    var metrics: SttMetricsSnapshot?
+    var tier: ModelTier
+    var switching: Bool
+    var downloadState: ModelDownloader.State
+    var onSwitchTier: (ModelTier) -> Void
+    var onClose: () -> Void
+
+    private var rtf: String {
+        guard let m = metrics, m.lastWindowMs > 0 else { return "—" }
+        return String(format: "%.2f", m.realtimeFactor)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack {
+                Text("STT · DEV")
+                    .font(Ember.F.sans(10, weight: .bold))
+                    .tracking(1.4)
+                    .foregroundStyle(Ember.C.heat)
+                Spacer()
+                Button(action: onClose) {
+                    Text("✕").foregroundStyle(Ember.C.mutedDim)
+                }
+                .buttonStyle(.plain)
+            }
+
+            if let m = metrics {
+                row("decode", "\(m.lastDecodeMs) ms")
+                row("window", String(format: "%.1f s", Double(m.lastWindowMs) / 1000))
+                row("rtf", rtf + (m.realtimeFactor > 0 && m.realtimeFactor < 1 ? " ⚡︎" : ""))
+                row("passes", "\(m.decodePasses)")
+                row("metal", m.gpuRequested ? "on (device)" : "off (sim/cpu)")
+                row("send latch", m.utteranceEndLatencyMs == 0 ? "— (no turn yet)" : "\(m.utteranceEndLatencyMs) ms")
+            } else {
+                Text("no live decode yet")
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(Ember.C.mutedDim)
+            }
+
+            Divider().overlay(Ember.C.hairline)
+
+            HStack(spacing: 8) {
+                Text("tier")
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(Ember.C.mutedDim)
+                ForEach(ModelTier.allCases) { t in
+                    Button {
+                        onSwitchTier(t)
+                    } label: {
+                        Text(t.displayName)
+                            .font(Ember.F.sans(11, weight: .semibold))
+                            .foregroundStyle(t == tier ? Ember.C.heat : Ember.C.muted)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(
+                                t == tier ? Ember.C.raised2 : Color.clear,
+                                in: RoundedRectangle(cornerRadius: 7)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(switching)
+                }
+                if switching {
+                    Text(switchingLabel)
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(Ember.C.mutedDim)
+                }
+                Spacer()
+            }
+        }
+        .foregroundStyle(Ember.C.ink)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(Ember.C.raised, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Ember.C.hairline, lineWidth: 1))
+        .padding(.horizontal, Ember.S.screenPad)
+        .padding(.bottom, 4)
+    }
+
+    private var switchingLabel: String {
+        switch downloadState {
+        case .downloading(let p): return String(format: "dl %.0f%%", p * 100)
+        case .verifying: return "verifying…"
+        default: return "switching…"
+        }
+    }
+
+    private func row(_ label: String, _ value: String) -> some View {
+        HStack {
+            Text(label)
+                .font(.system(.caption2, design: .monospaced))
+                .foregroundStyle(Ember.C.mutedDim)
+            Spacer()
+            Text(value)
+                .font(.system(.caption2, design: .monospaced))
+                .foregroundStyle(Ember.C.ink)
+        }
     }
 }
 

@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 #if canImport(AthanorCoreFFI)
 import AVFAudio
@@ -40,6 +41,17 @@ final class RealBellowsController: BellowsController {
     nonisolated(unsafe) private var muted = false
     private var capturing = false
 
+    // Default trailing-silence latch before auto-send (ms). Mirrors the Rust
+    // `DEFAULT_SILENCE_LATCH_MS`; lowered from 1200→800 after the operator's
+    // first-device feedback that auto-send felt slow. Passed to open() so it is
+    // configurable at the boundary, not buried in the endpoint.
+    static let defaultSilenceLatchMs: UInt64 = 800
+
+    // os_log: the phone reports even when there's no cable (TestFlight). Every
+    // decode pass and endpoint fire is logged under com.damsac.athanor/bellows
+    // so a device console (or the operator's overlay) can read the numbers.
+    nonisolated private static let log = Logger(subsystem: "com.damsac.athanor", category: "bellows")
+
     let events: AsyncStream<BellowsEvent>
     nonisolated private let continuation: AsyncStream<BellowsEvent>.Continuation
 
@@ -55,8 +67,27 @@ final class RealBellowsController: BellowsController {
     // engine, all exercised together with no crash (E4 sim-unblock report).
     init(modelPath: String, tier: ModelTier, biasTerms: [String]) throws {
         let ffiTier: AthanorCoreFFI.BellowsTier = tier == .small ? .smallEn : .baseEn
-        self.handle = try AthanorCoreFFI.BellowsHandle.open(modelPath: modelPath, biasTerms: biasTerms, tier: ffiTier)
+        self.handle = try AthanorCoreFFI.BellowsHandle.open(
+            modelPath: modelPath,
+            biasTerms: biasTerms,
+            tier: ffiTier,
+            silenceLatchMs: Self.defaultSilenceLatchMs
+        )
         (self.events, self.continuation) = AsyncStream<BellowsEvent>.makeStream()
+        Self.log.info("Bellows opened: tier=\(tier.rawValue, privacy: .public) latchMs=\(Self.defaultSilenceLatchMs)")
+    }
+
+    // FFI-free metrics projection for the overlay (see `SttMetricsSnapshot`).
+    nonisolated func currentMetrics() -> SttMetricsSnapshot? {
+        let m = handle.metrics()
+        return SttMetricsSnapshot(
+            lastDecodeMs: m.lastDecodeMs,
+            lastWindowMs: m.lastWindowMs,
+            realtimeFactor: m.realtimeFactor,
+            decodePasses: m.decodePasses,
+            gpuRequested: m.gpuRequested,
+            utteranceEndLatencyMs: m.utteranceEndLatencyMs
+        )
     }
 
     func start() {
@@ -92,6 +123,10 @@ final class RealBellowsController: BellowsController {
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         }
         capturing = false
+        // Finish the event stream so any `for await controller.events` consumer
+        // (e.g. a tier switch that reopens a fresh controller) unblocks cleanly
+        // instead of awaiting a controller that will never speak again.
+        continuation.finish()
     }
 
     func setMuted(_ muted: Bool) {
@@ -197,6 +232,7 @@ final class RealBellowsController: BellowsController {
         // `continuation` are `nonisolated`, so the detached task can touch
         // them without hopping back to Main at all.
         pollTask = Task.detached { [weak self] in
+            var lastLoggedPass: UInt64 = 0
             while !Task.isCancelled {
                 guard let self else { return }
                 if let segments = try? self.handle.poll() {
@@ -204,7 +240,18 @@ final class RealBellowsController: BellowsController {
                         self.continuation.yield(.finalizedAppend(segment.text))
                     }
                 }
+                // Log a decode pass only when one actually happened (a new
+                // window was decoded) — most polls are no-ops (windows ready
+                // only every ~4 s), so this stays quiet, not spammy.
+                let m = self.handle.metrics()
+                if m.decodePasses != lastLoggedPass {
+                    lastLoggedPass = m.decodePasses
+                    Self.log.info(
+                        "decode pass=\(m.decodePasses) ms=\(m.lastDecodeMs) window_ms=\(m.lastWindowMs) rtf=\(m.realtimeFactor, format: .fixed(precision: 2)) gpu=\(m.gpuRequested)"
+                    )
+                }
                 if self.handle.utteranceEnded() {
+                    Self.log.info("utterance ended: latch_latency_ms=\(m.utteranceEndLatencyMs)")
                     self.continuation.yield(.utteranceEnded)
                 }
                 try? await Task.sleep(nanoseconds: 250_000_000)

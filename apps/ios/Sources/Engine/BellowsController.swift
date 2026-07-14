@@ -33,6 +33,33 @@ protocol BellowsController: AnyObject {
     /// the settled text sends immediately"): flush + finalize whatever's
     /// pending, as if silence had just latched.
     func sendNow()
+
+    /// A snapshot of responsiveness metrics for the dev overlay, or nil if the
+    /// controller has no metrics source (the demo path). FFI-free by design:
+    /// `RealBellowsController` maps `BellowsHandle.metrics()` into this plain
+    /// struct so `SessionScreen` never imports AthanorCoreFFI.
+    func currentMetrics() -> SttMetricsSnapshot?
+}
+
+extension BellowsController {
+    // Default: no metrics (demo controller, or any future stub). Only the real
+    // whisper-backed controller overrides this.
+    func currentMetrics() -> SttMetricsSnapshot? { nil }
+}
+
+/// Plain, FFI-free projection of `stt::SttMetrics` (via `FfiSttMetrics`) for the
+/// responsiveness overlay. See the Rust `SttMetrics` docs for field semantics:
+/// decode wall-time, decoded-window length, realtime factor (< 1.0 = faster
+/// than realtime on-device), decode-pass count, whether Metal/GPU was requested
+/// (true on device, false on the Simulator), and the last utterance-end latency
+/// (the felt "time to send").
+struct SttMetricsSnapshot: Equatable {
+    var lastDecodeMs: UInt64
+    var lastWindowMs: UInt64
+    var realtimeFactor: Double
+    var decodePasses: UInt64
+    var gpuRequested: Bool
+    var utteranceEndLatencyMs: UInt64
 }
 
 enum BellowsEvent: Equatable {
