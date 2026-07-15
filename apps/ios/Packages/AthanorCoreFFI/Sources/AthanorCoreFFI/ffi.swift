@@ -591,6 +591,24 @@ public protocol AthanorEngineProtocol: AnyObject, Sendable {
     func mercury() throws  -> [OpenThread]
     
     /**
+     * The most recent closed sessions regardless of thread — the "past fires"
+     * surface (also reaches threadless sessions: initiation, bare opens).
+     */
+    func recentSessions(limit: UInt32) throws  -> [SessionSummary]
+    
+    /**
+     * One session's full detail — the role-tagged transcript (both sides) plus
+     * its condensation note — for the reading view.
+     */
+    func sessionDetail(sessionId: String) throws  -> SessionDetail
+    
+    /**
+     * Closed sessions on a thread, newest first — the thread-detail view's
+     * history (tapping a Mercury thread shows every fire tended on it).
+     */
+    func sessionsForThread(threadId: String) throws  -> [SessionSummary]
+    
+    /**
      * The Tabula read: the seven canonical passages (number/title/body)
      * projected against this learner's kindling state (`Store::tabula`).
      * Always seven, in scroll order — dim until the learner's practice lights
@@ -732,6 +750,45 @@ open func mercury()throws  -> [OpenThread]  {
     return try  FfiConverterSequenceTypeOpenThread.lift(try rustCallWithError(FfiConverterTypeEngineError_lift) {
     uniffi_ffi_fn_method_athanorengine_mercury(
             self.uniffiCloneHandle(),$0
+    )
+})
+}
+    
+    /**
+     * The most recent closed sessions regardless of thread — the "past fires"
+     * surface (also reaches threadless sessions: initiation, bare opens).
+     */
+open func recentSessions(limit: UInt32)throws  -> [SessionSummary]  {
+    return try  FfiConverterSequenceTypeSessionSummary.lift(try rustCallWithError(FfiConverterTypeEngineError_lift) {
+    uniffi_ffi_fn_method_athanorengine_recent_sessions(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt32.lower(limit),$0
+    )
+})
+}
+    
+    /**
+     * One session's full detail — the role-tagged transcript (both sides) plus
+     * its condensation note — for the reading view.
+     */
+open func sessionDetail(sessionId: String)throws  -> SessionDetail  {
+    return try  FfiConverterTypeSessionDetail_lift(try rustCallWithError(FfiConverterTypeEngineError_lift) {
+    uniffi_ffi_fn_method_athanorengine_session_detail(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(sessionId),$0
+    )
+})
+}
+    
+    /**
+     * Closed sessions on a thread, newest first — the thread-detail view's
+     * history (tapping a Mercury thread shows every fire tended on it).
+     */
+open func sessionsForThread(threadId: String)throws  -> [SessionSummary]  {
+    return try  FfiConverterSequenceTypeSessionSummary.lift(try rustCallWithError(FfiConverterTypeEngineError_lift) {
+    uniffi_ffi_fn_method_athanorengine_sessions_for_thread(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(threadId),$0
     )
 })
 }
@@ -1325,8 +1382,15 @@ public protocol SessionHandleProtocol: AnyObject, Sendable {
     func abandon() async throws 
     
     /**
-     * Lands the session: `close_session` (records tending — the only place
-     * wisdom advances) + writes the one-line trace. Consumes the conductor.
+     * Lands the session, in two steps whose ordering is the "nothing is lost"
+     * contract:
+     * 1. **Condensation (best-effort).** One final distillation turn through
+     * the engine (`Conductor::condense`) writes the durable session note +
+     * any profile refinements. Its error — network, key, or even a panic
+     * from deep in the engine — is CONTAINED here and discarded: closing is
+     * not best-effort, so nothing this step does can stop step 2.
+     * 2. **Close (always).** `close_session` (records tending — the only place
+     * wisdom advances) + the one-line trace. Consumes the conductor.
      */
     func close(minutes: UInt32) async throws 
     
@@ -1367,6 +1431,12 @@ public protocol SessionHandleProtocol: AnyObject, Sendable {
      * as a `SessionEvent::Error`.
      */
     func sendTurn(text: String) async 
+    
+    /**
+     * This session's id — so the shell can read its detail/history back after
+     * close (e.g. to surface the freshly-condensed note).
+     */
+    func sessionId()  -> String
     
     /**
      * Stores the per-session listener (fresh per session).
@@ -1455,8 +1525,15 @@ open func abandon()async throws   {
 }
     
     /**
-     * Lands the session: `close_session` (records tending — the only place
-     * wisdom advances) + writes the one-line trace. Consumes the conductor.
+     * Lands the session, in two steps whose ordering is the "nothing is lost"
+     * contract:
+     * 1. **Condensation (best-effort).** One final distillation turn through
+     * the engine (`Conductor::condense`) writes the durable session note +
+     * any profile refinements. Its error — network, key, or even a panic
+     * from deep in the engine — is CONTAINED here and discarded: closing is
+     * not best-effort, so nothing this step does can stop step 2.
+     * 2. **Close (always).** `close_session` (records tending — the only place
+     * wisdom advances) + the one-line trace. Consumes the conductor.
      */
 open func close(minutes: UInt32)async throws   {
     return
@@ -1561,6 +1638,18 @@ open func sendTurn(text: String)async   {
             errorHandler: nil
             
         )
+}
+    
+    /**
+     * This session's id — so the shell can read its detail/history back after
+     * close (e.g. to surface the freshly-condensed note).
+     */
+open func sessionId() -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_ffi_fn_method_sessionhandle_session_id(
+            self.uniffiCloneHandle(),$0
+    )
+})
 }
     
     /**
@@ -2118,6 +2207,178 @@ public func FfiConverterTypeOpenThread_lower(_ value: OpenThread) -> RustBuffer 
 
 
 /**
+ * A single session's full detail: its role-tagged transcript (both sides) plus
+ * the condensation note, for the transcript reading view.
+ */
+public struct SessionDetail: Equatable, Hashable {
+    public var id: String
+    public var threadId: String?
+    public var date: UInt64
+    public var mask: String
+    public var mode: String
+    /**
+     * The condensation residue, if the session distilled one.
+     */
+    public var note: String?
+    /**
+     * The full dialogue, oldest-first, both roles.
+     */
+    public var turns: [TranscriptTurn]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: String, threadId: String?, date: UInt64, mask: String, mode: String, 
+        /**
+         * The condensation residue, if the session distilled one.
+         */note: String?, 
+        /**
+         * The full dialogue, oldest-first, both roles.
+         */turns: [TranscriptTurn]) {
+        self.id = id
+        self.threadId = threadId
+        self.date = date
+        self.mask = mask
+        self.mode = mode
+        self.note = note
+        self.turns = turns
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension SessionDetail: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSessionDetail: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SessionDetail {
+        return
+            try SessionDetail(
+                id: FfiConverterString.read(from: &buf), 
+                threadId: FfiConverterOptionString.read(from: &buf), 
+                date: FfiConverterUInt64.read(from: &buf), 
+                mask: FfiConverterString.read(from: &buf), 
+                mode: FfiConverterString.read(from: &buf), 
+                note: FfiConverterOptionString.read(from: &buf), 
+                turns: FfiConverterSequenceTypeTranscriptTurn.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SessionDetail, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterOptionString.write(value.threadId, into: &buf)
+        FfiConverterUInt64.write(value.date, into: &buf)
+        FfiConverterString.write(value.mask, into: &buf)
+        FfiConverterString.write(value.mode, into: &buf)
+        FfiConverterOptionString.write(value.note, into: &buf)
+        FfiConverterSequenceTypeTranscriptTurn.write(value.turns, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSessionDetail_lift(_ buf: RustBuffer) throws -> SessionDetail {
+    return try FfiConverterTypeSessionDetail.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSessionDetail_lower(_ value: SessionDetail) -> RustBuffer {
+    return FfiConverterTypeSessionDetail.lower(value)
+}
+
+
+/**
+ * One past session in a history list (a thread's fires, or the "past fires"
+ * surface) — enough to show a row and push into the reading view. `excerpt` is
+ * the session's condensation NOTE if it has one, else its one-line trace,
+ * whitespace-collapsed; empty when it left neither.
+ */
+public struct SessionSummary: Equatable, Hashable {
+    public var id: String
+    public var threadId: String?
+    /**
+     * The session's created_at, epoch seconds (the UI formats the date).
+     */
+    public var date: UInt64
+    public var mask: String
+    public var mode: String
+    public var excerpt: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: String, threadId: String?, 
+        /**
+         * The session's created_at, epoch seconds (the UI formats the date).
+         */date: UInt64, mask: String, mode: String, excerpt: String) {
+        self.id = id
+        self.threadId = threadId
+        self.date = date
+        self.mask = mask
+        self.mode = mode
+        self.excerpt = excerpt
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension SessionSummary: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSessionSummary: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SessionSummary {
+        return
+            try SessionSummary(
+                id: FfiConverterString.read(from: &buf), 
+                threadId: FfiConverterOptionString.read(from: &buf), 
+                date: FfiConverterUInt64.read(from: &buf), 
+                mask: FfiConverterString.read(from: &buf), 
+                mode: FfiConverterString.read(from: &buf), 
+                excerpt: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SessionSummary, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterOptionString.write(value.threadId, into: &buf)
+        FfiConverterUInt64.write(value.date, into: &buf)
+        FfiConverterString.write(value.mask, into: &buf)
+        FfiConverterString.write(value.mode, into: &buf)
+        FfiConverterString.write(value.excerpt, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSessionSummary_lift(_ buf: RustBuffer) throws -> SessionSummary {
+    return try FfiConverterTypeSessionSummary.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSessionSummary_lower(_ value: SessionSummary) -> RustBuffer {
+    return FfiConverterTypeSessionSummary.lower(value)
+}
+
+
+/**
  * One passage of the Tabula scroll — a projection of core `TabulaPassage`
  * (canonical content + this learner's kindling state). Always seven, in scroll
  * order; `kindled_note` is set only when the passage has been kindled.
@@ -2324,6 +2585,69 @@ public func FfiConverterTypeTierConfig_lift(_ buf: RustBuffer) throws -> TierCon
 #endif
 public func FfiConverterTypeTierConfig_lower(_ value: TierConfig) -> RustBuffer {
     return FfiConverterTypeTierConfig.lower(value)
+}
+
+
+/**
+ * One role-tagged turn of a session's full transcript (the reading view).
+ */
+public struct TranscriptTurn: Equatable, Hashable {
+    /**
+     * `"learner"` or `"mystagogue"` (from `athanor_core::transcript`).
+     */
+    public var role: String
+    public var text: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * `"learner"` or `"mystagogue"` (from `athanor_core::transcript`).
+         */role: String, text: String) {
+        self.role = role
+        self.text = text
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension TranscriptTurn: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeTranscriptTurn: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TranscriptTurn {
+        return
+            try TranscriptTurn(
+                role: FfiConverterString.read(from: &buf), 
+                text: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: TranscriptTurn, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.role, into: &buf)
+        FfiConverterString.write(value.text, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTranscriptTurn_lift(_ buf: RustBuffer) throws -> TranscriptTurn {
+    return try FfiConverterTypeTranscriptTurn.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTranscriptTurn_lower(_ value: TranscriptTurn) -> RustBuffer {
+    return FfiConverterTypeTranscriptTurn.lower(value)
 }
 
 
@@ -3025,6 +3349,31 @@ fileprivate struct FfiConverterSequenceTypeOpenThread: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeSessionSummary: FfiConverterRustBuffer {
+    typealias SwiftType = [SessionSummary]
+
+    public static func write(_ value: [SessionSummary], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeSessionSummary.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [SessionSummary] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [SessionSummary]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeSessionSummary.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeTabulaPassage: FfiConverterRustBuffer {
     typealias SwiftType = [TabulaPassage]
 
@@ -3067,6 +3416,31 @@ fileprivate struct FfiConverterSequenceTypeTendingDay: FfiConverterRustBuffer {
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeTendingDay.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeTranscriptTurn: FfiConverterRustBuffer {
+    typealias SwiftType = [TranscriptTurn]
+
+    public static func write(_ value: [TranscriptTurn], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeTranscriptTurn.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [TranscriptTurn] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [TranscriptTurn]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeTranscriptTurn.read(from: &buf))
         }
         return seq
     }
@@ -3177,6 +3551,15 @@ private let initializationResult: InitializationResult = {
     if (uniffi_ffi_checksum_method_athanorengine_mercury() != 14886) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_ffi_checksum_method_athanorengine_recent_sessions() != 38017) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ffi_checksum_method_athanorengine_session_detail() != 37181) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ffi_checksum_method_athanorengine_sessions_for_thread() != 28187) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_ffi_checksum_method_athanorengine_tabula() != 14998) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -3192,7 +3575,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_ffi_checksum_method_sessionhandle_abandon() != 44248) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_ffi_checksum_method_sessionhandle_close() != 51915) {
+    if (uniffi_ffi_checksum_method_sessionhandle_close() != 64052) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_ffi_checksum_method_sessionhandle_current_mask() != 17534) {
@@ -3208,6 +3591,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_ffi_checksum_method_sessionhandle_send_turn() != 12653) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ffi_checksum_method_sessionhandle_session_id() != 2286) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_ffi_checksum_method_sessionhandle_set_listener() != 1514) {
