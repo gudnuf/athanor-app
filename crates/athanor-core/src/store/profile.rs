@@ -28,6 +28,28 @@ impl Store {
         )?;
         Ok(())
     }
+
+    /// Merges an addition INTO an existing profile section rather than
+    /// clobbering it — the condensation pass refines what the furnace knows
+    /// about the learner without erasing prior observations. Empty section →
+    /// the addition becomes the content; an addition already present (verbatim
+    /// substring) is a no-op; otherwise it's appended on a new line. A blank
+    /// addition never touches the section.
+    pub fn merge_profile_section(&self, section: &str, addition: &str) -> Result<(), CoreError> {
+        let addition = addition.trim();
+        if addition.is_empty() {
+            return Ok(());
+        }
+        let existing = self.get_profile_section(section)?;
+        if existing.trim().is_empty() {
+            return self.set_profile_section(section, addition);
+        }
+        if existing.contains(addition) {
+            return Ok(());
+        }
+        let merged = format!("{}\n{addition}", existing.trim_end());
+        self.set_profile_section(section, &merged)
+    }
 }
 
 #[cfg(test)]
@@ -58,5 +80,49 @@ mod tests {
         store.set_profile_section("how_i_learn", "v1").unwrap();
         store.set_profile_section("how_i_learn", "v2").unwrap();
         assert_eq!(store.get_profile_section("how_i_learn").unwrap(), "v2");
+    }
+
+    #[test]
+    fn merge_into_empty_sets_content() {
+        let store = Store::open_in_memory("d").unwrap();
+        store
+            .merge_profile_section("how_i_learn", "demands proof")
+            .unwrap();
+        assert_eq!(
+            store.get_profile_section("how_i_learn").unwrap(),
+            "demands proof"
+        );
+    }
+
+    #[test]
+    fn merge_appends_without_clobbering_and_dedupes() {
+        let store = Store::open_in_memory("d").unwrap();
+        store
+            .set_profile_section("how_i_learn", "demands proof")
+            .unwrap();
+        store
+            .merge_profile_section("how_i_learn", "thinks in dialogue")
+            .unwrap();
+        assert_eq!(
+            store.get_profile_section("how_i_learn").unwrap(),
+            "demands proof\nthinks in dialogue",
+            "the prior observation is kept, the new one appended"
+        );
+        // re-merging something already present is a no-op (no duplicate line)
+        store
+            .merge_profile_section("how_i_learn", "demands proof")
+            .unwrap();
+        assert_eq!(
+            store.get_profile_section("how_i_learn").unwrap(),
+            "demands proof\nthinks in dialogue"
+        );
+    }
+
+    #[test]
+    fn merge_blank_addition_is_a_noop() {
+        let store = Store::open_in_memory("d").unwrap();
+        store.set_profile_section("frictions", "x").unwrap();
+        store.merge_profile_section("frictions", "   ").unwrap();
+        assert_eq!(store.get_profile_section("frictions").unwrap(), "x");
     }
 }

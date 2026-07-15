@@ -9,6 +9,10 @@ pub const IDENTITY: &str = include_str!("../../prompts/identity.md");
 pub const CONDENSATION: &str = include_str!("../../prompts/condensation.md");
 pub const INITIATION: &str = include_str!("../../prompts/initiation.md");
 pub const JUDGE: &str = include_str!("../../prompts/judge.md");
+/// The close-only distillation prompt (`Conductor::condense`): asks the
+/// Mystagogue to look back over the whole exchange and set down the durable
+/// session note + any warranted profile refinements.
+pub const CONDENSE: &str = include_str!("../../prompts/condense.md");
 
 pub const MASK_PHILOSOPHUS: &str = include_str!("../../prompts/masks/philosophus.md");
 pub const MASK_ADAMAS: &str = include_str!("../../prompts/masks/adamas.md");

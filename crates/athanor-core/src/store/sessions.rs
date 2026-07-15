@@ -115,6 +115,41 @@ impl Store {
         rows.collect::<Result<Vec<_>, _>>().map_err(CoreError::from)
     }
 
+    /// A single session by id — the reading view reads the full role-tagged
+    /// transcript off this row. Public (unlike `get_session`) because the FFI
+    /// bridge, a separate crate, projects it into `SessionDetail`.
+    pub fn session_by_id(&self, id: &str) -> Result<Session, CoreError> {
+        self.get_session(id)
+    }
+
+    /// Closed sessions on a thread, newest first — a thread's detail lists every
+    /// fire tended on it. Only `closed` sessions (a real, landed history);
+    /// abandoned/open sessions have no settled record to show.
+    pub fn sessions_for_thread(&self, thread_id: &str) -> Result<Vec<Session>, CoreError> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {SESSION_COLS} FROM sessions
+             WHERE thread_id = ?1 AND state = 'closed'
+             ORDER BY created_at DESC, id DESC"
+        ))?;
+        let rows = stmt.query_map(params![thread_id], session_from_row)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(CoreError::from)
+    }
+
+    /// The most recent closed sessions regardless of thread — the "past fires"
+    /// surface (including threadless ones: initiation, bare tend-the-fire opens).
+    pub fn recent_sessions(&self, limit: usize) -> Result<Vec<Session>, CoreError> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {SESSION_COLS} FROM sessions
+             WHERE state = 'closed'
+             ORDER BY created_at DESC, id DESC
+             LIMIT ?1"
+        ))?;
+        let rows = stmt.query_map(params![limit as i64], session_from_row)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(CoreError::from)
+    }
+
     pub(crate) fn get_session(&self, id: &str) -> Result<Session, CoreError> {
         self.conn()
             .query_row(
@@ -166,5 +201,68 @@ mod tests {
         store.append_transcript(&session.id, "world").unwrap();
         let reloaded = store.get_session(&session.id).unwrap();
         assert_eq!(reloaded.transcript, "hello world");
+    }
+
+    #[test]
+    fn sessions_for_thread_returns_only_closed_newest_first() {
+        let store = Store::open_in_memory("d")
+            .unwrap()
+            .with_clock(std::sync::Arc::new(|| 1000));
+        let thread = store.open_thread("why?", None, None).unwrap();
+        // an open session on the thread — excluded (no settled record)
+        store
+            .create_session(Some(&thread.id), "philosophus", "explain")
+            .unwrap();
+        // two closed sessions on the thread
+        let older = store
+            .create_session(Some(&thread.id), "philosophus", "explain")
+            .unwrap();
+        store.mark_session_closed(&older.id).unwrap();
+        let store = store.with_clock(std::sync::Arc::new(|| 2000));
+        let newer = store
+            .create_session(Some(&thread.id), "adamas", "challenge")
+            .unwrap();
+        store.mark_session_closed(&newer.id).unwrap();
+        // a closed session on a DIFFERENT thread — excluded
+        let other_thread = store.open_thread("other", None, None).unwrap();
+        let other = store
+            .create_session(Some(&other_thread.id), "solve", "design")
+            .unwrap();
+        store.mark_session_closed(&other.id).unwrap();
+
+        let ids: Vec<String> = store
+            .sessions_for_thread(&thread.id)
+            .unwrap()
+            .into_iter()
+            .map(|s| s.id)
+            .collect();
+        assert_eq!(ids, vec![newer.id, older.id], "closed only, newest first");
+    }
+
+    #[test]
+    fn recent_sessions_spans_threads_and_threadless_newest_first() {
+        let store = Store::open_in_memory("d")
+            .unwrap()
+            .with_clock(std::sync::Arc::new(|| 10));
+        let threadless = store
+            .create_session(None, "philosophus", "explain")
+            .unwrap();
+        store.mark_session_closed(&threadless.id).unwrap();
+        let store = store.with_clock(std::sync::Arc::new(|| 20));
+        let thread = store.open_thread("q", None, None).unwrap();
+        let onthread = store
+            .create_session(Some(&thread.id), "adamas", "challenge")
+            .unwrap();
+        store.mark_session_closed(&onthread.id).unwrap();
+        // an open one is excluded
+        store.create_session(None, "solve", "design").unwrap();
+
+        let ids: Vec<String> = store
+            .recent_sessions(10)
+            .unwrap()
+            .into_iter()
+            .map(|s| s.id)
+            .collect();
+        assert_eq!(ids, vec![onthread.id, threadless.id]);
     }
 }

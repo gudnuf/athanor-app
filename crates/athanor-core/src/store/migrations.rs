@@ -60,6 +60,21 @@ pub(crate) const MIGRATIONS: &[&str] = &[
       started_at INTEGER NOT NULL, ended_at INTEGER,
       created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, device_id TEXT NOT NULL);
     "#,
+    // v2: session notes — the richer, multi-sentence distillation the
+    // Mystagogue writes when a session CONDENSES on close (what moved, what
+    // opened, what the learner circled). Distinct from `traces` (the one-line
+    // "last time" memory the next session's prompt injects): notes are the
+    // durable residue shown in session history + a thread's detail, carry the
+    // session's focal thread for that thread-scoped read, and are append-only
+    // like realizations/tending (a session's settled note is never rewritten).
+    r#"
+    CREATE TABLE session_notes (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES sessions(id),
+      thread_id TEXT REFERENCES threads(id),
+      note TEXT NOT NULL,
+      created_at INTEGER NOT NULL, device_id TEXT NOT NULL);
+    "#,
 ];
 // NOTE: threads.parent_realization_id and realizations.child_thread_id are a
 // deliberate FK cycle — SQLite does not enforce FK order within a CREATE, and
@@ -113,12 +128,31 @@ mod tests {
             .query_row(
                 "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN
                  ('domains','pull_notes','threads','realizations','realization_domains',
-                  'tending','profile','traces','kindling','correspondences','sessions')",
+                  'tending','profile','traces','kindling','correspondences','sessions',
+                  'session_notes')",
                 [],
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(count, 11, "all v1 tables created");
+        assert_eq!(count, 12, "all v1 + v2 tables created");
+    }
+
+    #[test]
+    fn session_notes_table_exists_after_migrate() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let version: i64 = conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(version as usize, MIGRATIONS.len(), "migrated to v2");
+        let cols: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('session_notes')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(cols, 6, "session_notes has its six columns");
     }
 
     #[test]

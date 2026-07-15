@@ -18,6 +18,24 @@ impl Store {
         Ok(())
     }
 
+    /// The most recent trace for ONE session — the one-line fallback the
+    /// session-history excerpt shows when a session has no richer note (e.g.
+    /// condensation fell through). `None` when the session wrote no trace.
+    pub fn session_trace(&self, session_id: &str) -> Result<Option<String>, CoreError> {
+        self.conn()
+            .query_row(
+                "SELECT text FROM traces WHERE session_id = ?1
+                 ORDER BY created_at DESC, id DESC LIMIT 1",
+                params![session_id],
+                |r| r.get(0),
+            )
+            .map(Some)
+            .or_else(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(CoreError::Sqlite(other)),
+            })
+    }
+
     /// Most recently created trace's text, or None if no traces yet.
     pub fn last_trace(&self) -> Result<Option<String>, CoreError> {
         self.conn()
@@ -51,6 +69,27 @@ mod tests {
         store.add_trace(&session.id, "first").unwrap();
         store.add_trace(&session.id, "second").unwrap();
         assert_eq!(store.last_trace().unwrap(), Some("second".to_string()));
+    }
+
+    #[test]
+    fn session_trace_scopes_to_one_session() {
+        let store = Store::open_in_memory("d").unwrap();
+        let a = store
+            .create_session(None, "philosophus", "explain")
+            .unwrap();
+        let b = store.create_session(None, "adamas", "challenge").unwrap();
+        store.add_trace(&a.id, "trace for A").unwrap();
+        store.add_trace(&b.id, "trace for B").unwrap();
+        assert_eq!(
+            store.session_trace(&a.id).unwrap(),
+            Some("trace for A".to_string())
+        );
+        assert_eq!(
+            store.session_trace(&b.id).unwrap(),
+            Some("trace for B".to_string())
+        );
+        let c = store.create_session(None, "solve", "design").unwrap();
+        assert_eq!(store.session_trace(&c.id).unwrap(), None);
     }
 
     #[test]

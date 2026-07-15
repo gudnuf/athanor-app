@@ -314,6 +314,152 @@ pub fn assemble_initiation_sections(store: &Store) -> Vec<(&'static str, String)
     initiation_sections(store)
 }
 
+/// Assembles the close-only distillation prompt (`Conductor::condense`):
+/// identity (so the voice holds) + the profile injection (so the model refines
+/// what's known rather than repeating it) + the condense instructions. Returns
+/// just the system prompt — the dialogue itself is fed as the turn history.
+pub fn assemble_condensation(store: &Store, thread_id: Option<&str>) -> String {
+    [
+        assets::IDENTITY.trim_end().to_string(),
+        profile_injection(store, thread_id, DEFAULT_SESSION_BUDGET_MIN),
+        assets::CONDENSE.trim_end().to_string(),
+    ]
+    .join(SEP)
+}
+
+/// The parsed result of a condensation turn: the durable session note plus any
+/// `(section, addition)` profile refinements to MERGE (never clobber).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Condensation {
+    pub note: Option<String>,
+    pub profile_updates: Vec<(String, String)>,
+}
+
+/// The profile sections a condensation is allowed to refine (the ones the
+/// prompt names). An unrecognized `PROFILE <x>:` block is ignored rather than
+/// inventing a junk section.
+const CONDENSE_PROFILE_SECTIONS: [&str; 6] = [
+    "how_i_learn",
+    "frictions",
+    "domains",
+    "pulls",
+    "working_history",
+    "name",
+];
+
+/// Parses a condensation turn's plain-text output (see `prompts/condense.md`).
+/// Liberal by design: recognizes `NOTE:` and `PROFILE <section>:` labels
+/// (case-insensitive), lets a block run across continuation lines, and — if the
+/// model emitted no `NOTE:` label at all but did say something — falls back to
+/// treating the whole reply as the note. A `PROFILE` block whose value is empty
+/// or is just the instructional parenthetical (`(only if …)`) is dropped.
+pub fn parse_condensation(text: &str) -> Condensation {
+    #[derive(Clone)]
+    enum Target {
+        None,
+        Note,
+        Profile(String),
+    }
+
+    let mut note_lines: Vec<String> = Vec::new();
+    let mut profiles: Vec<(String, Vec<String>)> = Vec::new();
+    let mut target = Target::None;
+    let mut saw_note_label = false;
+
+    let strip_label = |line: &str, label: &str| -> Option<String> {
+        let trimmed = line.trim_start();
+        let lower = trimmed.to_ascii_lowercase();
+        if lower.starts_with(label) {
+            Some(trimmed[label.len()..].trim_start().to_string())
+        } else {
+            None
+        }
+    };
+
+    for line in text.lines() {
+        if let Some(rest) = strip_label(line, "note:") {
+            saw_note_label = true;
+            target = Target::Note;
+            if !rest.trim().is_empty() {
+                note_lines.push(rest);
+            }
+            continue;
+        }
+        // `PROFILE <section>: value`
+        let trimmed = line.trim_start();
+        if trimmed.to_ascii_lowercase().starts_with("profile ") {
+            if let Some(colon) = trimmed.find(':') {
+                let section = trimmed[7..colon].trim().to_ascii_lowercase();
+                let value = trimmed[colon + 1..].trim().to_string();
+                if CONDENSE_PROFILE_SECTIONS.contains(&section.as_str()) {
+                    profiles.push((
+                        section,
+                        if value.is_empty() {
+                            vec![]
+                        } else {
+                            vec![value]
+                        },
+                    ));
+                    target = Target::Profile(profiles.last().unwrap().0.clone());
+                } else {
+                    target = Target::None;
+                }
+                continue;
+            }
+        }
+        // A continuation line for whatever block we're in.
+        match &target {
+            Target::Note => note_lines.push(line.to_string()),
+            Target::Profile(section) => {
+                if let Some((_, lines)) = profiles.iter_mut().rev().find(|(s, _)| s == section) {
+                    lines.push(line.to_string());
+                }
+            }
+            Target::None => {}
+        }
+    }
+
+    let join_clean = |lines: &[String]| -> String { lines.join("\n").trim().to_string() };
+
+    // A profile value that's empty or an instructional parenthetical is dropped.
+    let is_placeholder = |v: &str| v.is_empty() || v.starts_with('(');
+
+    let profile_updates: Vec<(String, String)> = profiles
+        .iter()
+        .filter_map(|(section, lines)| {
+            let value = join_clean(lines);
+            if is_placeholder(&value) {
+                None
+            } else {
+                Some((section.clone(), value))
+            }
+        })
+        .collect();
+
+    let note = if saw_note_label {
+        let n = join_clean(&note_lines);
+        if n.is_empty() {
+            None
+        } else {
+            Some(n)
+        }
+    } else {
+        // No NOTE: label — liberal fallback: the whole reply IS the note, unless
+        // it was only profile lines / empty.
+        let whole = text.trim();
+        if whole.is_empty() || !profile_updates.is_empty() {
+            None
+        } else {
+            Some(whole.to_string())
+        }
+    };
+
+    Condensation {
+        note,
+        profile_updates,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -440,6 +586,68 @@ mod tests {
         assert_eq!(plan.thread_id, None);
         // deterministic
         assert_eq!(*p, assemble_initiation(&store).system_prompt);
+    }
+
+    #[test]
+    fn parse_condensation_extracts_note_and_warranted_profiles() {
+        let out = "NOTE: The learner circled whether forgetting costs energy, then \
+                   named erasure as dissipation in their own words.\n\
+                   PROFILE how_i_learn: reaches conviction by restating in their own terms\n\
+                   PROFILE frictions: (only if a real recurring friction surfaced)";
+        let c = parse_condensation(out);
+        assert!(c.note.unwrap().contains("erasure as dissipation"));
+        // the placeholder-parenthetical frictions line is dropped; only the real
+        // how_i_learn refinement survives.
+        assert_eq!(
+            c.profile_updates,
+            vec![(
+                "how_i_learn".to_string(),
+                "reaches conviction by restating in their own terms".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn parse_condensation_multiline_note() {
+        let out = "NOTE: first sentence.\nsecond sentence that wrapped.\n";
+        let c = parse_condensation(out);
+        assert_eq!(
+            c.note.unwrap(),
+            "first sentence.\nsecond sentence that wrapped."
+        );
+    }
+
+    #[test]
+    fn parse_condensation_falls_back_to_whole_text_without_labels() {
+        let c = parse_condensation("just a plain distillation with no labels at all");
+        assert_eq!(
+            c.note.unwrap(),
+            "just a plain distillation with no labels at all"
+        );
+        assert!(c.profile_updates.is_empty());
+    }
+
+    #[test]
+    fn parse_condensation_empty_yields_nothing() {
+        let c = parse_condensation("   \n  ");
+        assert_eq!(c, Condensation::default());
+    }
+
+    #[test]
+    fn parse_condensation_ignores_unknown_profile_section() {
+        let out = "NOTE: something moved.\nPROFILE mood: cranky";
+        let c = parse_condensation(out);
+        assert_eq!(c.note.unwrap(), "something moved.");
+        assert!(c.profile_updates.is_empty(), "unknown section dropped");
+    }
+
+    #[test]
+    fn assemble_condensation_layers_identity_profile_and_instructions() {
+        let (store, tid) = seeded_store();
+        let sys = assemble_condensation(&store, Some(&tid));
+        assert!(sys.contains("The Mystagogue — Core Identity"));
+        assert!(sys.contains("Closing the session — distill what remains"));
+        assert!(sys.contains("how_they_learn: dialogue-driven; demands proof"));
     }
 
     #[test]
