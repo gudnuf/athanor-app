@@ -50,14 +50,23 @@ pub struct TierConfig {
 /// Builds the engine seam implementation for a `(key, tier)` pair. With the
 /// `goose` feature AND a key present → the real `GooseEngine`; otherwise a
 /// hermetic `MockEngine` demo (scripted-updates — see `demo_engine`).
+/// `data_root` is the app's data directory (the parent of `db_path`); the real
+/// `GooseEngine` uses it to steer goose's session/config/state dirs into the iOS
+/// sandbox via `GOOSE_PATH_ROOT`, so goose never touches the un-writable
+/// `$HOME/Library/Application Support/Block/goose` path that panics on device.
 #[cfg_attr(not(feature = "goose"), allow(unused_variables))]
-fn build_engine(anthropic_key: Option<String>, tier: &TierConfig) -> Arc<dyn MystagogueEngine> {
+fn build_engine(
+    anthropic_key: Option<String>,
+    tier: &TierConfig,
+    data_root: Option<std::path::PathBuf>,
+) -> Arc<dyn MystagogueEngine> {
     #[cfg(feature = "goose")]
     {
         if let Some(key) = anthropic_key {
             return Arc::new(athanor_core::engine::GooseEngine::new(
                 key,
                 tier.model.clone(),
+                data_root,
             ));
         }
     }
@@ -107,11 +116,17 @@ impl AthanorEngine {
     ) -> Result<Arc<Self>, EngineError> {
         let store =
             Store::open(&db_path, "device").map_err(|e| EngineError::Store(e.to_string()))?;
+        // The app's data directory: the parent of the store path. The real
+        // engine derives `GOOSE_PATH_ROOT` from this so goose's dirs land inside
+        // the iOS sandbox (see `build_engine`).
+        let data_root = std::path::Path::new(&db_path)
+            .parent()
+            .map(std::path::Path::to_path_buf);
         let runtime = Arc::new(
             tokio::runtime::Runtime::new().map_err(|e| EngineError::Runtime(e.to_string()))?,
         );
         let runtime_handle = runtime.handle().clone();
-        let engine = build_engine(anthropic_key, &tier);
+        let engine = build_engine(anthropic_key, &tier, data_root);
         Ok(Arc::new(AthanorEngine {
             store: Arc::new(store),
             engine,

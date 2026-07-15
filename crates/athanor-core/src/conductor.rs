@@ -935,7 +935,7 @@ mod tests {
         let store = store_arc();
         let mut conductor =
             Conductor::begin(Arc::clone(&store), "philosophus", "explain", None).unwrap();
-        let engine = crate::engine::GooseEngine::new(key, None);
+        let engine = crate::engine::GooseEngine::new(key, None, None);
 
         let mut turn1 = String::new();
         conductor

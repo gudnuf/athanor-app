@@ -25,6 +25,7 @@ use super::{
     AcpPrompt, AcpRole, AcpToolCall, AcpUpdate, EngineError, MystagogueEngine, ToolDispatch,
 };
 use async_trait::async_trait;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use futures::StreamExt;
@@ -57,7 +58,28 @@ impl GooseEngine {
     /// Construct a `GooseEngine`. `anthropic_api_key` is injected by the caller;
     /// `model` defaults to goose's Anthropic default (`claude-sonnet-4-5`) when
     /// `None`.
-    pub fn new(anthropic_api_key: String, model: Option<String>) -> Self {
+    ///
+    /// `data_root` is the app's real data directory (the parent of the on-device
+    /// store). When provided, it steers goose's session/config/state dirs into
+    /// the iOS sandbox by setting `GOOSE_PATH_ROOT` to `<data_root>/goose` — but
+    /// ONLY if the env var is unset (a dev/CLI user may point it elsewhere, and
+    /// their choice must survive). This MUST run before any goose code, because
+    /// goose derives all its dirs from lazy statics that read `GOOSE_PATH_ROOT`
+    /// FIRST (see goose `config/paths.rs::get_dir`); without it, goose falls back
+    /// to the etcetera home strategy (`$HOME/Library/Application Support/Block/
+    /// goose`) and `create_dir_all().expect()` PANICS with PermissionDenied on a
+    /// real device (simulators mask it). This is the on-device first-live-turn
+    /// crash — the whole reason this parameter exists.
+    pub fn new(
+        anthropic_api_key: String,
+        model: Option<String>,
+        data_root: Option<PathBuf>,
+    ) -> Self {
+        if let Some(root) = data_root {
+            if std::env::var_os("GOOSE_PATH_ROOT").is_none() {
+                std::env::set_var("GOOSE_PATH_ROOT", root.join("goose"));
+            }
+        }
         Self {
             anthropic_api_key,
             model: model.unwrap_or_else(|| ANTHROPIC_DEFAULT_MODEL.to_string()),
@@ -374,7 +396,11 @@ mod tests {
     /// terminal text → `TurnComplete`. No network.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn goose_engine_frontend_tool_round_trip() {
-        let engine = GooseEngine::new("unused-in-canned-path".into(), Some("canned-model".into()));
+        let engine = GooseEngine::new(
+            "unused-in-canned-path".into(),
+            Some("canned-model".into()),
+            None,
+        );
         let provider: Arc<dyn Provider> = Arc::new(CannedProvider);
         let dispatch = RecordingDispatch::default();
 
@@ -454,7 +480,11 @@ mod tests {
     /// live multi-turn session sees what it already said.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn goose_engine_seeds_prior_turns_with_roles_preserved() {
-        let engine = GooseEngine::new("unused-in-canned-path".into(), Some("canned-model".into()));
+        let engine = GooseEngine::new(
+            "unused-in-canned-path".into(),
+            Some("canned-model".into()),
+            None,
+        );
         let provider = Arc::new(RecordingProvider::default());
         let dispatch = RecordingDispatch::default();
 
@@ -544,7 +574,11 @@ mod tests {
     /// the turn.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn goose_engine_errors_when_prompt_does_not_end_on_a_learner_turn() {
-        let engine = GooseEngine::new("unused-in-canned-path".into(), Some("canned-model".into()));
+        let engine = GooseEngine::new(
+            "unused-in-canned-path".into(),
+            Some("canned-model".into()),
+            None,
+        );
         let provider: Arc<dyn Provider> = Arc::new(RecordingProvider::default());
         let dispatch = RecordingDispatch::default();
 
@@ -573,6 +607,47 @@ mod tests {
         );
     }
 
+    /// The on-device sandbox fix: `GooseEngine::new` steers goose's paths into
+    /// the app's data dir by setting `GOOSE_PATH_ROOT` to `<data_root>/goose`
+    /// when the env var is unset — and NEVER clobbers a pre-existing value.
+    /// Both cases live in one test because `GOOSE_PATH_ROOT` is process-global;
+    /// splitting them would race under the parallel test runner. Saves and
+    /// restores whatever the ambient value was so the suite is left untouched.
+    #[test]
+    fn goose_engine_sets_path_root_beside_the_db_only_when_unset() {
+        let saved = std::env::var_os("GOOSE_PATH_ROOT");
+
+        // Case 1 — unset: the env var derives from the passed data root and
+        // lands at `<data_root>/goose`, beside the app's store.
+        std::env::remove_var("GOOSE_PATH_ROOT");
+        let data_root = std::path::PathBuf::from("/var/mobile/Containers/.../Documents");
+        let _ = GooseEngine::new("k".into(), None, Some(data_root.clone()));
+        let got = std::env::var("GOOSE_PATH_ROOT").expect("path root must be set when unset");
+        assert!(
+            got.ends_with("/goose"),
+            "GOOSE_PATH_ROOT must end with /goose: {got}"
+        );
+        assert_eq!(
+            std::path::Path::new(&got),
+            data_root.join("goose"),
+            "GOOSE_PATH_ROOT sits beside the db (under the app data root)"
+        );
+
+        // Case 2 — already set: a dev/CLI user's own value is preserved.
+        std::env::set_var("GOOSE_PATH_ROOT", "/dev/chosen/root");
+        let _ = GooseEngine::new("k".into(), None, Some(data_root));
+        assert_eq!(
+            std::env::var("GOOSE_PATH_ROOT").unwrap(),
+            "/dev/chosen/root",
+            "a pre-existing GOOSE_PATH_ROOT must survive untouched"
+        );
+
+        match saved {
+            Some(v) => std::env::set_var("GOOSE_PATH_ROOT", v),
+            None => std::env::remove_var("GOOSE_PATH_ROOT"),
+        }
+    }
+
     /// Live Anthropic round-trip. Ignored by default; run explicitly with a key:
     /// `ANTHROPIC_API_KEY=… cargo test -p athanor-core --features goose -- --ignored`.
     /// Skips gracefully (passes) when the key is unset.
@@ -584,7 +659,7 @@ mod tests {
             return;
         };
 
-        let engine = GooseEngine::new(key, None);
+        let engine = GooseEngine::new(key, None, None);
         let dispatch = RecordingDispatch::default();
         let prompt = AcpPrompt {
             system: "You are a terse assistant. Answer in one short sentence.".into(),
