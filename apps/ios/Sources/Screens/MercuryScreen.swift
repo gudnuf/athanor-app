@@ -33,7 +33,7 @@ struct MercuryScreen: View {
 
     /// The "past fires" list — recent closed sessions regardless of thread, so
     /// threadless ones (initiation, bare tend-the-fire opens) are reachable too.
-    private var pastFires: [SessionSummary] { model.engine.recentSessions(limit: 12) }
+    private var pastFires: [SessionSummary] { model.engine.recentSessions(limit: 12, offset: 0) }
 
     var body: some View {
         // A NavigationStack so a thread row can push into what's behind it — the

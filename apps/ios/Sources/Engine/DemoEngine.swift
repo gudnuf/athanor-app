@@ -184,7 +184,7 @@ final class DemoEngine: AthanorEngineProtocol {
 
     private var summaries: [SessionSummary] {
         Self.seededSessions
-            .map { SessionSummary(id: $0.id, threadId: $0.threadId, date: $0.date, mask: $0.mask, mode: $0.mode, excerpt: $0.note ?? "") }
+            .map { SessionSummary(id: $0.id, threadId: $0.threadId, date: $0.date, endedAt: $0.date, mask: $0.mask, mode: $0.mode, excerpt: $0.note ?? "") }
             .sorted { $0.date > $1.date }
     }
 
@@ -227,6 +227,20 @@ final class DemoEngine: AthanorEngineProtocol {
         DemoTurn(reply: "Good. We'll find out together whether that's sulfur or just noise.", register: .quick),
     ]
 
+    // A scripted stand-in for the real `recall` tool (proven in athanor-core
+    // tests): when the learner asks "what was I saying about…", the Mystagogue
+    // quotes their OWN past words back — verbatim from the seeded s-1 transcript
+    // above — and pushes from there. Gated by the `recall-demo=1` QA arg so the
+    // normal demo arc is untouched; the real engine calls the tool for real.
+    private static let recallTurns: [DemoTurn] = [
+        DemoTurn(
+            reply: "You asked what you'd said about that correspondence. Here are your own words, from a fire two days back: \u{201C}Both are about alignment. Fields line up; breath and attention line up.\u{201D} And then, near the end: \u{201C}I don't have one yet. I think I've been collecting the resemblance, not using it.\u{201D} So we won't re-collect it. What prediction would make the resemblance load-bearing?",
+            register: .serif
+        ),
+    ]
+
+    private let recallDemo = ProcessInfo.processInfo.arguments.contains("recall-demo=1")
+
     // MARK: AthanorEngineProtocol
 
     func beginSession(threadId: String?, mask: String?) throws -> AsyncStream<SessionEvent> {
@@ -242,7 +256,7 @@ final class DemoEngine: AthanorEngineProtocol {
     }
 
     func sendTurn(_ text: String) {
-        let script = scriptedInitiation ? Self.initiationTurns : Self.turns
+        let script = recallDemo ? Self.recallTurns : (scriptedInitiation ? Self.initiationTurns : Self.turns)
         guard turnIndex < script.count else {
             continuation?.yield(.turnComplete)
             return
@@ -328,8 +342,12 @@ final class DemoEngine: AthanorEngineProtocol {
         summaries.filter { $0.threadId == threadId }
     }
 
-    func recentSessions(limit: Int) -> [SessionSummary] {
-        Array(summaries.prefix(limit))
+    func recentSessions(limit: Int, offset: Int) -> [SessionSummary] {
+        Array(summaries.dropFirst(offset).prefix(limit))
+    }
+
+    func mostRecentSession() -> SessionSummary? {
+        summaries.first
     }
 
     func sessionDetail(_ id: String) -> SessionDetail? {

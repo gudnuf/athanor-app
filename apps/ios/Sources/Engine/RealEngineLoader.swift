@@ -335,8 +335,14 @@ final class AthanorCoreEngine: AthanorEngineProtocol {
         ((try? engine.sessionsForThread(threadId: threadId)) ?? []).map(Self.summary)
     }
 
-    func recentSessions(limit: Int) -> [SessionSummary] {
-        ((try? engine.recentSessions(limit: UInt32(max(0, limit)))) ?? []).map(Self.summary)
+    func recentSessions(limit: Int, offset: Int) -> [SessionSummary] {
+        ((try? engine.recentSessions(limit: UInt32(max(0, limit)), offset: UInt32(max(0, offset)))) ?? [])
+            .map(Self.summary)
+    }
+
+    func mostRecentSession() -> SessionSummary? {
+        guard let s = try? engine.mostRecentSession() else { return nil }
+        return s.map(Self.summary)
     }
 
     func sessionDetail(_ id: String) -> SessionDetail? {
@@ -363,6 +369,7 @@ final class AthanorCoreEngine: AthanorEngineProtocol {
             id: s.id,
             threadId: s.threadId,
             date: Date(timeIntervalSince1970: Double(s.date)),
+            endedAt: s.endedAt.map { Date(timeIntervalSince1970: Double($0)) },
             mask: s.mask,
             mode: s.mode,
             excerpt: s.excerpt

@@ -139,6 +139,9 @@ struct SessionSummary: Identifiable, Equatable {
     var id: String
     var threadId: String?
     var date: Date
+    /// When the session landed, or nil if it never closed — the resume/
+    /// continuous-chat lane orders and seams on this.
+    var endedAt: Date?
     var mask: String
     var mode: String
     var excerpt: String
@@ -219,8 +222,12 @@ protocol AthanorEngineProtocol: AnyObject {
     /// Closed sessions on a thread, newest first — the thread-detail history.
     func sessions(forThread threadId: String) -> [SessionSummary]
     /// The most recent closed sessions regardless of thread — "past fires"
-    /// (reaches threadless sessions too: initiation, bare opens).
-    func recentSessions(limit: Int) -> [SessionSummary]
+    /// (reaches threadless sessions too: initiation, bare opens). `offset`
+    /// paginates (0 = newest page) for the resume lane's scroll-back.
+    func recentSessions(limit: Int, offset: Int) -> [SessionSummary]
+    /// The single most recent closed session, or nil — the cheap read the
+    /// resume surface reopens from.
+    func mostRecentSession() -> SessionSummary?
     /// One session's full detail (role-tagged transcript + note), or nil if the
     /// id is unknown.
     func sessionDetail(_ id: String) -> SessionDetail?
