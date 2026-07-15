@@ -175,6 +175,12 @@ impl SessionHandle {
         *self.listener.lock().unwrap() = Some(listener);
     }
 
+    /// This session's id — so the shell can read its detail/history back after
+    /// close (e.g. to surface the freshly-condensed note).
+    pub fn session_id(&self) -> String {
+        self.session_id.clone()
+    }
+
     /// The session's current mask id — for the honest header (lane 13).
     pub fn current_mask(&self) -> String {
         mask::current(&self.mask_state).0
@@ -278,13 +284,32 @@ impl SessionHandle {
         finish_or_contain(&listener, &store, &cond, driven);
     }
 
-    /// Lands the session: `close_session` (records tending — the only place
-    /// wisdom advances) + writes the one-line trace. Consumes the conductor.
+    /// Lands the session, in two steps whose ordering is the "nothing is lost"
+    /// contract:
+    /// 1. **Condensation (best-effort).** One final distillation turn through
+    ///    the engine (`Conductor::condense`) writes the durable session note +
+    ///    any profile refinements. Its error — network, key, or even a panic
+    ///    from deep in the engine — is CONTAINED here and discarded: closing is
+    ///    not best-effort, so nothing this step does can stop step 2.
+    /// 2. **Close (always).** `close_session` (records tending — the only place
+    ///    wisdom advances) + the one-line trace. Consumes the conductor.
     pub async fn close(&self, minutes: u32) -> Result<(), EngineError> {
-        let conductor = self
-            .conductor
-            .lock()
-            .await
+        let mut guard = self.conductor.lock().await;
+        // Step 1 — best-effort condensation, panic-contained at the FFI seam so
+        // a fault in the distillation turn can never abort the host app (a
+        // `try!` in the generated Swift) nor prevent the close below.
+        if let Some(conductor) = guard.as_mut() {
+            let driven = AssertUnwindSafe(conductor.condense(self.engine.as_ref()))
+                .catch_unwind()
+                .await;
+            if driven.is_err() {
+                // Drain the hook's capture so a contained condensation panic
+                // doesn't mislabel a later turn's error.
+                let _ = contained_panic_message();
+            }
+        }
+        // Step 2 — the close itself, which ALWAYS runs.
+        let conductor = guard
             .take()
             .ok_or_else(|| EngineError::Session("session already ended".to_string()))?;
         conductor

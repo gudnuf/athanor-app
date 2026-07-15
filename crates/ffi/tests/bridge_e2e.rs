@@ -321,6 +321,109 @@ async fn abandon_returns_the_thread_to_volatile() {
     assert_eq!(store.last_trace().unwrap(), None, "abandon writes no trace");
 }
 
+/// An engine that plays a DIFFERENT scripted reply per `run_turn` call (unlike
+/// `MockEngine`, which drains its whole script on the first turn) — so the
+/// dialogue turn and the close-time condensation turn can each be scripted.
+struct PerCallEngine(Mutex<std::collections::VecDeque<Vec<AcpUpdate>>>);
+
+impl PerCallEngine {
+    fn new(scripts: Vec<Vec<AcpUpdate>>) -> Self {
+        Self(Mutex::new(scripts.into_iter().collect()))
+    }
+}
+
+#[async_trait::async_trait]
+impl MystagogueEngine for PerCallEngine {
+    async fn run_turn(
+        &self,
+        _prompt: AcpPrompt,
+        tools: &dyn ToolDispatch,
+        sink: &mut (dyn FnMut(AcpUpdate) + Send),
+    ) -> Result<(), EngineError> {
+        let script = self.0.lock().unwrap().pop_front().unwrap_or_default();
+        for update in script {
+            if let AcpUpdate::ToolCall(call) = &update {
+                let call = call.clone();
+                sink(update);
+                let result = tools.dispatch(call).await;
+                sink(AcpUpdate::ToolResult(result));
+            } else {
+                sink(update);
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The "nothing is lost" close path, end to end through the bridge: a real
+/// exchange persists BOTH roles to the transcript, the close-time condensation
+/// writes a durable note, and the new read projections surface all of it —
+/// the thread's session history, the full role-tagged transcript, and the
+/// "past fires" recency list.
+#[tokio::test]
+async fn closing_condenses_a_note_and_the_session_reads_round_trip_both_roles() {
+    let store = Arc::new(Store::open_in_memory("dev").unwrap());
+    let thread = store
+        .open_thread("does forgetting cost energy?", None, None)
+        .unwrap();
+
+    let engine = AthanorEngine::with_engine(
+        Arc::clone(&store),
+        Arc::new(PerCallEngine::new(vec![
+            // turn 1 — the Mystagogue's reply
+            vec![
+                AcpUpdate::text_delta("Say what just set."),
+                AcpUpdate::TurnComplete,
+            ],
+            // close — the condensation distillation
+            vec![AcpUpdate::text_delta(
+                "NOTE: The learner circled forgetting and named erasure as dissipation.\n\
+                 PROFILE how_i_learn: reaches conviction by restating in their own words",
+            )],
+        ])),
+    );
+
+    let session = engine
+        .begin_session(Some("philosophus".into()), None, Some(thread.id.clone()))
+        .unwrap();
+    let session_id = session.session_id();
+    session
+        .send_turn("Forgetting costs energy, doesn't it?".into())
+        .await;
+    session.close(15).await.unwrap();
+
+    // The condensation note landed and the profile was merged.
+    assert_eq!(
+        store.session_note(&session_id).unwrap().as_deref(),
+        Some("The learner circled forgetting and named erasure as dissipation.")
+    );
+    assert!(store
+        .get_profile_section("how_i_learn")
+        .unwrap()
+        .contains("restating in their own words"));
+
+    // sessions_for_thread: one closed session, its excerpt is the note.
+    let history = engine.sessions_for_thread(thread.id.clone()).unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].id, session_id);
+    assert_eq!(history[0].mask, "philosophus");
+    assert!(history[0].excerpt.contains("erasure as dissipation"));
+
+    // session_detail: the FULL role-tagged transcript, both sides, oldest first.
+    let detail = engine.session_detail(session_id.clone()).unwrap();
+    assert_eq!(detail.turns.len(), 2, "learner + mystagogue: {detail:?}");
+    assert_eq!(detail.turns[0].role, "learner");
+    assert_eq!(detail.turns[0].text, "Forgetting costs energy, doesn't it?");
+    assert_eq!(detail.turns[1].role, "mystagogue");
+    assert_eq!(detail.turns[1].text, "Say what just set.");
+    assert!(detail.note.unwrap().contains("erasure as dissipation"));
+
+    // recent_sessions: the "past fires" surface reaches it too.
+    let recent = engine.recent_sessions(10).unwrap();
+    assert_eq!(recent.len(), 1);
+    assert_eq!(recent[0].id, session_id);
+}
+
 /// An engine that panics mid-turn — the exact hazard on a real device, where a
 /// Rust panic (e.g. goose's `create_dir_all().expect()` on an un-writable path)
 /// would unwind across the uniffi boundary and abort the host app.

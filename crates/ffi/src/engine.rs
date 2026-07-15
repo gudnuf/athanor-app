@@ -14,7 +14,10 @@ use std::sync::Arc;
 use athanor_core::engine::{AcpUpdate, MockEngine, MystagogueEngine};
 use athanor_core::Store;
 
-use crate::records::{FurnaceState, GrimoireGrain, HomeHeat, OpenThread, TabulaPassage};
+use crate::records::{
+    FurnaceState, GrimoireGrain, HomeHeat, OpenThread, SessionDetail, SessionSummary,
+    TabulaPassage, TranscriptTurn,
+};
 
 /// Errors that cross the FFI boundary as a thrown error rather than a panic
 /// (no panics across FFI). `flat_error`: Swift receives the variant plus its
@@ -202,6 +205,93 @@ impl AthanorEngine {
             .tabula()
             .map(|v| v.into_iter().map(TabulaPassage::from).collect())
             .map_err(|e| EngineError::Read(e.to_string()))
+    }
+
+    /// Closed sessions on a thread, newest first — the thread-detail view's
+    /// history (tapping a Mercury thread shows every fire tended on it).
+    pub fn sessions_for_thread(
+        &self,
+        thread_id: String,
+    ) -> Result<Vec<SessionSummary>, EngineError> {
+        self.store
+            .sessions_for_thread(&thread_id)
+            .map_err(|e| EngineError::Read(e.to_string()))?
+            .into_iter()
+            .map(|s| self.session_summary(s))
+            .collect()
+    }
+
+    /// The most recent closed sessions regardless of thread — the "past fires"
+    /// surface (also reaches threadless sessions: initiation, bare opens).
+    pub fn recent_sessions(&self, limit: u32) -> Result<Vec<SessionSummary>, EngineError> {
+        self.store
+            .recent_sessions(limit as usize)
+            .map_err(|e| EngineError::Read(e.to_string()))?
+            .into_iter()
+            .map(|s| self.session_summary(s))
+            .collect()
+    }
+
+    /// One session's full detail — the role-tagged transcript (both sides) plus
+    /// its condensation note — for the reading view.
+    pub fn session_detail(&self, session_id: String) -> Result<SessionDetail, EngineError> {
+        let session = self
+            .store
+            .session_by_id(&session_id)
+            .map_err(|e| EngineError::Read(e.to_string()))?;
+        let note = self
+            .store
+            .session_note(&session_id)
+            .map_err(|e| EngineError::Read(e.to_string()))?;
+        let turns = athanor_core::transcript::parse(&session.transcript)
+            .into_iter()
+            .map(|t| TranscriptTurn {
+                role: t.role.as_tag().to_string(),
+                text: t.text,
+            })
+            .collect();
+        Ok(SessionDetail {
+            id: session.id,
+            thread_id: session.thread_id,
+            date: session.created_at,
+            mask: session.mask,
+            mode: session.mode,
+            note,
+            turns,
+        })
+    }
+}
+
+impl AthanorEngine {
+    /// Builds a `SessionSummary` for a session row: the excerpt is its
+    /// condensation note if present, else its one-line trace, whitespace-
+    /// collapsed (empty when it left neither). Not exported — a shared helper
+    /// for `sessions_for_thread`/`recent_sessions`.
+    fn session_summary(
+        &self,
+        session: athanor_core::domain::Session,
+    ) -> Result<SessionSummary, EngineError> {
+        let note = self
+            .store
+            .session_note(&session.id)
+            .map_err(|e| EngineError::Read(e.to_string()))?;
+        let excerpt = match note {
+            Some(n) => n,
+            None => self
+                .store
+                .session_trace(&session.id)
+                .map_err(|e| EngineError::Read(e.to_string()))?
+                .unwrap_or_default(),
+        };
+        let excerpt = excerpt.split_whitespace().collect::<Vec<_>>().join(" ");
+        Ok(SessionSummary {
+            id: session.id,
+            thread_id: session.thread_id,
+            date: session.created_at,
+            mask: session.mask,
+            mode: session.mode,
+            excerpt,
+        })
     }
 }
 

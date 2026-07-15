@@ -106,6 +106,44 @@ pub struct TabulaPassage {
     pub kindled_note: Option<String>,
 }
 
+/// One past session in a history list (a thread's fires, or the "past fires"
+/// surface) — enough to show a row and push into the reading view. `excerpt` is
+/// the session's condensation NOTE if it has one, else its one-line trace,
+/// whitespace-collapsed; empty when it left neither.
+#[derive(uniffi::Record, Clone, Debug, PartialEq)]
+pub struct SessionSummary {
+    pub id: String,
+    pub thread_id: Option<String>,
+    /// The session's created_at, epoch seconds (the UI formats the date).
+    pub date: u64,
+    pub mask: String,
+    pub mode: String,
+    pub excerpt: String,
+}
+
+/// One role-tagged turn of a session's full transcript (the reading view).
+#[derive(uniffi::Record, Clone, Debug, PartialEq)]
+pub struct TranscriptTurn {
+    /// `"learner"` or `"mystagogue"` (from `athanor_core::transcript`).
+    pub role: String,
+    pub text: String,
+}
+
+/// A single session's full detail: its role-tagged transcript (both sides) plus
+/// the condensation note, for the transcript reading view.
+#[derive(uniffi::Record, Clone, Debug, PartialEq)]
+pub struct SessionDetail {
+    pub id: String,
+    pub thread_id: Option<String>,
+    pub date: u64,
+    pub mask: String,
+    pub mode: String,
+    /// The condensation residue, if the session distilled one.
+    pub note: Option<String>,
+    /// The full dialogue, oldest-first, both roles.
+    pub turns: Vec<TranscriptTurn>,
+}
+
 impl From<CoreTabulaPassage> for TabulaPassage {
     fn from(p: CoreTabulaPassage) -> Self {
         TabulaPassage {
