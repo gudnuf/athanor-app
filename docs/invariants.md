@@ -36,9 +36,21 @@ this repo. Violating one of these is a bug even if the tests pass.
    acknowledged uncertainty, never a confident invented fact — same spirit as
    the sitewalk "honest gaps" rule, applied to pedagogy instead of paperwork.
 
+## UI doctrine (operator directive, 2026-07-15)
+
+8. **Hidden depth: capability never crowds the surface.** The visible UI
+   stays as clean as it is today; new power lands behind gestures and quiet
+   doors — a tap on a word that's already there, a long-press, a triple-tap,
+   a subtle chip that only appears in context. Existing exemplars: tap the
+   mask name (escape-hatch picker), triple-tap it (dev overlay). A feature
+   that earns a new always-visible button, bar, or menu item needs explicit
+   operator sign-off; the default answer is a hidden affordance. Corollary:
+   hidden ≠ undiscoverable by the owner — each hidden door is recorded in
+   `docs/gestures.md` so the operator can learn the full gesture vocabulary.
+
 ## Secrets
 
-8. **No secret is ever read into agent context, committed, or logged.**
+9. **No secret is ever read into agent context, committed, or logged.**
    `.env` is shell-sourced only. Keys, certs, `.p12`/`.pem`/`.mobileprovision`
    files are gitignored from commit zero (see `.gitignore`) and a secret scan
    runs before any push that touches history.
