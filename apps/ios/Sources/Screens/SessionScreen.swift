@@ -39,6 +39,12 @@ struct SessionScreen: View {
     /// what was already said.
     @State private var sessionError: String?
 
+    /// True while the session is landing on Close: closing CONDENSES the
+    /// conversation (one final distillation turn in core), so the screen shows
+    /// a quiet "condensing" state over the transcript while that settles,
+    /// rather than blinking straight out. Capped so the close always completes.
+    @State private var condensing = false
+
     private static let log = Logger(subsystem: "com.damsac.athanor", category: "session")
 
     /// QA only: a scripted follow-up turn (`debug-turn2=…`) fired once after the
@@ -168,6 +174,14 @@ struct SessionScreen: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Ember.C.ground.ignoresSafeArea())
+        // Closing condenses the conversation — a quiet, still moment over the
+        // transcript while the fire settles what moved (no spinner; the calm IS
+        // the signal). The transcript stays visible beneath the scrim.
+        .overlay {
+            if condensing {
+                CondensingVeil().transition(.opacity)
+            }
+        }
         .sheet(isPresented: $showMaskPicker) {
             MaskPicker(current: currentMask, onChoose: pinMask)
                 .presentationDetents([.height(280)])
@@ -192,6 +206,16 @@ struct SessionScreen: View {
             guard ProcessInfo.processInfo.arguments.contains("mask-picker=1") else { return }
             try? await Task.sleep(for: .milliseconds(900))
             showMaskPicker = true
+        }
+        .task {
+            // QA/screenshot hook only: hold the "condensing" veil up (without
+            // dismissing) so the close-time condensation moment can be captured.
+            // The real close's veil is transient (it dismisses when the session
+            // lands); this stands it still for a screenshot. Never fires on a
+            // normal launch.
+            guard ProcessInfo.processInfo.arguments.contains("hold-condensing=1") else { return }
+            try? await Task.sleep(for: .milliseconds(1200))
+            withAnimation(Ember.Motion.condensation) { condensing = true }
         }
         .task {
             // Screenshot/QA automation hook only (mirrors the same pattern in
@@ -353,9 +377,25 @@ struct SessionScreen: View {
 
     private func close() {
         realBellows?.stop()
+        // Enter the quiet condensing state, then land the session. Closing is
+        // never blocked on a long animation: the condensation is capped and the
+        // screen dismisses when the close settles (or the cap elapses).
+        withAnimation(Ember.Motion.condensation) { condensing = true }
         Task {
-            await model.engine.endSession(abandon: false)
+            await landWithCap()
             onClose()
+        }
+    }
+
+    /// Lands the session (which condenses it in core), but never traps the
+    /// learner: races the close against a cap so a slow/hung distillation still
+    /// lets the screen dismiss — the close completes in core regardless.
+    private func landWithCap() async {
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { await model.engine.endSession(abandon: false) }
+            group.addTask { try? await Task.sleep(for: .seconds(6)) }
+            _ = await group.next()
+            group.cancelAll()
         }
     }
 
@@ -809,6 +849,36 @@ private struct SaltCard: View {
         .padding(16)
         .background(Ember.C.raised, in: RoundedRectangle(cornerRadius: 14))
         .overlay(RoundedRectangle(cornerRadius: 14).stroke(Ember.C.gold.opacity(0.3), lineWidth: 1))
+    }
+}
+
+// MARK: - The condensing moment (on close)
+
+/// The quiet veil shown while a session lands: closing CONDENSES the
+/// conversation (a final distillation in core), so instead of blinking out the
+/// screen holds a still, gold moment — the fire settling what moved — over the
+/// dimmed transcript. No spinner, no motion loop (the stillness is the point);
+/// gold, reserved for condensation, is exactly right here.
+private struct CondensingVeil: View {
+    var body: some View {
+        ZStack {
+            Ember.C.ground.opacity(0.82).ignoresSafeArea()
+            VStack(spacing: 14) {
+                Text(Ember.Glyph.grimoire)
+                    .font(.system(size: 30))
+                    .foregroundStyle(Ember.C.gold)
+                Text("condensing…")
+                    .font(Ember.F.sans(12, weight: .bold))
+                    .tracking(1.6)
+                    .textCase(.uppercase)
+                    .foregroundStyle(Ember.C.gold)
+                Text("letting the fire settle what moved")
+                    .font(Ember.F.serif(15, italic: true))
+                    .foregroundStyle(Ember.C.muted)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(.horizontal, Ember.S.screenPad + 12)
+        }
     }
 }
 

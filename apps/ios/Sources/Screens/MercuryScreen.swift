@@ -31,25 +31,38 @@ struct MercuryScreen: View {
         return salts[pid]
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Mercury")
-                    .font(Ember.F.serif(23, weight: .medium))
-                    .foregroundStyle(Ember.C.ink)
-                Text("what will not be held · \(threads.count) volatile")
-                    .font(Ember.F.sans(13))
-                    .foregroundStyle(Ember.C.muted)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, Ember.S.screenPad)
-            .padding(.top, 12)
-            .padding(.bottom, 14)
-            .overlay(alignment: .bottom) { Ember.C.hairline.frame(height: 1) }
+    /// The "past fires" list — recent closed sessions regardless of thread, so
+    /// threadless ones (initiation, bare tend-the-fire opens) are reachable too.
+    private var pastFires: [SessionSummary] { model.engine.recentSessions(limit: 12) }
 
-            List {
-                ForEach(threads) { thread in
-                    ThreadRow(thread: thread, spiraledFrom: spiraledFrom(thread))
+    var body: some View {
+        // A NavigationStack so a thread row can push into what's behind it — the
+        // thread's detail — and a past fire into its full transcript.
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Mercury")
+                        .font(Ember.F.serif(23, weight: .medium))
+                        .foregroundStyle(Ember.C.ink)
+                    Text("what will not be held · \(threads.count) volatile")
+                        .font(Ember.F.sans(13))
+                        .foregroundStyle(Ember.C.muted)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, Ember.S.screenPad)
+                .padding(.top, 12)
+                .padding(.bottom, 14)
+                .overlay(alignment: .bottom) { Ember.C.hairline.frame(height: 1) }
+
+                List {
+                    ForEach(threads) { thread in
+                        // Tapping a thread opens what's behind it — the question
+                        // in full and every fire tended on it.
+                        NavigationLink {
+                            ThreadDetailScreen(model: model, thread: thread)
+                        } label: {
+                            ThreadRow(thread: thread, spiraledFrom: spiraledFrom(thread))
+                        }
                         .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
                         .listRowBackground(Ember.C.ground)
                         .listRowSeparatorTint(Ember.C.hairline)
@@ -61,13 +74,41 @@ struct MercuryScreen: View {
                             }
                             .tint(Ember.C.raised2)
                         }
+                    }
+
+                    if !pastFires.isEmpty {
+                        Section {
+                            ForEach(pastFires) { session in
+                                NavigationLink {
+                                    TranscriptView(model: model, sessionId: session.id)
+                                } label: {
+                                    SessionRow(session: session)
+                                        .padding(.horizontal, Ember.S.screenPad)
+                                        .padding(.vertical, 8)
+                                }
+                                .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+                                .listRowBackground(Ember.C.ground)
+                                .listRowSeparator(.hidden)
+                            }
+                        } header: {
+                            Text("past fires · nothing lost")
+                                .font(Ember.F.sans(11, weight: .bold))
+                                .tracking(1.1)
+                                .textCase(.uppercase)
+                                .foregroundStyle(Ember.C.mutedDim)
+                        }
+                    }
                 }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .background(Ember.C.ground)
             }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
             .background(Ember.C.ground)
+            // Keep Mercury's own custom header; the empty root nav bar would
+            // otherwise steal vertical space. Pushed screens set their own title.
+            .toolbar(.hidden, for: .navigationBar)
         }
-        .background(Ember.C.ground)
+        .tint(Ember.C.heat)
     }
 }
 

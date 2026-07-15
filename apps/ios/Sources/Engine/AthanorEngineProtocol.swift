@@ -117,6 +117,45 @@ enum ReplyRegister: Equatable {
     case serif
 }
 
+// MARK: - Session history (the "nothing is lost" reads)
+
+/// Who spoke a persisted transcript turn (mirrors core `TranscriptRole`).
+enum TranscriptRole: Equatable {
+    case learner, mystagogue
+}
+
+/// One role-tagged turn of a past session's transcript — the reading view's
+/// unit. `id` is the turn's position in the session (stable within one detail).
+struct TranscriptTurn: Identifiable, Equatable {
+    var id: Int
+    var role: TranscriptRole
+    var text: String
+}
+
+/// A row in a session-history list (a thread's fires, or "past fires"). The
+/// `excerpt` is the session's condensation note if it has one, else its
+/// one-line trace — whatever residue it left.
+struct SessionSummary: Identifiable, Equatable {
+    var id: String
+    var threadId: String?
+    var date: Date
+    var mask: String
+    var mode: String
+    var excerpt: String
+}
+
+/// A single past session's full detail: the role-tagged transcript (both
+/// sides) + its condensation note (the residue), for the reading view.
+struct SessionDetail: Equatable {
+    var id: String
+    var threadId: String?
+    var date: Date
+    var mask: String
+    var mode: String
+    var note: String?
+    var turns: [TranscriptTurn]
+}
+
 /// Streamed session events. Mirrors the plan's C2 `SessionEvent` enum
 /// (`TextDelta`, `ToolCall`, `Condensation`, `TurnComplete`, `Error`) so the
 /// bridge, when it lands, is a thin adapter rather than a redesign.
@@ -175,4 +214,14 @@ protocol AthanorEngineProtocol: AnyObject {
     func grimoire() -> [Realization]
     func mercury() -> [Thread]
     func tabula() -> [TabulaPassage]
+
+    // Session history (the "nothing is lost" reads)
+    /// Closed sessions on a thread, newest first — the thread-detail history.
+    func sessions(forThread threadId: String) -> [SessionSummary]
+    /// The most recent closed sessions regardless of thread — "past fires"
+    /// (reaches threadless sessions too: initiation, bare opens).
+    func recentSessions(limit: Int) -> [SessionSummary]
+    /// One session's full detail (role-tagged transcript + note), or nil if the
+    /// id is unknown.
+    func sessionDetail(_ id: String) -> SessionDetail?
 }

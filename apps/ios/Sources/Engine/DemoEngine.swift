@@ -133,6 +133,61 @@ final class DemoEngine: AthanorEngineProtocol {
                       kindled: false, kindledNote: nil),
     ]
 
+    // MARK: Seeded session history (the "nothing is lost" reads)
+    //
+    // Past fires — role-tagged transcripts + their condensation notes — so the
+    // demo build shows the thread-detail history and the reading view inhabited,
+    // the same shape the real engine projects from session_notes + the stored
+    // transcript. One sits on the ripe thread t-5 (reachable by tapping it in
+    // Mercury); one is threadless (an early tend-the-fire open) so "past fires"
+    // shows a session with no thread too.
+    private static let seededSessions: [SessionDetail] = [
+        SessionDetail(
+            id: "s-1",
+            threadId: "t-5",
+            date: Calendar.current.date(byAdding: .day, value: -2, to: Date())!,
+            mask: "adamas",
+            mode: "challenge",
+            note: "Circled whether the magnetism↔yoga correspondence is load-bearing or "
+                + "decorative. Landed on a test rather than an answer — a real correspondence "
+                + "must yield a prediction you can carry from one domain to the other — and left "
+                + "without fixing salt, which is honest: the thread is still condensing.",
+            turns: [
+                TranscriptTurn(id: 0, role: .learner,
+                    text: "I keep seeing the same shape in magnetism and in yoga. Is that real, or am I forcing a rhyme?"),
+                TranscriptTurn(id: 1, role: .mystagogue,
+                    text: "Say what the shape is first, in your own words — before you decide whether it holds weight."),
+                TranscriptTurn(id: 2, role: .learner,
+                    text: "Both are about alignment. Fields line up; breath and attention line up."),
+                TranscriptTurn(id: 3, role: .mystagogue,
+                    text: "Then the question isn't whether they rhyme — they plainly do — but whether the rhyme is load-bearing. A decorative correspondence you can lift out and lose nothing. A load-bearing one, when you pull it, the whole structure sags. So pull it: what prediction does \u{201C}both are alignment\u{201D} let you make in one domain that you took from the other?"),
+                TranscriptTurn(id: 4, role: .learner,
+                    text: "…I don't have one yet. I think I've been collecting the resemblance, not using it."),
+            ]),
+        SessionDetail(
+            id: "s-0",
+            threadId: nil,
+            date: Calendar.current.date(byAdding: .day, value: -7, to: Date())!,
+            mask: "philosophus",
+            mode: "explain",
+            note: "An early fire with no single thread — mapped the pull toward content-production "
+                + "and named the fear underneath it. Nothing fixed; the point was to find the vein.",
+            turns: [
+                TranscriptTurn(id: 0, role: .learner,
+                    text: "I don't even know what I'm here to work on. Everything feels urgent and nothing feels chosen."),
+                TranscriptTurn(id: 1, role: .mystagogue,
+                    text: "Good — that's a real place to start. Don't pick the important thing. Pick the one you keep circling back to when no one's watching. What is it?"),
+                TranscriptTurn(id: 2, role: .learner,
+                    text: "Whether the thing I make is any good, or whether I've just gotten good at looking like I know."),
+            ]),
+    ]
+
+    private var summaries: [SessionSummary] {
+        Self.seededSessions
+            .map { SessionSummary(id: $0.id, threadId: $0.threadId, date: $0.date, mask: $0.mask, mode: $0.mode, excerpt: $0.note ?? "") }
+            .sorted { $0.date > $1.date }
+    }
+
     // MARK: Canned session script
     //
     // One `DemoTurn` per learner turn. The reply text is streamed as
@@ -268,6 +323,18 @@ final class DemoEngine: AthanorEngineProtocol {
     func grimoire() -> [Realization] { seededGrimoire }
     func mercury() -> [Thread] { seededMercury }
     func tabula() -> [TabulaPassage] { seededTabula }
+
+    func sessions(forThread threadId: String) -> [SessionSummary] {
+        summaries.filter { $0.threadId == threadId }
+    }
+
+    func recentSessions(limit: Int) -> [SessionSummary] {
+        Array(summaries.prefix(limit))
+    }
+
+    func sessionDetail(_ id: String) -> SessionDetail? {
+        Self.seededSessions.first { $0.id == id }
+    }
 
     private func makeStream() -> AsyncStream<SessionEvent> {
         streamTask?.cancel()

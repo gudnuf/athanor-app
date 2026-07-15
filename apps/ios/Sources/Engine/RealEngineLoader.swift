@@ -329,6 +329,46 @@ final class AthanorCoreEngine: AthanorEngineProtocol {
         }
     }
 
+    // MARK: Session history (the "nothing is lost" reads)
+
+    func sessions(forThread threadId: String) -> [SessionSummary] {
+        ((try? engine.sessionsForThread(threadId: threadId)) ?? []).map(Self.summary)
+    }
+
+    func recentSessions(limit: Int) -> [SessionSummary] {
+        ((try? engine.recentSessions(limit: UInt32(max(0, limit)))) ?? []).map(Self.summary)
+    }
+
+    func sessionDetail(_ id: String) -> SessionDetail? {
+        guard let d = try? engine.sessionDetail(sessionId: id) else { return nil }
+        return SessionDetail(
+            id: d.id,
+            threadId: d.threadId,
+            date: Date(timeIntervalSince1970: Double(d.date)),
+            mask: d.mask,
+            mode: d.mode,
+            note: d.note,
+            turns: d.turns.enumerated().map { i, t in
+                TranscriptTurn(
+                    id: i,
+                    role: t.role == "learner" ? .learner : .mystagogue,
+                    text: t.text
+                )
+            }
+        )
+    }
+
+    private static func summary(_ s: AthanorCoreFFI.SessionSummary) -> SessionSummary {
+        SessionSummary(
+            id: s.id,
+            threadId: s.threadId,
+            date: Date(timeIntervalSince1970: Double(s.date)),
+            mask: s.mask,
+            mode: s.mode,
+            excerpt: s.excerpt
+        )
+    }
+
     // MARK: Helpers
 
     private static let dayFormatter: DateFormatter = {
