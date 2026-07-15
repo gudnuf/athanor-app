@@ -291,8 +291,16 @@ jobs:
           # overrides it. Bump this floor only ABOVE anything ever uploaded
           # (TestFlight silently shadows lower versions — factory gotcha d).
           DEFAULT_MARKETING_VERSION=0.1.0
+          # MANUAL signing for the archive (changed 2026-07-15): automatic
+          # cloud signing minted a NEW 'Created via API' Development cert on
+          # the shared team EVERY CI run until the team hit Apple's cert cap
+          # (v1.0.1 failure: 'choose a certificate to revoke'). The runner
+          # already holds the imported Distribution cert + the downloaded
+          # 'Athanor App Store' profile — sign with exactly those, mint nothing.
           BUILD_SETTINGS=(
-            "CODE_SIGN_STYLE=Automatic"
+            "CODE_SIGN_STYLE=Manual"
+            "CODE_SIGN_IDENTITY=Apple Distribution"
+            "PROVISIONING_PROFILE_SPECIFIER=Athanor App Store"
             "DEVELOPMENT_TEAM=$APPLE_TEAM_ID"
             "CURRENT_PROJECT_VERSION=${{ github.run_number }}"
             # project.yml sets CODE_SIGNING_ALLOWED=NO for dev/sim convenience;
@@ -323,10 +331,6 @@ jobs:
               -scheme Athanor \
               -destination 'generic/platform=iOS' \
               -archivePath "$RUNNER_TEMP/Athanor.xcarchive" \
-              -allowProvisioningUpdates \
-              -authenticationKeyID "$ASC_API_KEY_ID" \
-              -authenticationKeyIssuerID "$ASC_API_ISSUER_ID" \
-              -authenticationKeyPath "$RUNNER_TEMP/private_keys/AuthKey.p8" \
               "${BUILD_SETTINGS[@]}" \
               | xcbeautify
           fi
