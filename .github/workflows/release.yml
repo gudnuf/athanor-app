@@ -291,22 +291,19 @@ jobs:
           # overrides it. Bump this floor only ABOVE anything ever uploaded
           # (TestFlight silently shadows lower versions — factory gotcha d).
           DEFAULT_MARKETING_VERSION=0.1.0
-          # MANUAL signing for the archive (changed 2026-07-15): automatic
-          # cloud signing minted a NEW 'Created via API' Development cert on
-          # the shared team EVERY CI run until the team hit Apple's cert cap
-          # (v1.0.1 failure: 'choose a certificate to revoke'). The runner
-          # already holds the imported Distribution cert + the downloaded
-          # 'Athanor App Store' profile — sign with exactly those, mint nothing.
+          # UNSIGNED archive + sign-at-export (v3 of this step, 2026-07-15):
+          # v1: automatic cloud signing minted a dev cert per CI run -> team
+          #     hit Apple's cert cap ('choose a certificate to revoke').
+          # v2: manual CLI settings (PROVISIONING_PROFILE_SPECIFIER) apply to
+          #     EVERY target -> the AthanorCoreFFI package target rejects a
+          #     provisioning profile outright (exit 65).
+          # v3: archive completely unsigned; -exportArchive signs from scratch
+          #     using ExportOptions' manual signingStyle + the imported
+          #     Distribution cert + the downloaded profile. Nothing minted,
+          #     nothing global, package targets untouched.
           BUILD_SETTINGS=(
-            "CODE_SIGN_STYLE=Manual"
-            "CODE_SIGN_IDENTITY=Apple Distribution"
-            "PROVISIONING_PROFILE_SPECIFIER=Athanor App Store"
-            "DEVELOPMENT_TEAM=$APPLE_TEAM_ID"
+            "CODE_SIGNING_ALLOWED=NO"
             "CURRENT_PROJECT_VERSION=${{ github.run_number }}"
-            # project.yml sets CODE_SIGNING_ALLOWED=NO for dev/sim convenience;
-            # force it ON for the distribution archive or xcodebuild silently
-            # produces an UNSIGNED app that fails export/upload.
-            "CODE_SIGNING_ALLOWED=YES"
           )
           if [ -n "$MARKETING_VERSION_OVERRIDE" ]; then
             BUILD_SETTINGS+=("MARKETING_VERSION=$MARKETING_VERSION_OVERRIDE")
