@@ -114,6 +114,12 @@ impl AthanorEngine {
         anthropic_key: Option<String>,
         tier: TierConfig,
     ) -> Result<Arc<Self>, EngineError> {
+        // Install the FFI-seam panic hook once, before any turn can run: a Rust
+        // panic (e.g. from deep inside the embedded engine) is contained at the
+        // bridge and surfaced as an in-band error event instead of unwinding
+        // across the uniffi boundary and aborting the host app.
+        crate::session::install_panic_hook();
+
         let store =
             Store::open(&db_path, "device").map_err(|e| EngineError::Store(e.to_string()))?;
         // The app's data directory: the parent of the store path. The real
@@ -208,6 +214,9 @@ impl AthanorEngine {
     /// `#[cfg(test)]` items would not exist for it to call.
     #[doc(hidden)]
     pub fn with_engine(store: Arc<Store>, engine: Arc<dyn MystagogueEngine>) -> Arc<Self> {
+        // Mirror the production constructor: install the FFI-seam panic hook so
+        // the containment path (and its tests) capture the real fault location.
+        crate::session::install_panic_hook();
         Arc::new(AthanorEngine {
             store,
             engine,

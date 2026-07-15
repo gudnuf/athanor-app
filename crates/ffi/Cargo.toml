@@ -21,10 +21,19 @@ athanor-core = { path = "../athanor-core" }
 stt = { path = "../stt" }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync"] }
+# `FutureExt::catch_unwind` — the FFI-seam panic containment wraps each
+# turn-driving future so a Rust panic becomes an in-band error event instead of
+# unwinding across the uniffi boundary and aborting the host app. Unconditional
+# (ships regardless of the `goose` feature): the containment protects every
+# engine, real or mock.
+futures = "0.3"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
 serde_json = { workspace = true }
+# A panicking mock engine (panic-containment test) implements the async
+# `MystagogueEngine` trait, which is defined with `#[async_trait]`.
+async-trait = { workspace = true }
 
 # Dev-only helper binary that runs `uniffi-bindgen` to generate the Swift
 # bindings from a compiled library. Gated behind a feature so `uniffi`'s `cli`

@@ -11,16 +11,62 @@
 //! - **`Error`** is derived from a `run_turn` that returns `Err` — surfaced,
 //!   never unwound across the FFI boundary.
 
-use std::sync::{Arc, Mutex as StdMutex};
+use std::panic::AssertUnwindSafe;
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 
 use athanor_core::conductor::Conductor;
 use athanor_core::engine::{AcpUpdate, MystagogueEngine};
 use athanor_core::mask::{self, SharedMask};
 use athanor_core::Store;
+use futures::FutureExt;
 use tokio::sync::Mutex as TokioMutex;
 
 use crate::engine::{AthanorEngine, EngineError};
 use crate::events::{ReplyRegister, SessionEvent, SessionEventListener};
+
+/// The last panic's `file:line (message)`, captured by our panic hook so the
+/// unwind-catcher can put the real fault location into the in-band error event
+/// (a caught unwind's payload alone is just the message). Process-global, like
+/// the hook itself; sessions drive turns serially so a captured value belongs to
+/// the turn that just unwound.
+static LAST_PANIC: StdMutex<Option<String>> = StdMutex::new(None);
+static PANIC_HOOK: OnceLock<()> = OnceLock::new();
+
+/// Installs the FFI-seam panic hook exactly once. The hook records the panic's
+/// location + message into `LAST_PANIC` (so a subsequent `catch_unwind` can
+/// surface the exact fault line) and then chains to the previous hook (so
+/// existing logging/backtrace behavior is preserved). Idempotent via `OnceLock`
+/// — safe to call from every `AthanorEngine::new`.
+pub(crate) fn install_panic_hook() {
+    PANIC_HOOK.get_or_init(|| {
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let loc = info
+                .location()
+                .map(|l| format!("{}:{}", l.file(), l.line()))
+                .unwrap_or_else(|| "unknown location".to_string());
+            let msg = info
+                .payload()
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| info.payload().downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "unknown panic".to_string());
+            *LAST_PANIC.lock().unwrap() = Some(format!("{loc}: {msg}"));
+            prev(info);
+        }));
+    });
+}
+
+/// The calm, in-band error message for a contained panic — the exact fault
+/// captured by the hook, or a generic line if (somehow) nothing was recorded.
+fn contained_panic_message() -> String {
+    let detail = LAST_PANIC
+        .lock()
+        .unwrap()
+        .take()
+        .unwrap_or_else(|| "internal fault".to_string());
+    format!("internal fault (contained): {detail}")
+}
 
 /// Default voice/work-mode when the caller doesn't pick one.
 const DEFAULT_MASK: &str = "philosophus";
@@ -183,14 +229,18 @@ impl SessionHandle {
 
         let store = Arc::clone(&self.store);
         let mut cond = CondensationState::default();
-        let result = conductor
-            .run_turn(
-                self.engine.as_ref(),
-                Some(&text),
-                &mut update_sink(&listener, &store, &mut cond),
-            )
-            .await;
-        finish(&listener, &store, &cond, result);
+        // Contain any panic from deep inside the engine at the FFI seam: catch
+        // the unwind here and surface it as an in-band `Error` event rather than
+        // letting it cross the uniffi boundary (a `try!` in the generated Swift)
+        // and abort the host app.
+        let driven = AssertUnwindSafe(conductor.run_turn(
+            self.engine.as_ref(),
+            Some(&text),
+            &mut update_sink(&listener, &store, &mut cond),
+        ))
+        .catch_unwind()
+        .await;
+        finish_or_contain(&listener, &store, &cond, driven);
     }
 
     /// Runs the ritual opening turn (BLOCKER-1 deep fix): the Mystagogue
@@ -218,13 +268,14 @@ impl SessionHandle {
 
         let store = Arc::clone(&self.store);
         let mut cond = CondensationState::default();
-        let result = conductor
-            .open_turn(
-                self.engine.as_ref(),
-                &mut update_sink(&listener, &store, &mut cond),
-            )
-            .await;
-        finish(&listener, &store, &cond, result);
+        // Same panic containment as `send_turn` (see there).
+        let driven = AssertUnwindSafe(conductor.open_turn(
+            self.engine.as_ref(),
+            &mut update_sink(&listener, &store, &mut cond),
+        ))
+        .catch_unwind()
+        .await;
+        finish_or_contain(&listener, &store, &cond, driven);
     }
 
     /// Lands the session: `close_session` (records tending — the only place
@@ -314,23 +365,30 @@ fn update_sink<'a>(
     }
 }
 
-/// Shared tail of `send_turn`/`open`: surfaces an `Error` event (never unwinds
-/// across FFI). The Condensation moment is fired inline from `fix_salt`'s
-/// `ToolResult`, so nothing to do here on success.
-fn finish(
+/// Shared tail of `send_turn`/`open`: reconciles the *caught-unwind* result of
+/// driving a turn. Two failure modes, both surfaced as an in-band `Error` event
+/// (never unwinding across FFI):
+/// - `Ok(Err(e))` — an ordinary `ConductorError` the turn returned;
+/// - `Err(_)` — a panic the engine raised, caught by `catch_unwind`; the exact
+///   fault `file:line` + message come from the panic hook (`LAST_PANIC`).
+///
+/// The Condensation moment is fired inline from `fix_salt`'s `ToolResult`, so
+/// there's nothing to do here on success.
+fn finish_or_contain(
     listener: &Option<Arc<dyn SessionEventListener>>,
     _store: &Store,
     _cond: &CondensationState,
-    result: Result<(), athanor_core::conductor::ConductorError>,
+    result: Result<
+        Result<(), athanor_core::conductor::ConductorError>,
+        Box<dyn std::any::Any + Send>,
+    >,
 ) {
-    if let Err(e) = result {
-        emit(
-            listener,
-            SessionEvent::Error {
-                message: e.to_string(),
-            },
-        );
-    }
+    let message = match result {
+        Ok(Ok(())) => return,
+        Ok(Err(e)) => e.to_string(),
+        Err(_panic) => contained_panic_message(),
+    };
+    emit(listener, SessionEvent::Error { message });
 }
 
 /// Emits the Condensation from `fix_salt`'s own result value

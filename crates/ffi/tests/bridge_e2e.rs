@@ -9,7 +9,9 @@
 use std::sync::{Arc, Mutex};
 
 use athanor_core::domain::ThreadState;
-use athanor_core::engine::{AcpToolCall, AcpUpdate, MockEngine};
+use athanor_core::engine::{
+    AcpPrompt, AcpToolCall, AcpUpdate, EngineError, MockEngine, MystagogueEngine, ToolDispatch,
+};
 use athanor_core::Store;
 use ffi::engine::AthanorEngine;
 use ffi::events::{ReplyRegister, SessionEvent, SessionEventListener};
@@ -317,4 +319,59 @@ async fn abandon_returns_the_thread_to_volatile() {
         "abandon returns the working thread to the volatile pool"
     );
     assert_eq!(store.last_trace().unwrap(), None, "abandon writes no trace");
+}
+
+/// An engine that panics mid-turn — the exact hazard on a real device, where a
+/// Rust panic (e.g. goose's `create_dir_all().expect()` on an un-writable path)
+/// would unwind across the uniffi boundary and abort the host app.
+struct PanickingEngine;
+
+#[async_trait::async_trait]
+impl MystagogueEngine for PanickingEngine {
+    async fn run_turn(
+        &self,
+        _prompt: AcpPrompt,
+        _tools: &dyn ToolDispatch,
+        _sink: &mut (dyn FnMut(AcpUpdate) + Send),
+    ) -> Result<(), EngineError> {
+        panic!("simulated engine fault");
+    }
+}
+
+/// FFI-seam panic containment: a turn whose engine PANICS must surface a calm,
+/// in-band `SessionEvent::Error` — NOT abort the process. If containment
+/// regressed, the panic would unwind through `send_turn` and this test binary
+/// would crash instead of asserting.
+#[tokio::test]
+async fn a_panicking_engine_turn_is_contained_as_an_error_event_not_a_process_abort() {
+    // Both `AthanorEngine::new` and the test `with_engine` install the panic
+    // hook, so the contained fault carries the real message. Route through a
+    // real in-memory store so `send_turn`'s whole path runs.
+    let store = Arc::new(Store::open_in_memory("dev").unwrap());
+    store
+        .open_thread("what breaks at the seam?", None, None)
+        .unwrap();
+    let engine = AthanorEngine::with_engine(Arc::clone(&store), Arc::new(PanickingEngine));
+    let session = engine.begin_session(None, None, None).unwrap();
+
+    let collector = Arc::new(Collector(Mutex::new(Vec::new())));
+    session.set_listener(collector.clone());
+
+    // This call would abort the process if the panic escaped containment.
+    session.send_turn("go".into()).await;
+
+    let events = collector.0.lock().unwrap().clone();
+    let err = events
+        .iter()
+        .find_map(|e| match e {
+            SessionEvent::Error { message } => Some(message.clone()),
+            _ => None,
+        })
+        .expect("the contained panic must surface as an Error event");
+    assert!(
+        err.contains("contained") && err.contains("simulated engine fault"),
+        "the error carries the contained-fault detail: {err:?}"
+    );
+    // The session survives cleanly — it can still be landed.
+    session.close(1).await.unwrap();
 }
