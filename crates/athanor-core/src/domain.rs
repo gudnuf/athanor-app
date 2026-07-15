@@ -139,6 +139,32 @@ pub struct FireState {
     pub recent: Vec<Tending>,
 }
 
+/// A condensation note joined with its session's mask/thread — the durable
+/// residue future sessions read back for continuity (the rich replacement for
+/// the one-line trace).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionNote {
+    pub session_id: String,
+    pub thread_id: Option<String>,
+    pub mask: String,
+    pub note: String,
+    pub created_at: u64,
+}
+
+/// One match from a `recall` search over past sessions' transcripts — an
+/// excerpt (a window around the hit, both roles visible) plus enough
+/// attribution to say WHEN and WHERE the learner said it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecallHit {
+    pub session_id: String,
+    pub created_at: u64,
+    pub mask: String,
+    /// The focal thread's prompt, if the session had one.
+    pub thread_prompt: Option<String>,
+    /// A window of the transcript around the match, role markers intact.
+    pub excerpt: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Session {
     pub id: String,

@@ -138,16 +138,40 @@ impl Store {
 
     /// The most recent closed sessions regardless of thread — the "past fires"
     /// surface (including threadless ones: initiation, bare tend-the-fire opens).
-    pub fn recent_sessions(&self, limit: usize) -> Result<Vec<Session>, CoreError> {
+    /// `offset` paginates (0 = newest page): the follow-on continuous-chat lane
+    /// scrolls back through history a page at a time, so this is limit+offset-able
+    /// against a stable newest-first order.
+    pub fn recent_sessions(&self, limit: usize, offset: usize) -> Result<Vec<Session>, CoreError> {
         let conn = self.conn();
         let mut stmt = conn.prepare(&format!(
             "SELECT {SESSION_COLS} FROM sessions
              WHERE state = 'closed'
              ORDER BY created_at DESC, id DESC
-             LIMIT ?1"
+             LIMIT ?1 OFFSET ?2"
         ))?;
-        let rows = stmt.query_map(params![limit as i64], session_from_row)?;
+        let rows = stmt.query_map(params![limit as i64, offset as i64], session_from_row)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(CoreError::from)
+    }
+
+    /// The single most recent closed session, or `None` if none have landed —
+    /// the cheap read the resume surface uses to reopen where the last fire
+    /// ended.
+    pub fn most_recent_session(&self) -> Result<Option<Session>, CoreError> {
+        self.conn()
+            .query_row(
+                &format!(
+                    "SELECT {SESSION_COLS} FROM sessions
+                     WHERE state = 'closed'
+                     ORDER BY created_at DESC, id DESC LIMIT 1"
+                ),
+                [],
+                session_from_row,
+            )
+            .map(Some)
+            .or_else(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(CoreError::Sqlite(other)),
+            })
     }
 
     pub(crate) fn get_session(&self, id: &str) -> Result<Session, CoreError> {
@@ -258,11 +282,34 @@ mod tests {
         store.create_session(None, "solve", "design").unwrap();
 
         let ids: Vec<String> = store
-            .recent_sessions(10)
+            .recent_sessions(10, 0)
             .unwrap()
             .into_iter()
             .map(|s| s.id)
             .collect();
-        assert_eq!(ids, vec![onthread.id, threadless.id]);
+        assert_eq!(ids, vec![onthread.id.clone(), threadless.id.clone()]);
+
+        // pagination: offset 1 drops the newest, offset past the end is empty.
+        let page2: Vec<String> = store
+            .recent_sessions(10, 1)
+            .unwrap()
+            .into_iter()
+            .map(|s| s.id)
+            .collect();
+        assert_eq!(page2, vec![threadless.id.clone()]);
+        assert!(store.recent_sessions(10, 5).unwrap().is_empty());
+
+        // most_recent_session is the newest closed one.
+        assert_eq!(
+            store.most_recent_session().unwrap().unwrap().id,
+            onthread.id
+        );
+    }
+
+    #[test]
+    fn most_recent_session_is_none_with_no_closed_sessions() {
+        let store = Store::open_in_memory("d").unwrap();
+        store.create_session(None, "solve", "design").unwrap(); // open, not closed
+        assert!(store.most_recent_session().unwrap().is_none());
     }
 }

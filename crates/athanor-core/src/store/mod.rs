@@ -11,6 +11,7 @@ mod domains;
 mod kindling;
 mod profile;
 mod realizations;
+mod recall;
 mod session_notes;
 mod sessions;
 mod tending;

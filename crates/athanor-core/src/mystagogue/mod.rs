@@ -44,6 +44,10 @@ pub struct Mystagogue {
     session_id: Option<String>,
 }
 
+/// How many past-session excerpts `recall` returns at most (bounds prompt cost
+/// for a broad query).
+const RECALL_MAX_HITS: usize = 5;
+
 impl Mystagogue {
     pub fn new(store: Arc<Store>) -> Self {
         Self {
@@ -167,6 +171,34 @@ impl Mystagogue {
         Ok(json!({ "shifted": true, "mask": new_mask, "mode": new_mode }))
     }
 
+    /// Searches past sessions' transcripts for what the learner said — the
+    /// answer to "what was I saying about X?" (the operator's "note stump":
+    /// they ramble, and it must be recoverable later, or it's useless). Returns
+    /// up to `RECALL_MAX_HITS` windowed excerpts, each attributed with the
+    /// session's date, mask, and thread. The CURRENT session is excluded (it's
+    /// already in context).
+    fn recall(&self, query: &str) -> Result<Value, CoreError> {
+        let hits =
+            self.store
+                .search_transcripts(query, self.session_id.as_deref(), RECALL_MAX_HITS)?;
+        let results: Vec<Value> = hits
+            .iter()
+            .map(|h| {
+                json!({
+                    "date": crate::session::today_utc(h.created_at),
+                    "mask": h.mask,
+                    "thread": h.thread_prompt,
+                    "excerpt": h.excerpt,
+                })
+            })
+            .collect();
+        Ok(json!({
+            "query": query,
+            "count": results.len(),
+            "hits": results,
+        }))
+    }
+
     /// The tool specs exposed to the engine for prompt assembly (Task 10).
     /// Names are stable; the JSON schemas describe each tool's arguments.
     pub fn tool_specs() -> Vec<AcpToolSpec> {
@@ -232,6 +264,17 @@ impl Mystagogue {
                         "content": { "type": "string" }
                     },
                     "required": ["section", "content"]
+                }),
+            },
+            AcpToolSpec {
+                name: "recall".into(),
+                json_schema: json!({
+                    "type": "object",
+                    "description": "Search everything the learner has said in PAST sessions for a word or phrase, and get back their own words with when/where they said them. Reach for this the moment the learner asks 'what was I saying about…', 'remind me…', 'didn't I already…', or refers to something earlier you don't have in front of you. Their rambles are kept for exactly this — recover their actual words, then use them.",
+                    "properties": {
+                        "query": { "type": "string", "description": "the word or short phrase to search for across past transcripts" }
+                    },
+                    "required": ["query"]
                 }),
             },
             AcpToolSpec {
@@ -312,6 +355,10 @@ impl Mystagogue {
                 let a: ShiftMaskArgs = serde_json::from_value(args)?;
                 self.shift_mask(&a.mask, a.mode.as_deref())
             }
+            "recall" => {
+                let a: RecallArgs = serde_json::from_value(args)?;
+                self.recall(&a.query)
+            }
             other => Err(CoreError::BadState(format!("unknown tool: {other}"))),
         }
     }
@@ -377,6 +424,11 @@ struct ShiftMaskArgs {
     mask: String,
     #[serde(default)]
     mode: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct RecallArgs {
+    query: String,
 }
 
 #[cfg(test)]
@@ -599,7 +651,7 @@ mod tests {
     }
 
     #[test]
-    fn tool_specs_names_the_seven_tools() {
+    fn tool_specs_names_the_tools() {
         let names: Vec<String> = Mystagogue::tool_specs()
             .into_iter()
             .map(|s| s.name)
@@ -613,9 +665,49 @@ mod tests {
                 "kindle_passage",
                 "weave_domains",
                 "update_memory",
+                "recall",
                 "shift_mask",
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn recall_tool_returns_past_learner_words_excluding_current_session() {
+        use crate::transcript::{format_block, TranscriptRole};
+        let store = Store::open_in_memory("dev").unwrap();
+        // a past, closed session where the learner used a distinctive word
+        let past = store
+            .create_session(None, "philosophus", "explain")
+            .unwrap();
+        let mut t = String::new();
+        t.push_str(&format_block(
+            TranscriptRole::Learner,
+            "The thing I keep circling is grumblewarp — entropy as forgetting.",
+        ));
+        t.push_str(&format_block(TranscriptRole::Mystagogue, "Say more."));
+        store.append_transcript(&past.id, &t).unwrap();
+        store.mark_session_closed(&past.id).unwrap();
+
+        // the CURRENT session (also mentions the word) must be excluded
+        let current = store.create_session(None, "adamas", "challenge").unwrap();
+        store
+            .append_transcript(&current.id, "grumblewarp again, but this is now")
+            .unwrap();
+        let myst = Mystagogue::new(store_arc(store))
+            .with_mask_state(mask::shared("adamas", "challenge"), current.id.clone());
+
+        let res = myst
+            .dispatch(call("recall", json!({ "query": "grumblewarp" })))
+            .await;
+        assert_eq!(
+            res.value["count"], 1,
+            "only the PAST session: {:?}",
+            res.value
+        );
+        let hit = &res.value["hits"][0];
+        assert!(hit["excerpt"].as_str().unwrap().contains("grumblewarp"));
+        assert!(hit["excerpt"].as_str().unwrap().contains("LEARNER"));
+        assert_eq!(hit["mask"], "philosophus");
     }
 
     // ---- shift_mask (lane 13: fluid, Mystagogue-driven mask shifting) ----

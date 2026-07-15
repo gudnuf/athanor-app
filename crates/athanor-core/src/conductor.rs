@@ -387,13 +387,23 @@ impl Conductor {
         if collapsed.is_empty() {
             return "(no assistant text this session)".to_string();
         }
-        if collapsed.chars().count() > TRACE_MAX_CHARS {
-            let mut truncated: String = collapsed.chars().take(TRACE_MAX_CHARS).collect();
-            truncated.push('…');
-            truncated
-        } else {
-            collapsed
+        if collapsed.chars().count() <= TRACE_MAX_CHARS {
+            return collapsed;
         }
+        // Over budget — cap at a SENTENCE boundary, never mid-word/mid-thought
+        // (the field failure: "You said beingness isn't something a…" cut dead).
+        // Prefer the last '.'/'!'/'?' in the window if it's far enough in;
+        // otherwise fall back to the last word boundary with an ellipsis.
+        let head: String = collapsed.chars().take(TRACE_MAX_CHARS).collect();
+        if let Some(idx) = head.rfind(['.', '!', '?']) {
+            if idx >= head.len() / 2 {
+                return head[..=idx].trim_end().to_string();
+            }
+        }
+        if let Some(idx) = head.rfind(' ') {
+            return format!("{}…", head[..idx].trim_end());
+        }
+        format!("{head}…")
     }
 
     /// Runs the condensation pass — one final engine turn against the
@@ -1123,6 +1133,70 @@ mod tests {
         assert!(
             trace.contains("A real reply."),
             "one-line trace still written"
+        );
+    }
+
+    #[tokio::test]
+    async fn condensed_note_is_read_back_into_the_next_sessions_prompt() {
+        // End to end for item 7: session A condenses a note; a NEW conductor
+        // (session B) on the same thread assembles a prompt that CONTAINS that
+        // note — cross-session recall works at the source.
+        let store = store_arc();
+        let thread = store.open_thread("what is beingness?", None, None).unwrap();
+
+        let mut a = Conductor::begin(
+            Arc::clone(&store),
+            "philosophus",
+            "explain",
+            Some(&thread.id),
+        )
+        .unwrap();
+        let engine = MockEngine::new(vec![
+            AcpUpdate::text_delta("Say more."),
+            AcpUpdate::TurnComplete,
+        ]);
+        a.run_turn(
+            &engine,
+            Some("Beingness isn't something a self has; it's what a self IS."),
+            &mut |_| {},
+        )
+        .await
+        .unwrap();
+        let condense_engine = MockEngine::new(vec![AcpUpdate::text_delta(
+            "NOTE: The learner defined beingness as what a self IS, not something the self has.",
+        )]);
+        a.condense(&condense_engine).await.unwrap();
+        a.close(DEFAULT_SESSION_MINUTES).unwrap();
+
+        // Session B opens on the same thread — its assembled prompt carries the note.
+        let b =
+            Conductor::begin(Arc::clone(&store), "adamas", "challenge", Some(&thread.id)).unwrap();
+        let prompt = b.assemble_prompt();
+        assert!(
+            prompt.system.contains("beingness as what a self IS"),
+            "the next session reads back what the learner said about beingness"
+        );
+    }
+
+    #[test]
+    fn synthesize_trace_caps_at_a_sentence_boundary_not_mid_thought() {
+        let store = store_arc();
+        let mut conductor =
+            Conductor::begin(Arc::clone(&store), "philosophus", "explain", None).unwrap();
+        // Build a transcript longer than the cap whose sentence boundary sits
+        // past the halfway point of the window.
+        let long_first = "a".repeat(180);
+        conductor.transcript = format!(
+            "{long_first} lands cleanly here. And then it keeps going well past the cap with more and more words that should be dropped whole rather than cut mid-word."
+        );
+        let trace = conductor.synthesize_trace();
+        assert!(
+            trace.ends_with("lands cleanly here."),
+            "trace ends on a full sentence, no mid-word/ellipsis cut: {trace:?}"
+        );
+        assert!(
+            !trace.contains('…'),
+            "sentence-boundary cap needs no ellipsis"
         );
     }
 

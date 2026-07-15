@@ -21,6 +21,9 @@
 
 pub mod assets;
 
+use std::collections::HashSet;
+
+use crate::domain::SessionNote;
 use crate::store::Store;
 
 /// Default minutes budgeted for a session when the caller doesn't override it
@@ -29,6 +32,23 @@ pub const DEFAULT_SESSION_BUDGET_MIN: u32 = 15;
 
 /// How many ripe threads to surface in the profile injection.
 const RIPE_LIMIT: usize = 3;
+
+/// How many of the session's focal-thread notes to surface first (resume where
+/// the last fire on this thread left off), and how many recent notes overall to
+/// consider, before the char budget trims. Notes are the rich continuity that
+/// replaces leaning on the one-line trace alone.
+const THREAD_NOTES_LIMIT: usize = 3;
+const RECENT_NOTES_LIMIT: usize = 6;
+/// Total characters of session-note text the injection will spend. Sized to
+/// carry a few sessions of real continuity without letting a long run of fires
+/// crowd out the rest of the prompt — a hard ceiling, never a per-note cut
+/// (notes are already brief by construction, so we drop whole notes, never
+/// truncate one mid-sentence — the exact failure the one-line trace showed).
+const NOTES_CHAR_BUDGET: usize = 1400;
+/// Profile sections beyond name/how_i_learn that the condensation pass may
+/// refine and the next session should therefore read back (rendered only when
+/// non-empty, so an untouched profile doesn't bloat the prompt).
+const EXTRA_PROFILE_SECTIONS: [&str; 3] = ["frictions", "pulls", "working_history"];
 
 const SEP: &str = "\n\n---\n\n";
 
@@ -118,6 +138,20 @@ fn profile_injection(store: &Store, focal_thread: Option<&str>, budget_min: u32)
     });
     out.push('\n');
 
+    // Extra profile sections the condensation pass refines (frictions/pulls/
+    // working_history) — rendered only when they carry something, so an
+    // untouched profile reads exactly as before.
+    for section in EXTRA_PROFILE_SECTIONS {
+        let content = store.get_profile_section(section).unwrap_or_default();
+        let content = content.trim();
+        if !content.is_empty() {
+            out.push_str(section);
+            out.push_str(": ");
+            out.push_str(&content.replace('\n', "; "));
+            out.push('\n');
+        }
+    }
+
     out.push_str("active_domains: ");
     if domains.is_empty() {
         out.push_str("(none yet)");
@@ -154,9 +188,60 @@ fn profile_injection(store: &Store, focal_thread: Option<&str>, budget_min: u32)
     }
     out.push('\n');
 
+    // recent_notes: the rich condensation residue from past sessions — what
+    // actually moved, in a few sentences, so "what did I say about X?" is
+    // answerable next time (the one-line trace above is now a fallback, not the
+    // only memory). Focal thread's own notes first (resume where it left off),
+    // then the most recent notes overall, deduped, trimmed to a char budget by
+    // dropping whole notes (never truncating one).
+    out.push_str("recent_notes:\n");
+    let notes = collect_recent_notes(store, focal_thread);
+    if notes.is_empty() {
+        out.push_str("  (none yet — nothing has condensed)\n");
+    } else {
+        let mut used = 0usize;
+        for n in &notes {
+            if used > 0 && used + n.note.len() > NOTES_CHAR_BUDGET {
+                break;
+            }
+            used += n.note.len();
+            let day = crate::session::today_utc(n.created_at);
+            let one_line = n.note.split_whitespace().collect::<Vec<_>>().join(" ");
+            out.push_str(&format!("  - [{day} · {}] {}\n", n.mask, one_line));
+        }
+    }
+
     out.push_str(&format!("session_budget_min: {budget_min}\n"));
 
     out
+}
+
+/// Gathers the session notes for `profile_injection`: the focal thread's own
+/// most-recent notes first (so a threaded session resumes where the last fire
+/// on it left off), then the most recent notes overall, deduped by session so
+/// no note appears twice. Deterministic given store state.
+fn collect_recent_notes(store: &Store, focal_thread: Option<&str>) -> Vec<SessionNote> {
+    let mut notes: Vec<SessionNote> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    if let Some(fid) = focal_thread {
+        for n in store
+            .thread_session_notes(fid, THREAD_NOTES_LIMIT)
+            .unwrap_or_default()
+        {
+            if seen.insert(n.session_id.clone()) {
+                notes.push(n);
+            }
+        }
+    }
+    for n in store
+        .recent_session_notes(RECENT_NOTES_LIMIT)
+        .unwrap_or_default()
+    {
+        if seen.insert(n.session_id.clone()) {
+            notes.push(n);
+        }
+    }
+    notes
 }
 
 fn tool_availability_line() -> String {
@@ -639,6 +724,57 @@ mod tests {
         let c = parse_condensation(out);
         assert_eq!(c.note.unwrap(), "something moved.");
         assert!(c.profile_updates.is_empty(), "unknown section dropped");
+    }
+
+    #[test]
+    fn assembled_prompt_reads_back_recent_session_notes() {
+        // The item-7 fix: a condensed note from a PAST session must appear in a
+        // NEW session's assembled prompt so "what did I say about X?" is
+        // answerable (continuity, not just the one-line trace).
+        let store = Store::open_in_memory("dev").unwrap();
+        let thread = store
+            .open_thread("does forgetting cost energy?", None, None)
+            .unwrap();
+        let past = store
+            .create_session(Some(&thread.id), "philosophus", "explain")
+            .unwrap();
+        store
+            .add_session_note(
+                &past.id,
+                Some(&thread.id),
+                "The learner named erasure as dissipation in their own words.",
+            )
+            .unwrap();
+
+        let p = assemble("adamas", "challenge", Some(&thread.id), &store).system_prompt;
+        assert!(p.contains("recent_notes:"), "notes section present");
+        assert!(
+            p.contains("erasure as dissipation"),
+            "the past note's text is read back into the new prompt:\n{p}"
+        );
+    }
+
+    #[test]
+    fn assembled_prompt_reads_back_condense_refined_profile_sections() {
+        let store = Store::open_in_memory("dev").unwrap();
+        store
+            .set_profile_section("frictions", "avoids committing to a claim until cornered")
+            .unwrap();
+        let p = assemble("adamas", "challenge", None, &store).system_prompt;
+        assert!(
+            p.contains("frictions: avoids committing to a claim until cornered"),
+            "a condense-refined profile section is read back:\n{p}"
+        );
+    }
+
+    #[test]
+    fn empty_store_still_renders_notes_not_knowing_language() {
+        let store = Store::open_in_memory("dev").unwrap();
+        let p = assemble("solve", "design", None, &store).system_prompt;
+        assert!(p.contains("recent_notes:\n  (none yet — nothing has condensed)"));
+        // an untouched profile does NOT render the extra sections
+        assert!(!p.contains("frictions:"));
+        assert!(!p.contains("pulls:"));
     }
 
     #[test]
