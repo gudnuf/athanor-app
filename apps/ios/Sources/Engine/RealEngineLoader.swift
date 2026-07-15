@@ -47,7 +47,9 @@ enum RealEngineLoader {
             return nil
         }
         do {
-            let engine = try AthanorCoreEngine(dbPath: databasePath(), apiKey: key, model: nil)
+            // Pin the Mystagogue to Fable 5; nil would fall back to goose's
+            // Anthropic default (claude-sonnet-4-5).
+            let engine = try AthanorCoreEngine(dbPath: databasePath(), apiKey: key, model: "claude-fable-5")
             // NEVER log the key — only the fact of construction.
             NSLog("[Athanor] real athanor-core engine constructed (FFI linked, key present)")
             return engine
