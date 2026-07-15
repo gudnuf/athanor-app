@@ -418,10 +418,20 @@ async fn closing_condenses_a_note_and_the_session_reads_round_trip_both_roles() 
     assert_eq!(detail.turns[1].text, "Say what just set.");
     assert!(detail.note.unwrap().contains("erasure as dissipation"));
 
-    // recent_sessions: the "past fires" surface reaches it too.
-    let recent = engine.recent_sessions(10).unwrap();
+    // recent_sessions: the "past fires" surface reaches it too, and carries the
+    // resume lane's ordering key (ended_at set on a landed session).
+    let recent = engine.recent_sessions(10, 0).unwrap();
     assert_eq!(recent.len(), 1);
     assert_eq!(recent[0].id, session_id);
+    assert!(
+        recent[0].ended_at.is_some(),
+        "a landed session carries ended_at"
+    );
+    // most_recent_session is the cheap resume read.
+    assert_eq!(
+        engine.most_recent_session().unwrap().unwrap().id,
+        session_id
+    );
 }
 
 /// An engine that panics mid-turn — the exact hazard on a real device, where a

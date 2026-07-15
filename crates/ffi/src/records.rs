@@ -116,6 +116,9 @@ pub struct SessionSummary {
     pub thread_id: Option<String>,
     /// The session's created_at, epoch seconds (the UI formats the date).
     pub date: u64,
+    /// When the session landed (epoch seconds), or `None` if it never closed —
+    /// the resume/continuous-chat lane orders and seams on this.
+    pub ended_at: Option<u64>,
     pub mask: String,
     pub mode: String,
     pub excerpt: String,

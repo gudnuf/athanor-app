@@ -223,13 +223,31 @@ impl AthanorEngine {
 
     /// The most recent closed sessions regardless of thread — the "past fires"
     /// surface (also reaches threadless sessions: initiation, bare opens).
-    pub fn recent_sessions(&self, limit: u32) -> Result<Vec<SessionSummary>, EngineError> {
+    /// `offset` paginates (0 = newest page) for the resume lane's scroll-back.
+    pub fn recent_sessions(
+        &self,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<SessionSummary>, EngineError> {
         self.store
-            .recent_sessions(limit as usize)
+            .recent_sessions(limit as usize, offset as usize)
             .map_err(|e| EngineError::Read(e.to_string()))?
             .into_iter()
             .map(|s| self.session_summary(s))
             .collect()
+    }
+
+    /// The single most recent closed session, or `None` — the cheap read the
+    /// resume surface reopens from.
+    pub fn most_recent_session(&self) -> Result<Option<SessionSummary>, EngineError> {
+        match self
+            .store
+            .most_recent_session()
+            .map_err(|e| EngineError::Read(e.to_string()))?
+        {
+            Some(s) => Ok(Some(self.session_summary(s)?)),
+            None => Ok(None),
+        }
     }
 
     /// One session's full detail — the role-tagged transcript (both sides) plus
@@ -288,6 +306,7 @@ impl AthanorEngine {
             id: session.id,
             thread_id: session.thread_id,
             date: session.created_at,
+            ended_at: session.ended_at,
             mask: session.mask,
             mode: session.mode,
             excerpt,
