@@ -591,10 +591,17 @@ public protocol AthanorEngineProtocol: AnyObject, Sendable {
     func mercury() throws  -> [OpenThread]
     
     /**
+     * The single most recent closed session, or `None` — the cheap read the
+     * resume surface reopens from.
+     */
+    func mostRecentSession() throws  -> SessionSummary?
+    
+    /**
      * The most recent closed sessions regardless of thread — the "past fires"
      * surface (also reaches threadless sessions: initiation, bare opens).
+     * `offset` paginates (0 = newest page) for the resume lane's scroll-back.
      */
-    func recentSessions(limit: UInt32) throws  -> [SessionSummary]
+    func recentSessions(limit: UInt32, offset: UInt32) throws  -> [SessionSummary]
     
     /**
      * One session's full detail — the role-tagged transcript (both sides) plus
@@ -755,14 +762,28 @@ open func mercury()throws  -> [OpenThread]  {
 }
     
     /**
+     * The single most recent closed session, or `None` — the cheap read the
+     * resume surface reopens from.
+     */
+open func mostRecentSession()throws  -> SessionSummary?  {
+    return try  FfiConverterOptionTypeSessionSummary.lift(try rustCallWithError(FfiConverterTypeEngineError_lift) {
+    uniffi_ffi_fn_method_athanorengine_most_recent_session(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+    
+    /**
      * The most recent closed sessions regardless of thread — the "past fires"
      * surface (also reaches threadless sessions: initiation, bare opens).
+     * `offset` paginates (0 = newest page) for the resume lane's scroll-back.
      */
-open func recentSessions(limit: UInt32)throws  -> [SessionSummary]  {
+open func recentSessions(limit: UInt32, offset: UInt32)throws  -> [SessionSummary]  {
     return try  FfiConverterSequenceTypeSessionSummary.lift(try rustCallWithError(FfiConverterTypeEngineError_lift) {
     uniffi_ffi_fn_method_athanorengine_recent_sessions(
             self.uniffiCloneHandle(),
-        FfiConverterUInt32.lower(limit),$0
+        FfiConverterUInt32.lower(limit),
+        FfiConverterUInt32.lower(offset),$0
     )
 })
 }
@@ -2309,6 +2330,11 @@ public struct SessionSummary: Equatable, Hashable {
      * The session's created_at, epoch seconds (the UI formats the date).
      */
     public var date: UInt64
+    /**
+     * When the session landed (epoch seconds), or `None` if it never closed —
+     * the resume/continuous-chat lane orders and seams on this.
+     */
+    public var endedAt: UInt64?
     public var mask: String
     public var mode: String
     public var excerpt: String
@@ -2318,10 +2344,15 @@ public struct SessionSummary: Equatable, Hashable {
     public init(id: String, threadId: String?, 
         /**
          * The session's created_at, epoch seconds (the UI formats the date).
-         */date: UInt64, mask: String, mode: String, excerpt: String) {
+         */date: UInt64, 
+        /**
+         * When the session landed (epoch seconds), or `None` if it never closed —
+         * the resume/continuous-chat lane orders and seams on this.
+         */endedAt: UInt64?, mask: String, mode: String, excerpt: String) {
         self.id = id
         self.threadId = threadId
         self.date = date
+        self.endedAt = endedAt
         self.mask = mask
         self.mode = mode
         self.excerpt = excerpt
@@ -2346,6 +2377,7 @@ public struct FfiConverterTypeSessionSummary: FfiConverterRustBuffer {
                 id: FfiConverterString.read(from: &buf), 
                 threadId: FfiConverterOptionString.read(from: &buf), 
                 date: FfiConverterUInt64.read(from: &buf), 
+                endedAt: FfiConverterOptionUInt64.read(from: &buf), 
                 mask: FfiConverterString.read(from: &buf), 
                 mode: FfiConverterString.read(from: &buf), 
                 excerpt: FfiConverterString.read(from: &buf)
@@ -2356,6 +2388,7 @@ public struct FfiConverterTypeSessionSummary: FfiConverterRustBuffer {
         FfiConverterString.write(value.id, into: &buf)
         FfiConverterOptionString.write(value.threadId, into: &buf)
         FfiConverterUInt64.write(value.date, into: &buf)
+        FfiConverterOptionUInt64.write(value.endedAt, into: &buf)
         FfiConverterString.write(value.mask, into: &buf)
         FfiConverterString.write(value.mode, into: &buf)
         FfiConverterString.write(value.excerpt, into: &buf)
@@ -3224,6 +3257,30 @@ fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeSessionSummary: FfiConverterRustBuffer {
+    typealias SwiftType = SessionSummary?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeSessionSummary.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeSessionSummary.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceFloat: FfiConverterRustBuffer {
     typealias SwiftType = [Float]
 
@@ -3551,7 +3608,10 @@ private let initializationResult: InitializationResult = {
     if (uniffi_ffi_checksum_method_athanorengine_mercury() != 14886) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_ffi_checksum_method_athanorengine_recent_sessions() != 38017) {
+    if (uniffi_ffi_checksum_method_athanorengine_most_recent_session() != 52132) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ffi_checksum_method_athanorengine_recent_sessions() != 50952) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_ffi_checksum_method_athanorengine_session_detail() != 37181) {

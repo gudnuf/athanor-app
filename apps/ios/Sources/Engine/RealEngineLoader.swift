@@ -341,8 +341,10 @@ final class AthanorCoreEngine: AthanorEngineProtocol {
     }
 
     func mostRecentSession() -> SessionSummary? {
+        // `try?` flattens the FFI's `SessionSummary?` return, so `s` is already
+        // the unwrapped value (nil = no closed session yet, or a read error).
         guard let s = try? engine.mostRecentSession() else { return nil }
-        return s.map(Self.summary)
+        return Self.summary(s)
     }
 
     func sessionDetail(_ id: String) -> SessionDetail? {
