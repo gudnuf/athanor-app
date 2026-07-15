@@ -21,6 +21,7 @@ pub mod register;
 pub mod session;
 pub mod store;
 pub mod tabula;
+pub mod transcript;
 
 pub use conductor::{Conductor, ConductorError, ConductorOutcome};
 pub use error::CoreError;

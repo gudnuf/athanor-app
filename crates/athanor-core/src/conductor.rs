@@ -30,6 +30,7 @@ use crate::prompt;
 use crate::register::RegisterParser;
 use crate::session::{abandon_session, close_session};
 use crate::store::Store;
+use crate::transcript::{self, TranscriptRole};
 
 /// Default minutes recorded against today's tending when a session lands
 /// without an explicit duration (core-identity §5: "assume ~15").
@@ -44,6 +45,15 @@ const INITIATION_MODE: &str = "initiation";
 /// Longest a synthesized one-line trace is allowed to run, in `char`s, before
 /// it's truncated with an ellipsis.
 const TRACE_MAX_CHARS: usize = 220;
+
+/// The final synthesized learner turn that triggers the condensation pass. The
+/// actual instructions live in the versioned prompt pack (`condense.md`,
+/// assembled as the system prompt); engines require the turn history to END on
+/// a learner turn (the accumulated dialogue ends on the Mystagogue's last
+/// reply), so this is the closing cue that lets the distillation run. It is
+/// NOT persisted to the durable transcript — condensation is a meta-pass over
+/// the exchange, not part of it.
+const CONDENSE_TRIGGER_TURN: &str = "[the session is ending — set down what remains]";
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConductorError {
@@ -228,6 +238,14 @@ impl Conductor {
         sink: &mut (dyn FnMut(AcpUpdate) + Send),
     ) -> Result<(), ConductorError> {
         if let Some(turn) = incoming {
+            // Persist the learner's turn to the DURABLE, role-tagged transcript
+            // up-front (the "nothing is lost" corpus + the reading view's
+            // source): even if the reply below errors mid-stream, what the
+            // learner said is kept. `self.transcript` (the Mystagogue-only
+            // accumulator feeding the one-line trace) is intentionally left
+            // untouched here — the two serve different readers.
+            let block = transcript::format_block(TranscriptRole::Learner, &turn.text);
+            self.store.append_transcript(&self.session_id, &block)?;
             self.turns.push(turn);
         }
         let acp_prompt = self.assemble_prompt();
@@ -287,12 +305,18 @@ impl Conductor {
         });
 
         if !turn_text.is_empty() {
-            self.store.append_transcript(&self.session_id, &turn_text)?;
+            // The Mystagogue's reply lands in the durable transcript as its own
+            // role-tagged block (the register markers are already stripped, so
+            // the corpus stays clean), and into the in-memory dialogue history.
+            let block = transcript::format_block(TranscriptRole::Mystagogue, &turn_text);
+            self.store.append_transcript(&self.session_id, &block)?;
             self.turns.push(AcpTurn {
                 role: AcpRole::Mystagogue,
                 text: turn_text.clone(),
             });
         }
+        // The Mystagogue-only accumulator, kept whitespace-plain, feeds the
+        // one-line trace + the ConductorOutcome (the CLI/tests read this).
         self.transcript.push_str(&turn_text);
         self.landed = turn_landed;
 
@@ -370,6 +394,63 @@ impl Conductor {
         } else {
             collapsed
         }
+    }
+
+    /// Runs the condensation pass — one final engine turn against the
+    /// `condense.md` distillation prompt, looking back over the WHOLE exchange
+    /// to produce (a) a durable session note and (b) any warranted profile
+    /// refinements (merged, never clobbered). Borrows `&mut self` (it drives
+    /// the engine) but does NOT consume the conductor and does NOT touch the
+    /// durable transcript or the dialogue history — it's a meta-pass, run right
+    /// before `close`.
+    ///
+    /// **Best-effort by contract.** The caller (FFI/CLI) runs this, ignores any
+    /// error, and closes the session regardless — condensation enriches the
+    /// close, it never gates it. A session with no exchange yet distills
+    /// nothing (returns `Ok`). Returns `Err` only so a caller *may* observe a
+    /// failure; the session's landing does not depend on it.
+    pub async fn condense(&mut self, engine: &dyn MystagogueEngine) -> Result<(), ConductorError> {
+        // Nothing was said — there's nothing to distill (and the GooseEngine
+        // errors on an empty history anyway).
+        if self.turns.is_empty() {
+            return Ok(());
+        }
+
+        let system = prompt::assemble_condensation(&self.store, self.thread_id.as_deref());
+        // The dialogue so far + a closing learner cue so the history ends on a
+        // learner turn (engine requirement). Built LOCALLY — self.turns and the
+        // durable transcript are left untouched.
+        let mut turns = self.turns.clone();
+        turns.push(AcpTurn {
+            role: AcpRole::Learner,
+            text: CONDENSE_TRIGGER_TURN.to_string(),
+        });
+        let acp_prompt = AcpPrompt {
+            system,
+            turns,
+            // No tools this pass: the distillation writes notes/profile via the
+            // parsed output, not by calling fix_salt et al. at the close.
+            tools: Vec::new(),
+        };
+
+        let mut text = String::new();
+        engine
+            .run_turn(acp_prompt, &self.mystagogue, &mut |update| {
+                if let AcpUpdate::TextDelta { text: chunk, .. } = update {
+                    text.push_str(&chunk);
+                }
+            })
+            .await?;
+
+        let parsed = prompt::parse_condensation(&text);
+        if let Some(note) = parsed.note {
+            self.store
+                .add_session_note(&self.session_id, self.thread_id.as_deref(), &note)?;
+        }
+        for (section, addition) in parsed.profile_updates {
+            self.store.merge_profile_section(&section, &addition)?;
+        }
+        Ok(())
     }
 
     /// Lands the session: `close_session` (marks it closed, records tending
@@ -495,9 +576,31 @@ mod tests {
         assert!(outcome.landed);
         assert_eq!(outcome.tools_called, vec!["fix_salt".to_string()]);
 
-        // The store's transcript column matches what streamed.
+        // The store's transcript column is now the FULL, role-tagged corpus —
+        // BOTH the learner's turns and the Mystagogue's (nothing is lost),
+        // where `outcome.transcript` stays the Mystagogue-only accumulator that
+        // feeds the one-line trace. Parsing the stored column round-trips both
+        // sides in order.
         let stored_session = store.get_session(&session_id).unwrap();
-        assert_eq!(stored_session.transcript, outcome.transcript);
+        let turns = crate::transcript::parse(&stored_session.transcript);
+        use crate::transcript::TranscriptRole;
+        assert_eq!(
+            turns.iter().map(|t| t.role).collect::<Vec<_>>(),
+            vec![
+                TranscriptRole::Learner,
+                TranscriptRole::Mystagogue,
+                TranscriptRole::Learner,
+                TranscriptRole::Mystagogue,
+            ],
+            "the durable transcript keeps both sides of a 2-turn exchange"
+        );
+        assert_eq!(turns[0].text, "Forgetting costs energy, doesn't it?");
+        assert!(turns[1].text.contains("say what just set"));
+        assert_eq!(turns[2].text, "Say more.");
+        assert!(turns[3].text.contains("erasure is dissipation"));
+        // the Mystagogue-only outcome still carries just the assistant text.
+        assert!(outcome.transcript.contains("erasure is dissipation"));
+        assert!(!outcome.transcript.contains("Forgetting costs energy"));
         assert_eq!(stored_session.state, "closed");
 
         // wisdom advanced — the session landed.
@@ -912,6 +1015,127 @@ mod tests {
                 },
             ]
         );
+    }
+
+    /// An engine that always fails a turn — models the condensation network/key
+    /// error the resilience contract must survive.
+    struct FailingEngine;
+
+    #[async_trait::async_trait]
+    impl MystagogueEngine for FailingEngine {
+        async fn run_turn(
+            &self,
+            _prompt: crate::engine::AcpPrompt,
+            _tools: &dyn crate::engine::ToolDispatch,
+            _sink: &mut (dyn FnMut(AcpUpdate) + Send),
+        ) -> Result<(), EngineError> {
+            Err(EngineError::Other("no network".into()))
+        }
+    }
+
+    #[tokio::test]
+    async fn condense_success_writes_a_session_note_and_merges_profile() {
+        let store = store_arc();
+        store
+            .set_profile_section("how_i_learn", "demands proof")
+            .unwrap();
+        let thread = store
+            .open_thread("does forgetting cost energy?", None, None)
+            .unwrap();
+        let mut conductor = Conductor::begin(
+            Arc::clone(&store),
+            "philosophus",
+            "explain",
+            Some(&thread.id),
+        )
+        .unwrap();
+
+        let engine = MockEngine::new(vec![
+            AcpUpdate::text_delta("Say more."),
+            AcpUpdate::TurnComplete,
+        ]);
+        conductor
+            .run_turn(&engine, Some("Erasure is dissipation."), &mut |_| {})
+            .await
+            .unwrap();
+
+        // The condensation engine returns a canned, well-formed distillation.
+        let condense_engine = MockEngine::new(vec![AcpUpdate::text_delta(
+            "NOTE: The learner circled forgetting and named erasure as dissipation \
+             in their own words.\n\
+             PROFILE how_i_learn: reaches conviction by restating in their own terms",
+        )]);
+        let session_id = conductor.session_id().to_string();
+        conductor.condense(&condense_engine).await.unwrap();
+
+        // The durable note landed, carrying the focal thread.
+        let note = store.session_note(&session_id).unwrap().unwrap();
+        assert!(note.contains("erasure as dissipation"));
+        // The profile was MERGED (prior observation kept, new one appended).
+        let how = store.get_profile_section("how_i_learn").unwrap();
+        assert!(how.contains("demands proof"), "prior kept: {how}");
+        assert!(
+            how.contains("restating in their own terms"),
+            "new merged: {how}"
+        );
+
+        // …and the durable transcript was NOT polluted by the condensation pass.
+        let stored = store.get_session(&session_id).unwrap();
+        assert!(!stored.transcript.contains("set down what remains"));
+        assert!(!stored.transcript.contains("NOTE:"));
+
+        // close still lands normally afterward.
+        conductor.close(DEFAULT_SESSION_MINUTES).unwrap();
+        assert_eq!(store.get_session(&session_id).unwrap().state, "closed");
+    }
+
+    #[tokio::test]
+    async fn condense_failure_still_lets_the_session_close_with_a_trace() {
+        // The resilience contract: a condensation engine error (network/key)
+        // must not prevent the session from closing exactly as today.
+        let store = store_arc();
+        let mut conductor =
+            Conductor::begin(Arc::clone(&store), "philosophus", "explain", None).unwrap();
+        let engine = MockEngine::new(vec![
+            AcpUpdate::text_delta("A real reply."),
+            AcpUpdate::TurnComplete,
+        ]);
+        conductor
+            .run_turn(&engine, Some("a real thought"), &mut |_| {})
+            .await
+            .unwrap();
+
+        let session_id = conductor.session_id().to_string();
+        // Condensation FAILS…
+        let err = conductor.condense(&FailingEngine).await;
+        assert!(err.is_err(), "the condensation turn surfaced its error");
+        // …no note was written…
+        assert_eq!(store.session_note(&session_id).unwrap(), None);
+        // …but the caller ignores that and closes anyway: closed + tended + trace.
+        conductor.close(DEFAULT_SESSION_MINUTES).unwrap();
+        assert_eq!(store.get_session(&session_id).unwrap().state, "closed");
+        assert_eq!(
+            store.wisdom_days().unwrap(),
+            1,
+            "the real turn still tended"
+        );
+        let trace = store.last_trace().unwrap().unwrap();
+        assert!(
+            trace.contains("A real reply."),
+            "one-line trace still written"
+        );
+    }
+
+    #[tokio::test]
+    async fn condense_on_a_session_with_no_exchange_is_a_noop() {
+        let store = store_arc();
+        let mut conductor =
+            Conductor::begin(Arc::clone(&store), "philosophus", "explain", None).unwrap();
+        let session_id = conductor.session_id().to_string();
+        // never ran a turn — the engine is never even consulted.
+        let engine = MockEngine::new(vec![]);
+        conductor.condense(&engine).await.unwrap();
+        assert_eq!(store.session_note(&session_id).unwrap(), None);
     }
 
     /// Live coherence check (SHOULD-FIX-4's real proof): a real 2-turn
