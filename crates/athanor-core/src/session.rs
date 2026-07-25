@@ -108,7 +108,14 @@ pub fn close_session(
 pub fn abandon_session(store: &Store, session_id: &str) -> Result<(), CoreError> {
     let session = store.mark_session_abandoned(session_id)?;
     if let Some(thread_id) = session.thread_id {
-        store.set_thread_state(&thread_id, ThreadState::Volatile)?;
+        // Return the thread to the working pool — but only if it isn't already
+        // there. An empty session (opened then closed with nothing said) never
+        // advanced its thread past `volatile`, so re-setting `volatile` would
+        // be an illegal `volatile -> volatile` transition; the thread is
+        // already in the pool, so the return is simply a no-op.
+        if store.get_thread(&thread_id)?.state != ThreadState::Volatile {
+            store.set_thread_state(&thread_id, ThreadState::Volatile)?;
+        }
     }
     Ok(())
 }
@@ -233,6 +240,22 @@ mod tests {
         let store = Store::open_in_memory("dev").unwrap();
         let s = store.create_session(None, "mystagogue", "trace").unwrap();
         abandon_session(&store, &s.id).unwrap();
+    }
+
+    #[test]
+    fn abandon_session_on_an_already_volatile_thread_is_a_no_op_not_an_error() {
+        // An empty session (opened then closed with no exchange) rides the
+        // abandon path but its thread never left `volatile`. Returning an
+        // already-volatile thread to the pool must be a no-op, not an illegal
+        // `volatile -> volatile` transition that surfaces `close()` as an error.
+        let store = Store::open_in_memory("dev").unwrap();
+        let thread = store.open_thread("why?", None, None).unwrap();
+        assert_eq!(store.get_thread(&thread.id).unwrap().state, ThreadState::Volatile);
+        let s = store
+            .create_session(Some(&thread.id), "mystagogue", "explain")
+            .unwrap();
+        abandon_session(&store, &s.id).unwrap();
+        assert_eq!(store.get_thread(&thread.id).unwrap().state, ThreadState::Volatile);
     }
 
     #[test]

@@ -467,16 +467,24 @@ impl Conductor {
     /// for today — the only place wisdom advances) then writes the one-line
     /// trace. Consumes the conductor; call `run_turn` for every turn first.
     pub fn close(self, minutes: u32) -> Result<ConductorOutcome, CoreError> {
+        // An empty session (opened then closed with no exchange) has nothing
+        // settled to remember. Route it down the abandon path instead of
+        // closing it: no trace is written and the row is marked `abandoned`,
+        // so it drops out of every "past fires" list (all filter
+        // `state='closed'`) rather than surfacing as a ghost record with the
+        // `(no assistant text this session)` placeholder. `turns` is non-empty
+        // exactly when a real exchange happened — the learner's own input
+        // (`run_turn`) or the initiation's synthesized opening (`open_turn`) —
+        // so genuine sessions and initiations are unaffected.
+        if self.turns.is_empty() {
+            return self.abandon();
+        }
         let trace = self.synthesize_trace();
         let thread_ids: Vec<String> = self.thread_id.clone().into_iter().collect();
-        // Wisdom only comes from days actually tended: a session with no turn
-        // (opened then closed with no exchange) records NO tending. `turns` is
-        // non-empty exactly when a real exchange happened — the learner's own
-        // input (`run_turn`) or the initiation's synthesized opening
-        // (`open_turn`); an ordinary session that never ran a turn leaves it
-        // empty and so must not advance the fire.
-        let tended = !self.turns.is_empty();
-        close_session(&self.store, &self.session_id, minutes, &thread_ids, tended)?;
+        // Every session reaching here ran at least one turn (the guard above
+        // abandoned the empty ones), so it tended the day and advances the
+        // fire — the only place wisdom advances.
+        close_session(&self.store, &self.session_id, minutes, &thread_ids, true)?;
         self.store.add_trace(&self.session_id, &trace)?;
         // Completing the initiation lights the Furnace (Tabula passage I): the
         // learner has begun — the first ember that is their own. Derived from
@@ -772,6 +780,54 @@ mod tests {
         assert_eq!(store.last_trace().unwrap(), None, "abandon writes no trace");
     }
 
+    /// Ghost-record regression: opening a Voice and closing it with no exchange
+    /// must leave NO listable record. The empty close is routed down the abandon
+    /// path, so no trace is written and the row never appears in any
+    /// `state='closed'` read — no `(no assistant text this session)` ghost.
+    #[tokio::test]
+    async fn closing_an_empty_session_leaves_no_listable_record() {
+        let store = store_arc();
+        let thread = store.open_thread("why?", None, None).unwrap();
+
+        let conductor = Conductor::begin(
+            Arc::clone(&store),
+            "philosophus",
+            "explain",
+            Some(&thread.id),
+        )
+        .unwrap();
+        let session_id = conductor.session_id().to_string();
+
+        // Close with zero turns — nothing was said.
+        conductor.close(DEFAULT_SESSION_MINUTES).unwrap();
+
+        // No trace was written for the empty session.
+        assert_eq!(
+            store.session_trace(&session_id).unwrap(),
+            None,
+            "an empty close writes no trace"
+        );
+        assert_eq!(store.last_trace().unwrap(), None);
+
+        // The row is filtered from every "past fires" surface.
+        assert!(
+            store.recent_sessions(10, 0).unwrap().is_empty(),
+            "empty session must not surface in recent_sessions"
+        );
+        assert!(
+            store.sessions_for_thread(&thread.id).unwrap().is_empty(),
+            "empty session must not surface on its thread"
+        );
+        assert!(
+            store.most_recent_session().unwrap().is_none(),
+            "empty session must not be the most-recent closed session"
+        );
+
+        // It landed as `abandoned`, not `closed`, and tended nothing.
+        assert_eq!(store.get_session(&session_id).unwrap().state, "abandoned");
+        assert_eq!(store.wisdom_days().unwrap(), 0, "empty session tends no day");
+    }
+
     #[tokio::test]
     async fn multi_turn_prompt_reassembly_includes_accumulated_turns_deterministically() {
         let store = store_arc();
@@ -927,8 +983,10 @@ mod tests {
             "a session that did no work must not advance wisdom"
         );
         assert!(store.tending_days().unwrap().is_empty());
-        // …but the session is still properly closed, not left dangling.
-        assert_eq!(store.get_session(&session_id).unwrap().state, "closed");
+        // …and the empty session is not left dangling: it lands as `abandoned`,
+        // a proper terminal state that drops out of every past-fires list
+        // (all filter `state='closed'`) rather than surfacing as a ghost record.
+        assert_eq!(store.get_session(&session_id).unwrap().state, "abandoned");
     }
 
     #[tokio::test]
