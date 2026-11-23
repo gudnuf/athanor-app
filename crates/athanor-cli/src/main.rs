@@ -17,6 +17,7 @@ athanor-cli — dev harness over athanor-core
 USAGE:
     athanor-cli session [OPTIONS]
     athanor-cli seed --from <ACADEMY_DIR> --db <PATH>
+    athanor-cli export --db <PATH> [--out <FILE>]
 
 SESSION OPTIONS:
     --mask <MASK>     philosophus | adamas | solve   (default: philosophus)
@@ -33,6 +34,11 @@ SEED OPTIONS (lived-in demo — writes a demo db through the real store APIs):
     --profile <NAME>  a committed demo persona instead of --from (known: normy) —
                       fiction, safe to ship; source lives in fixtures/<NAME>/.
     --db <PATH>       sqlite path to write
+
+EXPORT OPTIONS (read-only — never migrates, never creates the db):
+    --db <PATH>       an existing store file (schema must match this build)
+    --out <FILE>      write the vault markdown here (must not exist);
+                      default: stdout
 
     -h, --help        print this help
 ";
@@ -71,6 +77,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     if command == "seed" {
         return run_seed(args);
+    }
+    if command == "export" {
+        return run_export(args);
     }
     if command != "session" {
         return Err(format!("unknown command '{command}'\n\n{USAGE}").into());
@@ -124,6 +133,38 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         "\n[session {} landed={} tools={:?}]",
         outcome.session_id, outcome.landed, outcome.tools_called
     );
+    Ok(())
+}
+
+/// `athanor-cli export --db <path> [--out <file>]` — render the vault of an
+/// existing store file. Opens read-only (`Store::open_read_only`): no migration,
+/// no file creation, so a missing or mismatched db is an error, never a silent
+/// empty vault.
+fn run_export(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
+    let mut db_path: Option<String> = None;
+    let mut out: Option<String> = None;
+    while let Some(flag) = args.next() {
+        match flag.as_str() {
+            "--db" => db_path = Some(next_value(&mut args, "--db")?),
+            "--out" => out = Some(next_value(&mut args, "--out")?),
+            "-h" | "--help" => {
+                print!("{USAGE}");
+                return Ok(());
+            }
+            other => return Err(format!("unknown export option '{other}'\n\n{USAGE}").into()),
+        }
+    }
+    let db_path = db_path.ok_or("export requires --db <PATH>")?;
+    if let Some(o) = &out {
+        if std::path::Path::new(o).exists() {
+            return Err(format!("refusing to overwrite existing --out file {o}").into());
+        }
+    }
+    let doc = Store::open_read_only(&db_path, "cli")?.export_vault()?;
+    match out {
+        Some(o) => std::fs::write(o, doc)?,
+        None => print!("{doc}"),
+    }
     Ok(())
 }
 
