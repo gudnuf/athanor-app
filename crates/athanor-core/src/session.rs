@@ -250,12 +250,18 @@ mod tests {
         // `volatile -> volatile` transition that surfaces `close()` as an error.
         let store = Store::open_in_memory("dev").unwrap();
         let thread = store.open_thread("why?", None, None).unwrap();
-        assert_eq!(store.get_thread(&thread.id).unwrap().state, ThreadState::Volatile);
+        assert_eq!(
+            store.get_thread(&thread.id).unwrap().state,
+            ThreadState::Volatile
+        );
         let s = store
             .create_session(Some(&thread.id), "mystagogue", "explain")
             .unwrap();
         abandon_session(&store, &s.id).unwrap();
-        assert_eq!(store.get_thread(&thread.id).unwrap().state, ThreadState::Volatile);
+        assert_eq!(
+            store.get_thread(&thread.id).unwrap().state,
+            ThreadState::Volatile
+        );
     }
 
     #[test]

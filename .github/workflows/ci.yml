@@ -9,7 +9,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: DeterminateSystems/nix-installer-action@main
-      - uses: DeterminateSystems/magic-nix-cache-action@main
       - name: secret-scan (fail closed)
         run: |
           if git grep -nEi 'sk-ant-[A-Za-z0-9]|(anthropic|aws|openai|github|slack)[_-]?(api)?[_-]?(key|token|secret)[[:space:]]*[=:][[:space:]]*["'"'"'][A-Za-z0-9+/_-]{12,}|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]+|-----BEGIN [A-Z ]*PRIVATE KEY-----' -- . ':!*.md' ':!.env.example'; then

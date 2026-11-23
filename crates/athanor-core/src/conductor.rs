@@ -825,7 +825,11 @@ mod tests {
 
         // It landed as `abandoned`, not `closed`, and tended nothing.
         assert_eq!(store.get_session(&session_id).unwrap().state, "abandoned");
-        assert_eq!(store.wisdom_days().unwrap(), 0, "empty session tends no day");
+        assert_eq!(
+            store.wisdom_days().unwrap(),
+            0,
+            "empty session tends no day"
+        );
     }
 
     #[tokio::test]

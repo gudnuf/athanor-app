@@ -82,7 +82,7 @@ fn furnace_heat(now: u64, last_tended_at: Option<u64>, tended_today: bool) -> f3
 /// Mercury = the ripest open thread. A condensing thread is kindled; volatile
 /// threads waiting are stirring; nothing open is at rest.
 fn mercury_heat(states: &[ThreadState]) -> f32 {
-    if states.iter().any(|s| *s == ThreadState::Condensing) {
+    if states.contains(&ThreadState::Condensing) {
         0.68
     } else if !states.is_empty() {
         0.50
