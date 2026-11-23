@@ -148,7 +148,6 @@ impl Store {
 
 impl Store {
     /// Every tending row (minutes + thread ids), oldest day first — the export read.
-    #[allow(dead_code)] // consumed by store::export (Task 4)
     pub(crate) fn all_tending(&self) -> Result<Vec<Tending>, CoreError> {
         let conn = self.conn();
         let mut stmt = conn.prepare(

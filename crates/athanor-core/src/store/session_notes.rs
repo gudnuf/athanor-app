@@ -96,7 +96,6 @@ impl Store {
 
 impl Store {
     /// Every note on one session, oldest first (`session_note` returns only the latest).
-    #[allow(dead_code)] // consumed by store::export (Task 4)
     pub(crate) fn session_notes_for(
         &self,
         session_id: &str,

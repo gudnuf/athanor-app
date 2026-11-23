@@ -54,7 +54,6 @@ impl Store {
 
 impl Store {
     /// Every trace on one session, oldest first (`session_trace` returns only the latest).
-    #[allow(dead_code)] // consumed by store::export (Task 4)
     pub(crate) fn traces_for(&self, session_id: &str) -> Result<Vec<(u64, String)>, CoreError> {
         let conn = self.conn();
         let mut stmt = conn.prepare(

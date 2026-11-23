@@ -192,7 +192,6 @@ impl Store {
 
 impl Store {
     /// Every session in any state, unbounded, oldest first — the export read.
-    #[allow(dead_code)] // consumed by store::export (Task 4)
     pub(crate) fn all_sessions(&self) -> Result<Vec<Session>, CoreError> {
         let conn = self.conn();
         let mut stmt = conn.prepare(&format!(

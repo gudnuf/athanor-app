@@ -82,7 +82,6 @@ impl Store {
 
 impl Store {
     /// Every domain, tombstoned included, oldest first — the export read.
-    #[allow(dead_code)] // consumed by store::export (Task 4)
     pub(crate) fn all_domains(&self) -> Result<Vec<Domain>, CoreError> {
         let conn = self.conn();
         let mut stmt = conn.prepare(&format!(
@@ -93,7 +92,6 @@ impl Store {
     }
 
     /// Every pull note, oldest first — the export read (no other reader exists).
-    #[allow(dead_code)] // consumed by store::export (Task 4)
     pub(crate) fn all_pull_notes(&self) -> Result<Vec<PullNote>, CoreError> {
         let conn = self.conn();
         let mut stmt = conn.prepare(

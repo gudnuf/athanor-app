@@ -31,7 +31,7 @@ impl ThreadState {
 /// Days since the Unix epoch -> proleptic Gregorian (y, m, d). Howard
 /// Hinnant's `civil_from_days` algorithm (public domain), used so we don't
 /// need a date/time crate dependency for a "which UTC day is this" lookup.
-fn civil_from_days(z: i64) -> (i64, u32, u32) {
+pub(crate) fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
     let doe = z - era * 146_097; // [0, 146096]

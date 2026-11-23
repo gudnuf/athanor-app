@@ -54,7 +54,6 @@ impl Store {
 
 impl Store {
     /// Every profile section `(section, content, updated_at)`, by name — the export read.
-    #[allow(dead_code)] // consumed by store::export (Task 4)
     pub(crate) fn all_profile_sections(&self) -> Result<Vec<(String, String, u64)>, CoreError> {
         let conn = self.conn();
         let mut stmt =

@@ -41,7 +41,6 @@ impl Store {
 
 impl Store {
     /// Every kindled passage with its timestamp and source, first-kindled order — the export read.
-    #[allow(dead_code)] // consumed by store::export (Task 4)
     pub(crate) fn all_kindling(&self) -> Result<Vec<(String, u64, Option<String>)>, CoreError> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
