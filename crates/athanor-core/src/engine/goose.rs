@@ -648,7 +648,7 @@ mod tests {
         }
     }
 
-    /// Live Anthropic round-trip. Ignored by default; run explicitly with a key:
+    /// Live Anthropic round-trip against the shipped pin (`MYSTAGOGUE_MODEL`). Ignored by default; run explicitly with a key:
     /// `ANTHROPIC_API_KEY=… cargo test -p athanor-core --features goose -- --ignored`.
     /// Skips gracefully (passes) when the key is unset.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -659,7 +659,7 @@ mod tests {
             return;
         };
 
-        let engine = GooseEngine::new(key, None, None);
+        let engine = GooseEngine::new(key, Some(crate::engine::MYSTAGOGUE_MODEL.to_string()), None);
         let dispatch = RecordingDispatch::default();
         let prompt = AcpPrompt {
             system: "You are a terse assistant. Answer in one short sentence.".into(),

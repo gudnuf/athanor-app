@@ -47,9 +47,9 @@ enum RealEngineLoader {
             return nil
         }
         do {
-            // Pin the Mystagogue to Fable 5; nil would fall back to goose's
-            // Anthropic default (claude-sonnet-4-5).
-            let engine = try AthanorCoreEngine(dbPath: databasePath(), apiKey: key, model: "claude-fable-5")
+            // The model is core-owned (athanor_core::engine::MYSTAGOGUE_MODEL,
+            // currently claude-opus-5-5): nil means "use the pin".
+            let engine = try AthanorCoreEngine(dbPath: databasePath(), apiKey: key, model: nil)
             // NEVER log the key — only the fact of construction.
             NSLog("[Athanor] real athanor-core engine constructed (FFI linked, key present)")
             return engine
@@ -59,16 +59,21 @@ enum RealEngineLoader {
         }
     }
 
-    /// Key resolution + first-launch Keychain seed. Prefers a key already in the
-    /// Keychain; otherwise seeds it from the Info.plist build setting (injected
-    /// by generate.sh) and stores it. Returns nil when neither has a key.
+    /// Key resolution. Prefers the bundle's key (the Info.plist build setting
+    /// injected by generate.sh) when present, re-seeding the Keychain if it
+    /// differs; falls back to the Keychain. Returns nil when neither has a key.
+    /// Never log either value.
     @MainActor
     private static func resolveKey() -> String? {
-        if let existing = KeychainKeyStore.load(), !existing.isEmpty { return existing }
-        guard let seeded = Bundle.main.object(forInfoDictionaryKey: "ANTHROPIC_API_KEY") as? String,
-              !seeded.isEmpty else { return nil }
-        KeychainKeyStore.save(seeded)
-        return seeded
+        let bundled = (Bundle.main.object(forInfoDictionaryKey: "ANTHROPIC_API_KEY") as? String) ?? ""
+        let stored = KeychainKeyStore.load() ?? ""
+        if !bundled.isEmpty {
+            // A rebuilt bundle carries the current (possibly rotated) key:
+            // it wins, and re-seeds the Keychain so later launches agree.
+            if bundled != stored { KeychainKeyStore.save(bundled) }
+            return bundled
+        }
+        return stored.isEmpty ? nil : stored
     }
 
     /// On-device store path (Application Support/athanor.sqlite).

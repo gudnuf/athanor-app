@@ -1275,7 +1275,8 @@ mod tests {
     }
 
     /// Live coherence check (SHOULD-FIX-4's real proof): a real 2-turn
-    /// session through the actual `GooseEngine`. Ignored by default; run
+    /// session through the actual `GooseEngine`, on the shipped pin
+    /// (`MYSTAGOGUE_MODEL`). Ignored by default; run
     /// explicitly with a key:
     /// `ANTHROPIC_API_KEY=… cargo test -p athanor-core --features goose -- --ignored`.
     /// Skips gracefully (passes) when the key is unset. This does not assert
@@ -1295,7 +1296,11 @@ mod tests {
         let store = store_arc();
         let mut conductor =
             Conductor::begin(Arc::clone(&store), "philosophus", "explain", None).unwrap();
-        let engine = crate::engine::GooseEngine::new(key, None, None);
+        let engine = crate::engine::GooseEngine::new(
+            key,
+            Some(crate::engine::MYSTAGOGUE_MODEL.to_string()),
+            None,
+        );
 
         let mut turn1 = String::new();
         conductor

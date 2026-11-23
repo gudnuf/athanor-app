@@ -41,12 +41,13 @@ pub enum EngineError {
 }
 
 /// Model-tier config crossing the boundary. Kept minimal: the only knob that
-/// reaches the engine today is which Anthropic model to drive (`None` = goose's
-/// default, `claude-sonnet-4-5`). A `Debug` is derived — no secret lives here
+/// reaches the engine today is which Anthropic model to drive (`None` = the core
+/// pin, `athanor_core::engine::MYSTAGOGUE_MODEL`, currently `claude-opus-5-5`;
+/// `Some(id)` overrides it). A `Debug` is derived — no secret lives here
 /// (the key is a separate constructor param).
 #[derive(uniffi::Record, Clone, Debug, Default)]
 pub struct TierConfig {
-    /// The Anthropic model id to drive, or `None` for the engine default.
+    /// The Anthropic model id to drive, or `None` for the core pin.
     pub model: Option<String>,
 }
 
@@ -68,7 +69,7 @@ fn build_engine(
         if let Some(key) = anthropic_key {
             return Arc::new(athanor_core::engine::GooseEngine::new(
                 key,
-                tier.model.clone(),
+                Some(athanor_core::engine::mystagogue_model(tier.model.clone())),
                 data_root,
             ));
         }
