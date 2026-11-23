@@ -56,3 +56,7 @@ athanor-seed.*
 # vault exports carry private learner data — never commit
 athanor-vault-*.md
 *.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.db

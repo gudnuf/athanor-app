@@ -86,7 +86,7 @@ struct FurnaceScreen: View {
             .padding(.top, 14)
             .padding(.bottom, 20)
         }
-        .sheet(item: $vaultShare, onDismiss: { VaultExport.cleanUp() }) { ShareSheet(items: $0.urls) }
+        .sheet(item: $vaultShare, onDismiss: { VaultExport.cleanUp() }) { ShareSheet(items: $0.urls, onFinish: { vaultShare = nil }) }
         // QA hook (same family as `screen=`/`autoplay=`): never fires on a normal launch.
         .task {
             guard ProcessInfo.processInfo.arguments.contains("export-vault=1") else { return }
@@ -98,7 +98,7 @@ struct FurnaceScreen: View {
     private func beginVaultExport() {
         UIImpactFeedbackGenerator(style: .soft).impactOccurred()
         let urls = VaultExport.prepare()
-        if !urls.isEmpty { vaultShare = VaultShare(urls: urls) }
+        if urls.isEmpty { VaultExport.cleanUp() } else { vaultShare = VaultShare(urls: urls) }
     }
 
     /// Routes a tapped door: the Bellows opens a session, the surfaces turn to
