@@ -2561,13 +2561,14 @@ public func FfiConverterTypeTendingDay_lower(_ value: TendingDay) -> RustBuffer 
 
 /**
  * Model-tier config crossing the boundary. Kept minimal: the only knob that
- * reaches the engine today is which Anthropic model to drive (`None` = goose's
- * default, `claude-sonnet-4-5`). A `Debug` is derived — no secret lives here
+ * reaches the engine today is which Anthropic model to drive (`None` = the core
+ * pin, `athanor_core::engine::MYSTAGOGUE_MODEL`, currently `claude-opus-5-5`;
+ * `Some(id)` overrides it). A `Debug` is derived — no secret lives here
  * (the key is a separate constructor param).
  */
 public struct TierConfig: Equatable, Hashable {
     /**
-     * The Anthropic model id to drive, or `None` for the engine default.
+     * The Anthropic model id to drive, or `None` for the core pin.
      */
     public var model: String?
 
@@ -2575,7 +2576,7 @@ public struct TierConfig: Equatable, Hashable {
     // declare one manually.
     public init(
         /**
-         * The Anthropic model id to drive, or `None` for the engine default.
+         * The Anthropic model id to drive, or `None` for the core pin.
          */model: String?) {
         self.model = model
     }
@@ -3556,6 +3557,26 @@ public func furnaceLit() -> String  {
     )
 })
 }
+/**
+ * A consistent copy of the store file at `db_path`, written to `dest_path` (must not exist).
+ */
+public func exportDatabaseCopyAt(dbPath: String, destPath: String)throws   {try rustCallWithError(FfiConverterTypeEngineError_lift) {
+    uniffi_ffi_fn_func_export_database_copy_at(
+        FfiConverterString.lower(dbPath),
+        FfiConverterString.lower(destPath),$0
+    )
+}
+}
+/**
+ * The whole vault (vault v1 markdown) of the store file at `db_path`, opened read-only.
+ */
+public func exportVaultAt(dbPath: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeEngineError_lift) {
+    uniffi_ffi_fn_func_export_vault_at(
+        FfiConverterString.lower(dbPath),$0
+    )
+})
+}
 
 private enum InitializationResult {
     case ok
@@ -3573,6 +3594,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.contractVersionMismatch
     }
     if (uniffi_ffi_checksum_func_furnace_lit() != 38880) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ffi_checksum_func_export_database_copy_at() != 32347) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ffi_checksum_func_export_vault_at() != 41621) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_ffi_checksum_method_bellowshandle_end() != 35761) {
