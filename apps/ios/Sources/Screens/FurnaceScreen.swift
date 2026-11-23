@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // The Furnace — home. Mirrors mockups-v2.html screen 2: layered ember glow,
 // big serif day count, cold-furnace copy with no streak shame, a mercury
@@ -16,6 +17,8 @@ struct FurnaceScreen: View {
     var onMercury: () -> Void = {}
     /// Begin a session in a chosen mask (lane 14: tapping a mask glyph).
     var onMask: (String) -> Void = { _ in }
+
+    @State private var vaultShare: VaultShare?
 
     private var fire: FireState { model.engine.furnaceState() }
     private var heats: HomeHeatValues { model.engine.homeHeat() }
@@ -63,6 +66,10 @@ struct FurnaceScreen: View {
                         .monospacedDigit()
                 }
             }
+            // Hidden door (docs/gestures.md): long-press the days-tended line.
+            .contentShape(Rectangle())
+            .onLongPressGesture(minimumDuration: 1.2) { beginVaultExport() }
+            .accessibilityAction(named: "Export the vault") { beginVaultExport() }
 
             Button(action: onBegin) {
                 Text("Tend the fire")
@@ -79,6 +86,19 @@ struct FurnaceScreen: View {
             .padding(.top, 14)
             .padding(.bottom, 20)
         }
+        .sheet(item: $vaultShare, onDismiss: { VaultExport.cleanUp() }) { ShareSheet(items: $0.urls) }
+        // QA hook (same family as `screen=`/`autoplay=`): never fires on a normal launch.
+        .task {
+            guard ProcessInfo.processInfo.arguments.contains("export-vault=1") else { return }
+            try? await Task.sleep(for: .milliseconds(1500))
+            beginVaultExport()
+        }
+    }
+
+    private func beginVaultExport() {
+        UIImpactFeedbackGenerator(style: .soft).impactOccurred()
+        let urls = VaultExport.prepare()
+        if !urls.isEmpty { vaultShare = VaultShare(urls: urls) }
     }
 
     /// Routes a tapped door: the Bellows opens a session, the surfaces turn to

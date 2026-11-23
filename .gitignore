@@ -52,3 +52,7 @@ lived-seed.sqlite
 lived-seed.sqlite-journal
 lived-seed.db
 athanor-seed.*
+
+# vault exports carry private learner data — never commit
+athanor-vault-*.md
+*.sqlite

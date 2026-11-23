@@ -38,6 +38,25 @@ enum RealEngineLoader {
         return DemoEngine()
     }
 
+    /// Store-only vault export (no engine, no key): core opens the db file
+    /// read-only and renders everything. nil/false when the FFI isn't linked or
+    /// the store can't be read — never a placeholder.
+    static func exportVault() -> String? {
+        #if canImport(AthanorCoreFFI)
+        return try? AthanorCoreFFI.exportVaultAt(dbPath: databasePath())
+        #else
+        return nil
+        #endif
+    }
+
+    static func exportDatabaseCopy(to dest: String) -> Bool {
+        #if canImport(AthanorCoreFFI)
+        return (try? AthanorCoreFFI.exportDatabaseCopyAt(dbPath: databasePath(), destPath: dest)) != nil
+        #else
+        return false
+        #endif
+    }
+
     #if canImport(AthanorCoreFFI)
     @MainActor
     private static func tryRealEngine() -> (any AthanorEngineProtocol)? {
@@ -83,7 +102,7 @@ enum RealEngineLoader {
     /// open a pre-seeded db produced by `athanor-cli seed`. This runs the REAL
     /// engine against real seeded state — streams and reads render it exactly as
     /// live use. Never affects a normal launch (no arg → the on-device path).
-    private static func databasePath() -> String {
+    static func databasePath() -> String {
         if let arg = ProcessInfo.processInfo.arguments
             .first(where: { $0.hasPrefix("seed-db=") }) {
             let path = String(arg.dropFirst("seed-db=".count))
