@@ -52,6 +52,18 @@ impl Store {
     }
 }
 
+impl Store {
+    /// Every profile section `(section, content, updated_at)`, by name — the export read.
+    #[allow(dead_code)] // consumed by store::export (Task 4)
+    pub(crate) fn all_profile_sections(&self) -> Result<Vec<(String, String, u64)>, CoreError> {
+        let conn = self.conn();
+        let mut stmt =
+            conn.prepare("SELECT section, content, updated_at FROM profile ORDER BY section ASC")?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(CoreError::from)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,5 +136,18 @@ mod tests {
         store.set_profile_section("frictions", "x").unwrap();
         store.merge_profile_section("frictions", "   ").unwrap();
         assert_eq!(store.get_profile_section("frictions").unwrap(), "x");
+    }
+
+    #[test]
+    fn all_profile_sections_enumerates_unknown_sections() {
+        let store = Store::open_in_memory("d").unwrap();
+        store.set_profile_section("frictions", "gets lost").unwrap();
+        store
+            .set_profile_section("how_i_learn", "dialogue")
+            .unwrap();
+        let all = store.all_profile_sections().unwrap();
+        let names: Vec<_> = all.iter().map(|(n, _, _)| n.as_str()).collect();
+        assert_eq!(names, vec!["frictions", "how_i_learn"]);
+        assert_eq!(all[0].1, "gets lost");
     }
 }

@@ -207,14 +207,14 @@ impl Store {
     }
 
     /// The Grimoire: every realization, chronological (`date` ASC, then
-    /// `created_at` ASC to break same-day ties), each carrying its linked
+    /// `created_at` ASC, then `id` ASC to break same-day ties), each carrying its linked
     /// domain names and its (already-present) `child_thread_id` spiral link.
     /// Read-only projection — realizations are append-only/immutable, so this
     /// never races a writer.
     pub fn list_realizations(&self) -> Result<Vec<GrimoireEntry>, CoreError> {
         let conn = self.conn();
         let mut stmt = conn.prepare(&format!(
-            "SELECT {REALIZATION_COLS} FROM realizations ORDER BY date ASC, created_at ASC"
+            "SELECT {REALIZATION_COLS} FROM realizations ORDER BY date ASC, created_at ASC, id ASC"
         ))?;
         let rows = stmt.query_map([], realization_from_row)?;
         let realizations = rows
@@ -459,5 +459,29 @@ mod tests {
     fn list_realizations_empty_store_is_empty() {
         let store = Store::open_in_memory("d").unwrap();
         assert!(store.list_realizations().unwrap().is_empty());
+    }
+
+    #[test]
+    fn list_realizations_breaks_full_ties_by_id() {
+        let store = Store::open_in_memory("d").unwrap();
+        let t = store.open_thread("q?", None, None).unwrap();
+        // Seeded by direct SQL, rz-b FIRST: insertion order must not decide.
+        for id in ["rz-b", "rz-a"] {
+            store
+                .conn()
+                .execute(
+                    "INSERT INTO realizations (id, text, date, thread_id, child_thread_id, created_at, device_id)
+                     VALUES (?1, 'x', 100, ?2, NULL, 100, 'd')",
+                    params![id, t.id],
+                )
+                .unwrap();
+        }
+        let ids: Vec<_> = store
+            .list_realizations()
+            .unwrap()
+            .into_iter()
+            .map(|e| e.realization.id)
+            .collect();
+        assert_eq!(ids, vec!["rz-a", "rz-b"]);
     }
 }

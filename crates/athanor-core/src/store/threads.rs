@@ -124,6 +124,19 @@ impl Store {
     }
 }
 
+impl Store {
+    /// Every thread in any state, tombstoned included, oldest first — the export read.
+    #[allow(dead_code)] // consumed by store::export (Task 4)
+    pub(crate) fn all_threads(&self) -> Result<Vec<Thread>, CoreError> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {THREAD_COLS} FROM threads ORDER BY created_at ASC, id ASC"
+        ))?;
+        let rows = stmt.query_map([], thread_from_row)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(CoreError::from)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -264,5 +277,19 @@ mod tests {
     fn open_threads_empty_store_is_empty() {
         let store = Store::open_in_memory("d").unwrap();
         assert!(store.open_threads().unwrap().is_empty());
+    }
+
+    #[test]
+    fn all_threads_returns_every_state_including_evaporated() {
+        let store = Store::open_in_memory("d").unwrap();
+        let a = store.open_thread("a?", None, None).unwrap();
+        let b = store.open_thread("b?", None, None).unwrap();
+        store.evaporate_thread(&b.id).unwrap();
+        let all = store.all_threads().unwrap();
+        assert_eq!(all.len(), 2);
+        assert!(all
+            .iter()
+            .any(|t| t.id == b.id && t.state == ThreadState::Evaporated));
+        assert!(store.open_threads().unwrap().iter().all(|t| t.id == a.id)); // contrast
     }
 }

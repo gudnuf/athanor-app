@@ -39,6 +39,20 @@ impl Store {
     }
 }
 
+impl Store {
+    /// Every kindled passage with its timestamp and source, first-kindled order — the export read.
+    #[allow(dead_code)] // consumed by store::export (Task 4)
+    pub(crate) fn all_kindling(&self) -> Result<Vec<(String, u64, Option<String>)>, CoreError> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT passage_key, first_kindled_at, source_id FROM kindling
+             ORDER BY first_kindled_at ASC, passage_key ASC",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(CoreError::from)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -84,5 +98,20 @@ mod tests {
         );
         // A passage with no kindled key stays dim.
         assert!(!warm.iter().find(|p| p.key == "WORLD").unwrap().kindled);
+    }
+
+    #[test]
+    fn all_kindling_round_trips_source_id() {
+        let store = Store::open_in_memory("d").unwrap();
+        store.kindle_passage("SALT", Some("rz-1")).unwrap();
+        store.kindle_passage("NIGREDO", None).unwrap();
+        let all = store.all_kindling().unwrap();
+        assert_eq!(all.len(), 2);
+        assert!(all
+            .iter()
+            .any(|(k, _, src)| k == "SALT" && src.as_deref() == Some("rz-1")));
+        assert!(all
+            .iter()
+            .any(|(k, _, src)| k == "NIGREDO" && src.is_none()));
     }
 }

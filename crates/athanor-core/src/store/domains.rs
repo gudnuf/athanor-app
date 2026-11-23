@@ -80,6 +80,39 @@ impl Store {
     }
 }
 
+impl Store {
+    /// Every domain, tombstoned included, oldest first — the export read.
+    #[allow(dead_code)] // consumed by store::export (Task 4)
+    pub(crate) fn all_domains(&self) -> Result<Vec<Domain>, CoreError> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {DOMAIN_COLS} FROM domains ORDER BY created_at ASC, id ASC"
+        ))?;
+        let rows = stmt.query_map([], domain_from_row)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(CoreError::from)
+    }
+
+    /// Every pull note, oldest first — the export read (no other reader exists).
+    #[allow(dead_code)] // consumed by store::export (Task 4)
+    pub(crate) fn all_pull_notes(&self) -> Result<Vec<PullNote>, CoreError> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, domain_id, text, created_at, device_id FROM pull_notes
+             ORDER BY created_at ASC, id ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(PullNote {
+                id: row.get(0)?,
+                domain_id: row.get(1)?,
+                text: row.get(2)?,
+                created_at: row.get(3)?,
+                device_id: row.get(4)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(CoreError::from)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -117,5 +150,30 @@ mod tests {
             .map(|d| d.name)
             .collect();
         assert_eq!(names, vec!["Academy", "Yoga"]);
+    }
+
+    #[test]
+    fn all_domains_includes_tombstoned_and_all_pull_notes_includes_untethered() {
+        let store = Store::open_in_memory("d").unwrap();
+        let a = store.upsert_domain("Yoga").unwrap();
+        let b = store.upsert_domain("Academy").unwrap();
+        store
+            .conn()
+            .execute(
+                "UPDATE domains SET deleted_at = 5 WHERE id = ?1",
+                params![b.id],
+            )
+            .unwrap();
+        assert_eq!(store.list_domains().unwrap().len(), 1, "contrast");
+        let all = store.all_domains().unwrap();
+        assert_eq!(all.len(), 2);
+        assert!(all.iter().any(|d| d.id == b.id && d.deleted_at == Some(5)));
+        store.add_pull_note(Some(&a.id), "tethered").unwrap();
+        store.add_pull_note(None, "untethered").unwrap();
+        let notes = store.all_pull_notes().unwrap();
+        assert_eq!(notes.len(), 2);
+        assert!(notes
+            .iter()
+            .any(|n| n.domain_id.is_none() && n.text == "untethered"));
     }
 }

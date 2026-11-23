@@ -94,6 +94,23 @@ impl Store {
     }
 }
 
+impl Store {
+    /// Every note on one session, oldest first (`session_note` returns only the latest).
+    #[allow(dead_code)] // consumed by store::export (Task 4)
+    pub(crate) fn session_notes_for(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<(u64, String)>, CoreError> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT created_at, note FROM session_notes WHERE session_id = ?1
+             ORDER BY created_at ASC, id ASC",
+        )?;
+        let rows = stmt.query_map(params![session_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(CoreError::from)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,5 +206,29 @@ mod tests {
         assert!(store
             .add_session_note("no-such-session", None, "x")
             .is_err());
+    }
+
+    #[test]
+    fn session_notes_for_returns_every_note_oldest_first() {
+        let store = Store::open_in_memory("d").unwrap();
+        let s = store
+            .create_session(None, "philosophus", "explain")
+            .unwrap();
+        store
+            .conn()
+            .execute(
+                "INSERT INTO session_notes (id, session_id, thread_id, note, created_at, device_id)
+                 VALUES ('n2', ?1, NULL, 'second', 20, 'd'), ('n1', ?1, NULL, 'first', 10, 'd')",
+                params![s.id],
+            )
+            .unwrap();
+        assert_eq!(
+            store.session_notes_for(&s.id).unwrap(),
+            vec![(10, "first".to_string()), (20, "second".to_string())]
+        );
+        assert_eq!(
+            store.session_note(&s.id).unwrap().as_deref(),
+            Some("second")
+        ); // contrast
     }
 }

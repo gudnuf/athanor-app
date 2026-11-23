@@ -190,6 +190,19 @@ impl Store {
     }
 }
 
+impl Store {
+    /// Every session in any state, unbounded, oldest first — the export read.
+    #[allow(dead_code)] // consumed by store::export (Task 4)
+    pub(crate) fn all_sessions(&self) -> Result<Vec<Session>, CoreError> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {SESSION_COLS} FROM sessions ORDER BY started_at ASC, id ASC"
+        ))?;
+        let rows = stmt.query_map([], session_from_row)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(CoreError::from)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,5 +324,24 @@ mod tests {
         let store = Store::open_in_memory("d").unwrap();
         store.create_session(None, "solve", "design").unwrap(); // open, not closed
         assert!(store.most_recent_session().unwrap().is_none());
+    }
+
+    #[test]
+    fn all_sessions_includes_open_and_abandoned() {
+        let store = Store::open_in_memory("d").unwrap();
+        let open = store
+            .create_session(None, "philosophus", "explain")
+            .unwrap();
+        let gone = store
+            .create_session(None, "philosophus", "explain")
+            .unwrap();
+        store.mark_session_abandoned(&gone.id).unwrap();
+        let all = store.all_sessions().unwrap();
+        assert_eq!(all.len(), 2);
+        assert!(all.iter().any(|s| s.id == open.id && s.state == "open"));
+        assert!(all
+            .iter()
+            .any(|s| s.id == gone.id && s.state == "abandoned"));
+        assert!(store.recent_sessions(10, 0).unwrap().is_empty(), "contrast");
     }
 }

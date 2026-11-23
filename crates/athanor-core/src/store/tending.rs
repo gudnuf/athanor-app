@@ -16,6 +16,20 @@ use super::Store;
 /// the home screen loads.
 const RECENT_TENDING_WINDOW: usize = 7;
 
+fn tending_from_row(r: &rusqlite::Row) -> rusqlite::Result<Tending> {
+    let ids_json: String = r.get(2)?;
+    let thread_ids: Vec<String> = serde_json::from_str(&ids_json).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(e))
+    })?;
+    Ok(Tending {
+        day: r.get(0)?,
+        minutes: r.get(1)?,
+        thread_ids,
+        created_at: r.get(3)?,
+        device_id: r.get(4)?,
+    })
+}
+
 impl Store {
     /// Adds `minutes` to the day's tally and unions `thread_ids` into the
     /// day's set (deduped). Two calls the same day merge into one row —
@@ -127,23 +141,21 @@ impl Store {
             "SELECT day, minutes, thread_ids, created_at, device_id
              FROM tending ORDER BY day DESC LIMIT ?1",
         )?;
-        let rows = stmt.query_map(params![limit as i64], |r| {
-            let ids_json: String = r.get(2)?;
-            let thread_ids: Vec<String> = serde_json::from_str(&ids_json).map_err(|e| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    2,
-                    rusqlite::types::Type::Text,
-                    Box::new(e),
-                )
-            })?;
-            Ok(Tending {
-                day: r.get(0)?,
-                minutes: r.get(1)?,
-                thread_ids,
-                created_at: r.get(3)?,
-                device_id: r.get(4)?,
-            })
-        })?;
+        let rows = stmt.query_map(params![limit as i64], tending_from_row)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(CoreError::from)
+    }
+}
+
+impl Store {
+    /// Every tending row (minutes + thread ids), oldest day first — the export read.
+    #[allow(dead_code)] // consumed by store::export (Task 4)
+    pub(crate) fn all_tending(&self) -> Result<Vec<Tending>, CoreError> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT day, minutes, thread_ids, created_at, device_id
+             FROM tending ORDER BY day ASC",
+        )?;
+        let rows = stmt.query_map([], tending_from_row)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(CoreError::from)
     }
 }
@@ -297,5 +309,19 @@ mod tests {
             "most-recent day first"
         );
         assert_eq!(fs.last_tended_day, Some("2026-07-10".to_string()));
+    }
+
+    #[test]
+    fn all_tending_carries_minutes_and_thread_ids() {
+        let store = Store::open_in_memory("d").unwrap();
+        store
+            .record_tending("2026-07-06", 7, &["t1".to_string()])
+            .unwrap();
+        store.record_tending("2026-07-04", 3, &[]).unwrap();
+        let all = store.all_tending().unwrap();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].day, "2026-07-04");
+        assert_eq!(all[1].minutes, 7);
+        assert_eq!(all[1].thread_ids, vec!["t1".to_string()]);
     }
 }
