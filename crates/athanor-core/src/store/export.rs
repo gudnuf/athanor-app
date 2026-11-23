@@ -71,6 +71,22 @@ fn section<T>(out: &mut String, title: &str, items: &[T], mut each: impl FnMut(&
 }
 
 impl Store {
+    /// Writes a consistent copy of the whole database to `dest` (must not exist)
+    /// via `VACUUM INTO`: a transactional snapshot, no WAL/sidecar handling.
+    /// Works on a read-only connection.
+    pub fn export_database_copy(&self, dest: impl AsRef<std::path::Path>) -> Result<(), CoreError> {
+        let dest = dest.as_ref();
+        if dest.exists() {
+            return Err(CoreError::BadState(format!(
+                "export destination {} already exists",
+                dest.display()
+            )));
+        }
+        self.conn()
+            .execute("VACUUM INTO ?1", rusqlite::params![dest.to_string_lossy()])?;
+        Ok(())
+    }
+
     /// The whole store as one deterministic markdown document (vault format v1).
     /// Read-only. Stable ordering; free text verbatim. Uses `self.now()` for
     /// `exported_at` (so an injected clock makes it byte-for-byte reproducible).
@@ -587,5 +603,94 @@ mod tests {
         let corr = "### Thermodynamics ⟷ Memory\n\n---\nkind: correspondence\nid: \"co-1\"\ndomain_a: \"Thermodynamics\"\ndomain_b: \"Memory\"\ncreated_at: \"2026-07-14T09:12:00Z\"\n---\n\nErasure is forgetting.\n\n";
         assert!(doc.contains(pull), "pull note block:\n{doc}");
         assert!(doc.contains(corr), "correspondence block:\n{doc}");
+    }
+
+    /// A fresh temp dir; the caller removes it.
+    fn tmpdir() -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("athanor-export-{}", crate::ids::new_id()));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn open_read_only_refuses_missing_file() {
+        let dir = tmpdir();
+        let p = dir.join("nope.sqlite");
+        assert!(Store::open_read_only(&p, "d").is_err());
+        assert!(!p.exists());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn open_read_only_refuses_schema_mismatch() {
+        let dir = tmpdir();
+        let p = dir.join("old.sqlite");
+        {
+            let c = rusqlite::Connection::open(&p).unwrap();
+            c.pragma_update(None, "user_version", 1).unwrap();
+        }
+        assert!(Store::open_read_only(&p, "d").is_err());
+        let c = rusqlite::Connection::open(&p).unwrap();
+        let v: i64 = c
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, 1, "no migration ran");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn open_read_only_cannot_write() {
+        let dir = tmpdir();
+        let p = dir.join("live.sqlite");
+        drop(Store::open(&p, "d").unwrap());
+        let ro = Store::open_read_only(&p, "d").unwrap();
+        assert!(ro.open_thread("x", None, None).is_err());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn database_copy_from_read_only_store_matches() {
+        let dir = tmpdir();
+        let src = dir.join("src.sqlite");
+        {
+            let s = Store::open(&src, "device").unwrap();
+            seed_fixture(&s);
+        }
+        let clock: crate::store::Clock = Arc::new(|| CLOCK);
+        let ro = Store::open_read_only(&src, "device")
+            .unwrap()
+            .with_clock(clock.clone());
+        let dest = dir.join("copy.sqlite");
+        ro.export_database_copy(&dest).unwrap();
+        let copy = Store::open_read_only(&dest, "device")
+            .unwrap()
+            .with_clock(clock);
+        assert_eq!(copy.export_vault().unwrap(), ro.export_vault().unwrap());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn database_copy_refuses_existing_dest() {
+        let dir = tmpdir();
+        let dest = dir.join("exists.sqlite");
+        std::fs::write(&dest, b"keep me").unwrap();
+        let s = store();
+        assert!(s.export_database_copy(&dest).is_err());
+        assert_eq!(std::fs::metadata(&dest).unwrap().len(), 7);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn database_copy_from_in_memory_store() {
+        let dir = tmpdir();
+        let s = Store::open_in_memory("d").unwrap();
+        let t = s.open_thread("q?", None, None).unwrap();
+        let dest = dir.join("mem.sqlite");
+        s.export_database_copy(&dest).unwrap();
+        assert!(Store::open_read_only(&dest, "d")
+            .unwrap()
+            .get_thread(&t.id)
+            .is_ok());
+        std::fs::remove_dir_all(dir).ok();
     }
 }

@@ -23,7 +23,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use parking_lot::{ReentrantMutex, ReentrantMutexGuard};
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags};
 
 use crate::error::CoreError;
 
@@ -65,6 +65,41 @@ impl Store {
     fn from_connection(conn: Connection, device_id: impl Into<String>) -> Result<Self, CoreError> {
         conn.pragma_update(None, "foreign_keys", true)?;
         migrations::migrate(&conn)?;
+        Ok(Store {
+            conn: ReentrantMutex::new(conn),
+            device_id: device_id.into(),
+            clock: Arc::new(system_clock),
+        })
+    }
+
+    /// Opens an EXISTING store file read-only for export. Never migrates, never
+    /// creates. Errors: missing file → NotFound; `user_version` != MIGRATIONS.len()
+    /// → BadState("schema vN, this build expects vM — export from a copy with a
+    /// matching build"). Sets busy_timeout(2s) so a read during the live engine's
+    /// short write transaction waits instead of failing.
+    pub fn open_read_only(
+        path: impl AsRef<Path>,
+        device_id: impl Into<String>,
+    ) -> Result<Self, CoreError> {
+        let path = path.as_ref();
+        if !path.exists() {
+            return Err(CoreError::NotFound(format!(
+                "store file {}",
+                path.display()
+            )));
+        }
+        let conn = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        conn.busy_timeout(std::time::Duration::from_secs(2))?;
+        let found: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        let expected = migrations::MIGRATIONS.len();
+        if found as usize != expected {
+            return Err(CoreError::BadState(format!(
+                "schema v{found}, this build expects v{expected} — export from a copy with a matching build"
+            )));
+        }
         Ok(Store {
             conn: ReentrantMutex::new(conn),
             device_id: device_id.into(),
