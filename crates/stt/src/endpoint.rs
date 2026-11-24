@@ -125,6 +125,13 @@ impl Endpointer {
         // keeps counting monotonically; only speech/silence progress resets.
     }
 
+    /// True while an utterance is in progress: any non-Idle state (`Speaking`
+    /// or `TrailingSilence`). An inter-word dip stays in the utterance; it
+    /// turns false only after a latch fire, an abandoned blip, or `reset()`.
+    pub fn in_utterance(&self) -> bool {
+        !matches!(self.state, State::Idle)
+    }
+
     #[cfg(test)]
     fn is_idle(&self) -> bool {
         matches!(self.state, State::Idle)
@@ -449,5 +456,38 @@ mod tests {
             }
         }
         assert!(!fired, "post-reset state must not retain prior progress");
+    }
+    #[test]
+    fn in_utterance_spans_trailing_silence_until_latch_or_reset() {
+        let mut ep = Endpointer::new(
+            16_000,
+            EndpointConfig {
+                silence_ms: 800,
+                ..Default::default()
+            },
+        );
+        assert!(!ep.in_utterance(), "fresh endpointer is idle");
+        for _ in 0..12 {
+            ep.push(&sine(480, 440.0, 0.5));
+        }
+        assert!(ep.in_utterance(), "voiced -> in utterance");
+        for _ in 0..3 {
+            ep.push(&silence(480));
+        }
+        assert!(
+            ep.in_utterance(),
+            "an inter-word dip is still the same utterance"
+        );
+        let mut fired = false;
+        for _ in 0..24 {
+            fired |= ep.push(&silence(480)); // 27 silent windows total = 810 ms
+        }
+        assert!(fired, "latch fires at 810 ms");
+        assert!(!ep.in_utterance(), "latch returns to idle");
+        for _ in 0..12 {
+            ep.push(&sine(480, 440.0, 0.5));
+        }
+        ep.reset();
+        assert!(!ep.in_utterance(), "reset returns to idle");
     }
 }
