@@ -21,5 +21,6 @@ final class AppModel {
     init(engine: any AthanorEngineProtocol) {
         self.engine = engine
         self.hasCompletedInitiation = UserDefaults.standard.bool(forKey: Self.initiationKey)
+        LegacyWhisperCleanup.runInBackground()   // v1.0.7 whisper models: dead weight since v1.0.8
     }
 }
