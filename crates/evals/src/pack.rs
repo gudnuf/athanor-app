@@ -89,7 +89,11 @@ pub const FIELD_RULES: &[PackRule] = &[
     PackRule {
         id: "6_offer_and_weave",
         surface: Surface::Session("adamas"),
-        anchors: &["even mid-tangent", "a rhyme said aloud"],
+        anchors: &[
+            "even mid-tangent",
+            "a rhyme said aloud",
+            "before you cut again",
+        ],
     },
     PackRule {
         id: "7_keep_in_their_words",

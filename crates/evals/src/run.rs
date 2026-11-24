@@ -495,6 +495,23 @@ mod tests {
         )
         .await;
         assert!(!check(&unwoven, "weave_on_rhyme").passed);
+
+        // Run-1 shape: Adamas presses the universal instead of offering, on
+        // both replies after the mechanism.
+        let pressed = run_persona_with(&explainer(), |steps| {
+            steps[2] = Step::Engine(vec![
+                AcpUpdate::text_delta("The mechanism is clear. What is the starter like?"),
+                AcpUpdate::TurnComplete,
+            ]);
+            steps[4] = Step::Engine(vec![
+                AcpUpdate::text_delta(
+                    "\"Never\" is a big word. What's the hardest case where the push and the effect look like one instant?",
+                ),
+                AcpUpdate::TurnComplete,
+            ]);
+        })
+        .await;
+        assert!(!check(&pressed, "offer_after_mechanism").passed);
     }
 
     #[tokio::test]
