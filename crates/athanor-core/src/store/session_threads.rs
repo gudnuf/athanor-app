@@ -57,7 +57,6 @@ impl Store {
     /// The thread to record as the session's own: a `fixed` thread, else a
     /// `worked` one, else `focal`, else `opened`. `born` and `evaporated`
     /// never win. Earliest link breaks ties within a role.
-    #[allow(dead_code)] // consumed by Conductor::close (S3)
     pub(crate) fn primary_session_thread(
         &self,
         session_id: &str,
@@ -74,7 +73,6 @@ impl Store {
     /// Sets `last_worked = at` on every thread the session worked. The role
     /// filter lives here: `born` (a child merely spawned) and `evaporated` (an
     /// archive) never count as work.
-    #[allow(dead_code)] // consumed by Conductor::close (S3)
     pub(crate) fn mark_session_threads_worked(
         &self,
         session_id: &str,

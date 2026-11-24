@@ -28,7 +28,7 @@ use crate::mask::{self, SharedMask};
 use crate::mystagogue::Mystagogue;
 use crate::prompt;
 use crate::register::RegisterParser;
-use crate::session::{abandon_session, close_session};
+use crate::session::{abandon_session, close_session_on, today_utc};
 use crate::store::Store;
 use crate::transcript::{self, TranscriptRole};
 
@@ -76,6 +76,14 @@ pub struct ConductorOutcome {
     pub landed: bool,
 }
 
+/// Does this learner turn carry speech? Any alphanumeric character counts.
+/// A superset of `evals::field::is_empty_turn`: punctuation-only (`. . .`) and
+/// marker-only turns are not speech. The Bellows lane stops sending empty
+/// utterances; this is the core's second line of defence.
+fn is_contentful_turn(text: &str) -> bool {
+    text.chars().any(char::is_alphanumeric)
+}
+
 /// Owns one session's arc. See the module docs for the lifecycle.
 pub struct Conductor {
     store: Arc<Store>,
@@ -90,6 +98,10 @@ pub struct Conductor {
     /// ignores the mask/mode register). Fixed at construction.
     is_initiation: bool,
     thread_id: Option<String>,
+    /// How many CONTENTFUL learner turns `run_turn` has seen (`open_turn`'s
+    /// synthesized opening never counts). Close tends only if this is > 0 —
+    /// except the initiation, which tends on its opening turn alone (bba7487).
+    learner_turns: usize,
     /// The full dialogue so far, oldest first, both sides — re-sent (via a
     /// freshly-assembled prompt) on every subsequent `run_turn` so a
     /// multi-turn session's prompt deterministically includes everything said
@@ -112,6 +124,9 @@ impl Conductor {
         thread_id: Option<&str>,
     ) -> Result<Self, CoreError> {
         let session = store.create_session(thread_id, mask, mode)?;
+        if let Some(t) = thread_id {
+            store.link_session_thread(&session.id, t, "focal")?;
+        }
         Ok(Self::from_session(
             store,
             session.id,
@@ -158,6 +173,7 @@ impl Conductor {
             mask_state,
             is_initiation,
             thread_id,
+            learner_turns: 0,
             turns: Vec::new(),
             transcript: String::new(),
             tools_called: Vec::new(),
@@ -339,6 +355,9 @@ impl Conductor {
         learner_turn: Option<&str>,
         sink: &mut (dyn FnMut(AcpUpdate) + Send),
     ) -> Result<(), ConductorError> {
+        if learner_turn.is_some_and(is_contentful_turn) {
+            self.learner_turns += 1;
+        }
         let incoming = learner_turn.map(|text| AcpTurn {
             role: AcpRole::Learner,
             text: text.to_string(),
@@ -467,24 +486,50 @@ impl Conductor {
     /// for today — the only place wisdom advances) then writes the one-line
     /// trace. Consumes the conductor; call `run_turn` for every turn first.
     pub fn close(self, minutes: u32) -> Result<ConductorOutcome, CoreError> {
-        // An empty session (opened then closed with no exchange) has nothing
-        // settled to remember. Route it down the abandon path instead of
-        // closing it: no trace is written and the row is marked `abandoned`,
-        // so it drops out of every "past fires" list (all filter
-        // `state='closed'`) rather than surfacing as a ghost record with the
-        // `(no assistant text this session)` placeholder. `turns` is non-empty
-        // exactly when a real exchange happened — the learner's own input
-        // (`run_turn`) or the initiation's synthesized opening (`open_turn`) —
-        // so genuine sessions and initiations are unaffected.
-        if self.turns.is_empty() {
+        // A session in which the learner never said anything with content has
+        // nothing settled to remember — heard but not answered. Route it down
+        // the abandon path: no trace, no tending, row marked `abandoned`, so it
+        // drops out of every "past fires" list (all filter `state='closed'`).
+        // The initiation alone is exempt: it tends on its synthesized opening
+        // turn (bba7487), so completing it still lights the Furnace.
+        if self.learner_turns == 0 && !self.is_initiation() {
             return self.abandon();
         }
         let trace = self.synthesize_trace();
-        let thread_ids: Vec<String> = self.thread_id.clone().into_iter().collect();
-        // Every session reaching here ran at least one turn (the guard above
-        // abandoned the empty ones), so it tended the day and advances the
-        // fire — the only place wisdom advances.
-        close_session(&self.store, &self.session_id, minutes, &thread_ids, true)?;
+        let now = self.store.now();
+        let day = today_utc(now);
+        // 0 means "core, measure it": whole minutes from the session's start to
+        // its last activity (read BEFORE the row is closed), clamped to [1, 60].
+        let minutes = if minutes == 0 {
+            self.store.measured_minutes(&self.session_id)?
+        } else {
+            minutes
+        };
+        let thread_ids = self.store.session_thread_ids(&self.session_id)?;
+        // Close, mark the worked threads, and write the row's measured fields
+        // together: a failure leaves no half-closed session.
+        {
+            let guard = self.store.conn();
+            let tx = guard.unchecked_transaction()?;
+            close_session_on(
+                &self.store,
+                &self.session_id,
+                minutes,
+                &thread_ids,
+                true,
+                &day,
+            )?;
+            self.store
+                .mark_session_threads_worked(&self.session_id, now)?;
+            let primary = self.store.primary_session_thread(&self.session_id)?;
+            self.store.finish_session_row(
+                &self.session_id,
+                minutes,
+                Some(&day),
+                primary.as_deref(),
+            )?;
+            tx.commit()?;
+        }
         self.store.add_trace(&self.session_id, &trace)?;
         // Completing the initiation lights the Furnace (Tabula passage I): the
         // learner has begun — the first ember that is their own. Derived from
@@ -649,6 +694,13 @@ mod tests {
         assert!(!trace.is_empty());
         assert!(!trace.contains('\n'));
         assert!(trace.contains("erasure is dissipation"));
+
+        // The session↔thread links: the focal thread, the thread it fixed, and
+        // the child the salt birthed.
+        let links = store.session_links(&session_id).unwrap();
+        assert!(links.contains(&(parent.id.clone(), "focal".to_string())));
+        assert!(links.contains(&(parent.id.clone(), "fixed".to_string())));
+        assert!(links.iter().any(|(t, r)| r == "born" && *t != parent.id));
     }
 
     /// A reply carrying a reading-voice passage: the conductor must strip the
@@ -1347,6 +1399,145 @@ mod tests {
         assert!(
             turn2.to_lowercase().contains("grumblewarp"),
             "turn 2 should recall the coined word from the exchange: {turn2:?}"
+        );
+    }
+
+    // ---- S3: close is honest (measured minutes, links, contentful turns) ----
+
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// A store whose clock the test advances by hand. Both appends inside one
+    /// `run_turn` share an instant, so move the clock BETWEEN calls.
+    fn clock_store(start: u64) -> (Arc<Store>, Arc<AtomicU64>) {
+        let t = Arc::new(AtomicU64::new(start));
+        let t2 = Arc::clone(&t);
+        let store = Store::open_in_memory("dev")
+            .unwrap()
+            .with_clock(Arc::new(move || t2.load(Ordering::SeqCst)));
+        (Arc::new(store), t)
+    }
+
+    fn say(text: &str) -> MockEngine {
+        MockEngine::new(vec![AcpUpdate::text_delta(text), AcpUpdate::TurnComplete])
+    }
+
+    #[tokio::test]
+    async fn close_with_zero_minutes_records_measured_minutes() {
+        let (store, t) = clock_store(1_800_000_000);
+        let mut c = Conductor::begin(Arc::clone(&store), "philosophus", "explain", None).unwrap();
+        let sid = c.session_id().to_string();
+        t.store(1_800_000_420, Ordering::SeqCst);
+        c.run_turn(&say("Go on."), Some("a real sentence"), &mut |_| {})
+            .await
+            .unwrap();
+        t.store(1_800_009_000, Ordering::SeqCst); // closing late must not inflate it
+        c.close(0).unwrap();
+        let tending = store.all_tending().unwrap();
+        assert_eq!(tending.len(), 1);
+        assert_eq!(tending[0].minutes, 7, "ceil(420s / 60)");
+        let s = store.get_session(&sid).unwrap();
+        assert_eq!(s.minutes, Some(7));
+        assert_eq!(
+            s.tended_day.as_deref(),
+            Some(today_utc(1_800_009_000).as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn close_with_explicit_minutes_keeps_them() {
+        let (store, t) = clock_store(1_800_000_000);
+        let mut c = Conductor::begin(Arc::clone(&store), "philosophus", "explain", None).unwrap();
+        let sid = c.session_id().to_string();
+        t.store(1_800_000_420, Ordering::SeqCst);
+        c.run_turn(&say("Go on."), Some("a real sentence"), &mut |_| {})
+            .await
+            .unwrap();
+        c.close(12).unwrap();
+        assert_eq!(store.all_tending().unwrap()[0].minutes, 12);
+        assert_eq!(store.get_session(&sid).unwrap().minutes, Some(12));
+    }
+
+    #[tokio::test]
+    async fn a_dots_only_turn_does_not_count_as_a_learner_turn() {
+        let store = store_arc();
+        let mut c = Conductor::begin(Arc::clone(&store), "philosophus", "explain", None).unwrap();
+        let sid = c.session_id().to_string();
+        c.run_turn(&say("Take your time."), Some(". . ."), &mut |_| {})
+            .await
+            .unwrap();
+        c.close(0).unwrap();
+        assert_eq!(store.wisdom_days().unwrap(), 0);
+        assert_eq!(store.get_session(&sid).unwrap().state, "abandoned");
+    }
+
+    #[tokio::test]
+    async fn a_real_turn_after_dots_counts() {
+        let store = store_arc();
+        let mut c = Conductor::begin(Arc::clone(&store), "philosophus", "explain", None).unwrap();
+        let sid = c.session_id().to_string();
+        c.run_turn(&say("Take your time."), Some(". . ."), &mut |_| {})
+            .await
+            .unwrap();
+        c.run_turn(&say("Yes."), Some("yes"), &mut |_| {})
+            .await
+            .unwrap();
+        c.close(0).unwrap();
+        assert_eq!(store.wisdom_days().unwrap(), 1);
+        assert_eq!(store.get_session(&sid).unwrap().state, "closed");
+    }
+
+    #[tokio::test]
+    async fn initiation_opening_alone_still_tends_and_lights_the_furnace() {
+        // bba7487's exception, pinned: the initiation tends on open_turn alone.
+        let store = store_arc();
+        let mut c = Conductor::begin_initiation(Arc::clone(&store)).unwrap();
+        c.open_turn(&say("Welcome."), &mut |_| {}).await.unwrap();
+        c.close(0).unwrap();
+        assert_eq!(store.wisdom_days().unwrap(), 1);
+        assert!(store.kindled().unwrap().contains(&"FURNACE".to_string()));
+    }
+
+    #[tokio::test]
+    async fn an_ordinary_open_turn_alone_does_not_tend() {
+        // Heard but not answered: only the initiation is exempt.
+        let store = store_arc();
+        let mut c = Conductor::begin(Arc::clone(&store), "philosophus", "explain", None).unwrap();
+        c.open_turn(&say("Welcome."), &mut |_| {}).await.unwrap();
+        c.close(0).unwrap();
+        assert_eq!(store.wisdom_days().unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn close_links_opened_thread_and_sets_last_worked() {
+        let (store, t) = clock_store(1_800_000_000);
+        let mut c = Conductor::begin(Arc::clone(&store), "philosophus", "explain", None).unwrap();
+        let sid = c.session_id().to_string();
+        t.store(1_800_000_300, Ordering::SeqCst);
+        let engine = MockEngine::new(vec![
+            AcpUpdate::text_delta("Here is a question to carry."),
+            AcpUpdate::ToolCall(AcpToolCall {
+                id: "1".into(),
+                name: "open_thread".into(),
+                args: json!({ "question": "why does the grain decide the cut?" }),
+            }),
+            AcpUpdate::TurnComplete,
+        ]);
+        c.run_turn(&engine, Some("I keep wondering about cuts"), &mut |_| {})
+            .await
+            .unwrap();
+        t.store(1_800_000_360, Ordering::SeqCst);
+        c.close(0).unwrap();
+
+        let session = store.get_session(&sid).unwrap();
+        let thread_id = session.thread_id.clone().expect("primary thread recorded");
+        let tending = store.all_tending().unwrap();
+        assert_eq!(tending[0].thread_ids, vec![thread_id.clone()]);
+        let thread = store.get_thread(&thread_id).unwrap();
+        assert_eq!(thread.last_worked, session.ended_at);
+        assert_eq!(thread.last_worked, Some(1_800_000_360));
+        assert_eq!(
+            store.session_links(&sid).unwrap(),
+            vec![(thread_id, "opened".to_string())]
         );
     }
 }

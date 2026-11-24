@@ -25,6 +25,12 @@ pub mod seed;
 /// nominal figure rather than wall-clock, since a scripted turn is instant.
 pub const DEFAULT_SESSION_MINUTES: u32 = 15;
 
+/// The one learner line the single-turn harness feeds. The core tends a day
+/// only when the learner said something with content, so a scripted run needs
+/// a real (if nominal) learner turn; passing `None` would leave the session
+/// heard-but-unanswered, i.e. abandoned.
+pub const HARNESS_LEARNER_TURN: &str = "Let's begin.";
+
 /// What one driven session produced — enough for a test or a human to see what
 /// happened without reaching into the store. A thin alias over the
 /// Conductor's own outcome type, kept as a distinct name here since it's this
@@ -49,7 +55,7 @@ pub async fn run_session(
     let mut conductor = Conductor::begin(Arc::clone(&store), mask, mode, thread_id)?;
 
     conductor
-        .run_turn(engine, None, &mut |update| {
+        .run_turn(engine, Some(HARNESS_LEARNER_TURN), &mut |update| {
             if let AcpUpdate::TextDelta { text, .. } = &update {
                 let _ = out.write_all(text.as_bytes());
             }

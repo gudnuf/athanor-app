@@ -110,7 +110,6 @@ impl Store {
     /// (`updated_at`, which `append_transcript` advances), rounded up and
     /// clamped to [1, 60]. Read BEFORE the row is closed: closing overwrites
     /// `updated_at`.
-    #[allow(dead_code)] // consumed by Conductor::close (S3)
     pub(crate) fn measured_minutes(&self, session_id: &str) -> Result<u32, CoreError> {
         let s = self.get_session(session_id)?;
         let span = s.updated_at.saturating_sub(s.started_at);
@@ -119,7 +118,6 @@ impl Store {
 
     /// Writes what close learned onto the row: measured minutes, the tended
     /// UTC day, and (only if the row has none) the primary thread.
-    #[allow(dead_code)] // consumed by Conductor::close (S3)
     pub(crate) fn finish_session_row(
         &self,
         id: &str,

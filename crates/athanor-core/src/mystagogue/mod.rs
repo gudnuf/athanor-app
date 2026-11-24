@@ -72,6 +72,15 @@ impl Mystagogue {
         self
     }
 
+    /// Records that this session touched `thread_id` in `role`. A no-op outside
+    /// a real session (bare tool-dispatch tests have no session id).
+    fn link(&self, thread_id: &str, role: &str) -> Result<(), CoreError> {
+        if let Some(sid) = self.session_id.as_deref() {
+            self.store.link_session_thread(sid, thread_id, role)?;
+        }
+        Ok(())
+    }
+
     pub fn store(&self) -> &Store {
         &self.store
     }
@@ -309,6 +318,10 @@ impl Mystagogue {
                     &a.domains,
                     a.child_question.as_deref(),
                 )?;
+                self.link(&thread_id, "fixed")?;
+                if let Some(child) = realization.child_thread_id.as_deref() {
+                    self.link(child, "born")?;
+                }
                 Ok(json!({
                     "realization_id": realization.id,
                     "child_thread_id": realization.child_thread_id,
@@ -326,11 +339,13 @@ impl Mystagogue {
                 let thread = self
                     .store
                     .open_thread(&a.question, domain_id.as_deref(), None)?;
+                self.link(&thread.id, "opened")?;
                 Ok(json!({ "thread_id": thread.id }))
             }
             "evaporate_thread" => {
                 let a: EvaporateArgs = serde_json::from_value(args)?;
                 self.store.evaporate_thread(&a.id)?;
+                self.link(&a.id, "evaporated")?;
                 Ok(json!({ "thread_id": a.id, "state": "evaporated" }))
             }
             "kindle_passage" => {

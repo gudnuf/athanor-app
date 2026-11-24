@@ -93,10 +93,30 @@ pub fn close_session(
     thread_ids: &[String],
     tended: bool,
 ) -> Result<(), CoreError> {
+    close_session_on(
+        store,
+        session_id,
+        minutes,
+        thread_ids,
+        tended,
+        &today_utc(store.now()),
+    )
+}
+
+/// `close_session` with the tending day supplied by the caller, so the
+/// Conductor can compute `now`/`day` once and use the same day for the tending
+/// row and the session's `tended_day`.
+pub fn close_session_on(
+    store: &Store,
+    session_id: &str,
+    minutes: u32,
+    thread_ids: &[String],
+    tended: bool,
+    day: &str,
+) -> Result<(), CoreError> {
     store.mark_session_closed(session_id)?;
     if tended {
-        let day = today_utc(store.now());
-        store.record_tending(&day, minutes, thread_ids)?;
+        store.record_tending(day, minutes, thread_ids)?;
     }
     Ok(())
 }
