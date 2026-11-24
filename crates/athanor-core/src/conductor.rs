@@ -441,7 +441,10 @@ impl Conductor {
     pub async fn condense(&mut self, engine: &dyn MystagogueEngine) -> Result<(), ConductorError> {
         // Nothing was said — there's nothing to distill (and the GooseEngine
         // errors on an empty history anyway).
-        if self.turns.is_empty() {
+        // …and a session the learner never spoke in (heard but not answered) is
+        // about to be abandoned: it condenses nothing, so no note or profile
+        // line is born of silence. The initiation is exempt (it tends).
+        if self.turns.is_empty() || (self.learner_turns == 0 && !self.is_initiation()) {
             return Ok(());
         }
 
@@ -1539,5 +1542,28 @@ mod tests {
             store.session_links(&sid).unwrap(),
             vec![(thread_id, "opened".to_string())]
         );
+    }
+
+    #[tokio::test]
+    async fn condense_skips_a_session_the_learner_never_spoke_in() {
+        let store = store_arc();
+        let mut c = Conductor::begin(Arc::clone(&store), "philosophus", "explain", None).unwrap();
+        c.run_turn(&say("Here."), Some(". . ."), &mut |_| {})
+            .await
+            .unwrap();
+        // An engine that would error if asked: the skip means it is never called.
+        struct Boom;
+        #[async_trait::async_trait]
+        impl MystagogueEngine for Boom {
+            async fn run_turn(
+                &self,
+                _p: AcpPrompt,
+                _t: &dyn crate::engine::ToolDispatch,
+                _s: &mut (dyn FnMut(AcpUpdate) + Send),
+            ) -> Result<(), EngineError> {
+                panic!("condense must not call the engine for a silent session");
+            }
+        }
+        c.condense(&Boom).await.unwrap();
     }
 }
