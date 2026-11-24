@@ -311,6 +311,40 @@ pub fn fork_picker() -> Persona {
     }
 }
 
+/// The question the returner's prior note marked stalled.
+pub const RETURNER_STALLED: &[&str] = &["what's holding the other end of the sheet?"];
+
+/// The returner: comes back after a session whose note marked a question
+/// stalled. v1 rule 5: the opening doesn't ask it again; it comes at it
+/// sideways or opens something else.
+pub fn returner() -> Persona {
+    Persona {
+        name: "returner",
+        mask: "philosophus",
+        mode: "explain",
+        field: &[
+            FieldCheck::NoReask(RETURNER_STALLED),
+            FieldCheck::ElapsedTime(None),
+            FieldCheck::OneQuestion,
+        ],
+        build: |_thread_id| {
+            vec![
+                Step::Engine(vec![
+                    AcpUpdate::text_delta(
+                        "Last time you had the moon lifting a sheet — where else have you seen something pulled from far away?",
+                    ),
+                    AcpUpdate::TurnComplete,
+                ]),
+                Step::Learner("a kite, kind of. the string goes slack and taut".into()),
+                Step::Engine(vec![
+                    AcpUpdate::text_delta("Slack and taut — what makes it go taut?"),
+                    AcpUpdate::TurnComplete,
+                ]),
+            ]
+        },
+    }
+}
+
 /// The four README personas, then the v1 field personas.
 pub fn all_personas() -> Vec<Persona> {
     vec![
@@ -321,5 +355,6 @@ pub fn all_personas() -> Vec<Persona> {
         dead_air(),
         leaver(),
         fork_picker(),
+        returner(),
     ]
 }

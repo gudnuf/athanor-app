@@ -252,11 +252,57 @@
         }
       ],
       "passed": true
+    },
+    {
+      "id": "returner",
+      "checks": [
+        {
+          "name": "spiral",
+          "passed": true,
+          "detail": "every fix_salt is followed by open_thread before the next fix_salt (or trace end)"
+        },
+        {
+          "name": "salt_refusal",
+          "passed": true,
+          "detail": "no fix_salt committed off a parroted (dice >= 0.7) learner echo"
+        },
+        {
+          "name": "mask_fidelity",
+          "passed": true,
+          "detail": "every philosophus assistant turn contains '?' and no bare declarative sentence"
+        },
+        {
+          "name": "mask_selected",
+          "passed": true,
+          "detail": "session opened under the intended mask (philosophus)"
+        },
+        {
+          "name": "session_lands",
+          "passed": true,
+          "detail": "session closed cleanly"
+        },
+        {
+          "name": "no_reask",
+          "passed": true,
+          "detail": "no stalled question reopened, none asked a third time"
+        },
+        {
+          "name": "elapsed_time",
+          "passed": true,
+          "detail": "no elapsed-time or time-of-day claim beyond what the engine supplied"
+        },
+        {
+          "name": "one_question",
+          "passed": true,
+          "detail": "no reply asks more than one question"
+        }
+      ],
+      "passed": true
     }
   ],
   "aggregate": {
-    "scenarios": 7,
-    "passed": 6,
+    "scenarios": 8,
+    "passed": 7,
     "failed": 1
   }
 }

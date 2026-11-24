@@ -201,8 +201,8 @@ pub fn gated_llm_judge_enabled() -> bool {
 mod tests {
     use super::*;
     use crate::personas::{
-        all_personas, dead_air, eager_parroter, fork_picker, leaver, silent_one, stuck_one,
-        tangent_chaser,
+        all_personas, dead_air, eager_parroter, fork_picker, leaver, returner, silent_one,
+        stuck_one, tangent_chaser,
     };
     use athanor_core::engine::AcpToolCall;
     use serde_json::json;
@@ -454,5 +454,49 @@ mod tests {
         let forks = check(&forked, "forks");
         assert!(!forks.passed);
         assert!(forks.detail.contains("picked option"), "{}", forks.detail);
+    }
+
+    /// Two-session half of v1 rule 5: a close note that marks a question
+    /// stalled must reach the next session's prompt, or the opener can't
+    /// know to step around it.
+    #[test]
+    fn a_stalled_mark_in_the_close_note_reaches_the_next_opening() {
+        let store = Store::open_in_memory("stalled").unwrap();
+        let t = store
+            .open_thread("why does the tide wait?", None, None)
+            .unwrap();
+        let s1 = store
+            .create_session(Some(&t.id), "philosophus", "explain")
+            .unwrap();
+        store
+            .add_session_note(
+                &s1.id,
+                Some(&t.id),
+                "Worked the sheet picture. Asked what holds the other end twice; no answer either time. Stalled: come at it sideways or let it rest.",
+            )
+            .unwrap();
+        let next = athanor_core::prompt::assemble("philosophus", "explain", Some(&t.id), &store);
+        assert!(
+            next.system_prompt.contains("Stalled: come at it sideways"),
+            "the stalled mark must be in the next session's recent_notes"
+        );
+    }
+
+    #[tokio::test]
+    async fn returner_steps_around_the_stalled_question_and_the_v0_reask_fails() {
+        let report = run_persona(&returner()).await;
+        assert!(check(&report, "no_reask").passed);
+        assert!(report.passed);
+
+        let reask = run_with_step(
+            returner(),
+            0,
+            vec![
+                AcpUpdate::text_delta("Back to it — what's holding the other end of the sheet?"),
+                AcpUpdate::TurnComplete,
+            ],
+        )
+        .await;
+        assert!(!check(&reask, "no_reask").passed);
     }
 }

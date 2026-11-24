@@ -75,6 +75,16 @@ pub const FIELD_RULES: &[PackRule] = &[
             "a picture you offered",
         ],
     },
+    PackRule {
+        id: "5_stalled_session",
+        surface: Surface::Session("philosophus"),
+        anchors: &["has stalled", "marks a question stalled"],
+    },
+    PackRule {
+        id: "5_stalled_close",
+        surface: Surface::Condense,
+        anchors: &["call it stalled"],
+    },
 ];
 
 /// A small fixed store so every placeholder renders (the rule text lives in

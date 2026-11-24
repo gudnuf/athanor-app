@@ -474,6 +474,60 @@ pub fn grade_forks(trace: &SessionTrace) -> CheckResult {
     )
 }
 
+// ---- 5. stalled questions ------------------------------------------------
+
+fn question_sentences(text: &str) -> Vec<String> {
+    crate::grade::terminated_sentences(text)
+        .into_iter()
+        .filter(|(_, t)| *t == '?')
+        .map(|(s, _)| s.trim().to_string())
+        .collect()
+}
+
+/// Don't re-ask a stalled question (pack v1 rule 5). `stalled` are the
+/// questions the prior session's note marked stalled. Violations: the
+/// opening reply asks one of them again (Dice >= 0.5), or any question is
+/// asked a third time in one session (Dice >= 0.7 against two earlier ones).
+///
+/// Gated judge question: given a prior note marking a question stalled, did
+/// the opening come at it sideways or open something else, rather than ask
+/// it again in new words?
+pub fn grade_no_reask(trace: &SessionTrace, stalled: &[&str]) -> CheckResult {
+    use crate::normalize::{dice, token_set};
+    let all = replies(trace);
+    let mut violations = Vec::new();
+    if let Some(open) = all.first() {
+        for q in question_sentences(&open.text) {
+            for st in stalled {
+                let d = dice(&token_set(&q), &token_set(st));
+                if d >= 0.5 {
+                    violations.push(format!(
+                        "opening re-asks the stalled question \"{st}\" (dice {d:.2}): \"{q}\""
+                    ));
+                }
+            }
+        }
+    }
+    let mut asked: Vec<String> = Vec::new();
+    for (n, r) in all.iter().enumerate() {
+        for q in question_sentences(&r.text) {
+            let repeats = asked
+                .iter()
+                .filter(|a| dice(&token_set(a), &token_set(&q)) >= 0.7)
+                .count();
+            if repeats >= 2 {
+                violations.push(format!("reply {n}: asks a third time: \"{q}\""));
+            }
+            asked.push(q);
+        }
+    }
+    result(
+        "no_reask",
+        violations,
+        "no stalled question reopened, none asked a third time",
+    )
+}
+
 // ---- dispatch -----------------------------------------------------------
 
 /// A field grader a persona opts into (each needs at most one fixed
@@ -490,6 +544,8 @@ pub enum FieldCheck {
     Landing,
     /// v1 rule 4.
     Forks,
+    /// v1 rule 5; the questions the prior note marked stalled.
+    NoReask(&'static [&'static str]),
 }
 
 pub fn run_check(check: FieldCheck, trace: &SessionTrace) -> CheckResult {
@@ -499,6 +555,7 @@ pub fn run_check(check: FieldCheck, trace: &SessionTrace) -> CheckResult {
         FieldCheck::OneQuestion => grade_one_question(trace),
         FieldCheck::Landing => grade_landing(trace),
         FieldCheck::Forks => grade_forks(trace),
+        FieldCheck::NoReask(stalled) => grade_no_reask(trace, stalled),
     }
 }
 
@@ -732,5 +789,34 @@ mod tests {
             tool("open_thread", r#"{"question":"who lifts the corner?"}"#),
         ]);
         assert!(grade_forks(&ok).passed, "{:?}", grade_forks(&ok));
+    }
+
+    // --- 5. stalled questions ---------------------------------------------
+
+    #[test]
+    fn reopening_a_stalled_question_fails() {
+        let bad = trace(&[assistant(
+            "Last time: what's holding the other end of the sheet?",
+        )]);
+        assert!(!grade_no_reask(&bad, &["what's holding the other end?"]).passed);
+
+        let sideways = trace(&[assistant(
+            "Last time you had the moon lifting a sheet — where else have you seen something pulled from far away?",
+        )]);
+        assert!(grade_no_reask(&sideways, &["what's holding the other end?"]).passed);
+    }
+
+    #[test]
+    fn a_third_asking_fails() {
+        let bad = trace(&[
+            assistant("What's holding the other end?"),
+            learner("hm"),
+            assistant("So what's holding the other end?"),
+            learner("dunno"),
+            assistant("Really — what is holding the other end?"),
+        ]);
+        let r = grade_no_reask(&bad, &[]);
+        assert!(!r.passed);
+        assert!(r.detail.contains("third time"), "{}", r.detail);
     }
 }
