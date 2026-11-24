@@ -1,4 +1,3 @@
-#![allow(dead_code)] // removed in Task 3; plan said cfg_attr(not(test)) but the clippy lib-test target still trips
 //! Append-only LocalAgreement committer over cumulative recognizer text.
 //!
 //! On-device speech delivers the *cumulative* best transcription per request,
