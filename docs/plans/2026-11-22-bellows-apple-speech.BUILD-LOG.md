@@ -77,3 +77,10 @@ Task 0's branch was skipped (lead: commit on main).
 - Two lanes in one working tree; evals tests fail mid-edit for the other lane. I committed explicit paths only.
 - The plan's Step-4 expectations of `1 passed` for the Task 1 filter was wrong (filter also matches two older tests).
 - Test-first was observed red only for Task 1 (E0599) and clippy for Task 2; Tasks 2–4's tests were written with the implementation in one pass.
+
+## Addendum A — never emit an empty voice turn (lead directive, field evidence)
+- Not covered by the plan; added to the Task 3 machine as a deviation. Rule: `UtteranceEnded` is emitted only if the turn committed at least one word with alphanumeric content (counted across all requests of the turn, so a rotation mid-turn doesn't lose the carry). Otherwise the turn is dropped silently and `empty_turns` increments (endpointer already returned to Idle at the latch; send_now resets it). Punctuation-only / blank `Finalized` text is never pushed.
+- New metric `empty_turns` (TextBellowsMetrics + FfiTextBellowsMetrics; bindings regenerated with the whisper-removal rebuild).
+- New tests, all ok: `silence_only_turn_is_dropped_and_counted` (energy but no words → `[CycleRequest]`, then final "  " → no UtteranceEnded, empty_turns=1, a following real turn still ends), `punctuation_only_and_timed_out_empty_turns_are_dropped` (partial "—", timeout → `[]`, empty_turns=1 timeouts=1), `words_before_a_rotation_still_count_for_the_turn`. stt now `60 passed`; ffi `metrics_project` extended to 9 fields.
+- Swift side: `sendLiveUtterance` already trims and refuses empty text (SessionScreen) — see the Swift commit below for Initiation.
+- Known edge: if a later Active request self-closes with words while an earlier Closing request is still pending its turn end, those words are attributed to the earlier turn (harmless: at worst an empty turn is sent with the next turn's words ahead of it — Swift's non-empty guard still holds).
