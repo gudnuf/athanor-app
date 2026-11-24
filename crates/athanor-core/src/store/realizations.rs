@@ -46,6 +46,12 @@ fn realization_from_row(row: &rusqlite::Row) -> rusqlite::Result<Realization> {
     })
 }
 
+/// Which thread a salt condenses: an existing one, or a new honest-gap parent.
+enum SaltParent<'a> {
+    Existing(&'a str),
+    New(&'a str),
+}
+
 impl Store {
     /// Fix salt: write an immutable realization AND birth its child thread in
     /// one transaction, enforcing the spiral invariant. `domain_names` are
@@ -64,6 +70,40 @@ impl Store {
         domain_names: &[String],
         child_question: Option<&str>,
     ) -> Result<Realization, CoreError> {
+        self.fix_salt_on(
+            SaltParent::Existing(thread_id),
+            text,
+            domain_names,
+            child_question,
+        )
+    }
+
+    /// [`fix_salt`](Self::fix_salt) when no thread could be resolved: births a
+    /// NEW parent thread with `parent_prompt` (in the first named domain, if
+    /// any) and fixes the salt on it — all in the same transaction, so a failure
+    /// leaves no orphan parent. A salt is never dropped for want of a thread.
+    pub fn fix_salt_on_new_parent(
+        &self,
+        parent_prompt: &str,
+        text: &str,
+        domain_names: &[String],
+        child_question: Option<&str>,
+    ) -> Result<Realization, CoreError> {
+        self.fix_salt_on(
+            SaltParent::New(parent_prompt),
+            text,
+            domain_names,
+            child_question,
+        )
+    }
+
+    fn fix_salt_on(
+        &self,
+        parent_ref: SaltParent<'_>,
+        text: &str,
+        domain_names: &[String],
+        child_question: Option<&str>,
+    ) -> Result<Realization, CoreError> {
         // Hold the reentrant guard for the whole transaction. The nested `Store`
         // calls below (get_thread, upsert_domain, open_thread, set_thread_state,
         // kindle_passage) and the `self.conn()` statements re-lock reentrantly on
@@ -75,8 +115,22 @@ impl Store {
         let conn = self.conn();
         let tx = conn.unchecked_transaction()?;
 
+        // The first named domain places a parent that has none, so the child
+        // (which inherits the parent's domain) lands somewhere too.
+        let first_domain_id = match domain_names.first() {
+            Some(name) if !name.trim().is_empty() => Some(self.upsert_domain(name)?.id),
+            _ => None,
+        };
+        let thread_id_owned: String = match parent_ref {
+            SaltParent::Existing(id) => id.to_string(),
+            SaltParent::New(prompt) => {
+                self.open_thread(prompt, first_domain_id.as_deref(), None)?
+                    .id
+            }
+        };
+        let thread_id = thread_id_owned.as_str();
         // Parent must exist; the child thread inherits its domain.
-        let parent = self.get_thread(thread_id)?;
+        let mut parent = self.get_thread(thread_id)?;
 
         // No salt on a dead or already-settled thread: a Fixed thread has
         // already yielded its realization, and an Evaporated one was let go.
@@ -86,6 +140,13 @@ impl Store {
                 "cannot fix salt on a {} thread {thread_id}",
                 parent.state.as_str()
             )));
+        }
+
+        if parent.domain_id.is_none() {
+            if let Some(did) = first_domain_id.as_deref() {
+                self.set_thread_domain_if_null(thread_id, did)?;
+                parent.domain_id = Some(did.to_string());
+            }
         }
 
         let rid = new_id();

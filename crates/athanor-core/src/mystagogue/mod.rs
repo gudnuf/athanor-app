@@ -44,6 +44,10 @@ pub struct Mystagogue {
     session_id: Option<String>,
 }
 
+/// The prompt of a parent thread opened when a salt answers no nameable
+/// question. Invariant #7: it names what is missing and invents no question.
+pub(crate) const HONEST_GAP_PROMPT: &str = "(the question this answered went unnamed)";
+
 /// How many past-session excerpts `recall` returns at most (bounds prompt cost
 /// for a broad query).
 const RECALL_MAX_HITS: usize = 5;
@@ -86,45 +90,118 @@ impl Mystagogue {
     }
 
     /// Chooses the thread a `fix_salt` should condense, tolerating the model
-    /// fumbling the id (it can only see thread PROMPTS in the assembled prompt,
-    /// not uuids, and reliably invents refs like `ripe_mercury[0]`). In order:
-    /// the given id if it's a real, still-open thread; else the session's focal
-    /// thread; else the single ripest open thread; else a crisp error naming the
-    /// open threads. Salt is never dropped on the floor because of a bad id.
-    fn resolve_salt_thread(&self, given: Option<&str>) -> Result<String, CoreError> {
+    /// fumbling the reference. In order: a real, still-open uuid; a `#handle`
+    /// in `thread` or `thread_id`; the session's focal thread; the ONLY thread
+    /// this session opened or worked. Otherwise `None` — and the caller opens a
+    /// new parent rather than guessing (a salt must never close an unrelated
+    /// thread, and must never be dropped).
+    fn resolve_salt_thread(&self, a: &FixSaltArgs) -> Option<String> {
         let fixable = |id: &str| -> bool {
             matches!(
                 self.store.get_thread(id).map(|t| t.state),
                 Ok(ThreadState::Volatile) | Ok(ThreadState::Condensing)
             )
         };
-        if let Some(id) = given.map(str::trim).filter(|s| !s.is_empty()) {
-            if fixable(id) {
-                return Ok(id.to_string());
+        let given = [a.thread_id.as_deref(), a.thread.as_deref()];
+        for g in given
+            .iter()
+            .flatten()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
+            if fixable(g) {
+                return Some(g.to_string());
+            }
+        }
+        for g in given
+            .iter()
+            .flatten()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
+            if let Ok(Some(t)) = self.store.thread_by_handle(g) {
+                if fixable(&t.id) {
+                    return Some(t.id);
+                }
             }
         }
         if let Some(focal) = self.focal_thread.as_deref() {
             if fixable(focal) {
-                return Ok(focal.to_string());
+                return Some(focal.to_string());
             }
         }
-        if let Some(ripe) = self.store.ripe_threads(1)?.into_iter().next() {
-            return Ok(ripe.id);
-        }
-        let open: Vec<String> = self
-            .store
-            .open_threads()?
-            .into_iter()
-            .map(|t| t.prompt)
-            .collect();
-        Err(CoreError::BadState(format!(
-            "no open thread to fix salt against{}",
-            if open.is_empty() {
-                " (none are open)".to_string()
-            } else {
-                format!("; open threads: {}", open.join("; "))
+        if let Some(sid) = self.session_id.as_deref() {
+            let mut mine: Vec<String> = Vec::new();
+            for (t, role) in self.store.session_links(sid).unwrap_or_default() {
+                if (role == "opened" || role == "worked") && fixable(&t) && !mine.contains(&t) {
+                    mine.push(t);
+                }
             }
-        )))
+            if mine.len() == 1 {
+                return mine.pop();
+            }
+        }
+        None
+    }
+
+    /// `fix_salt`: bind to the thread it answers, else birth an honest parent.
+    fn fix_salt(&self, a: FixSaltArgs) -> Result<Value, CoreError> {
+        let (realization, note) = match self.resolve_salt_thread(&a) {
+            Some(id) => (
+                self.store.fix_salt(
+                    &id,
+                    &a.realization,
+                    &a.domains,
+                    a.child_question.as_deref(),
+                )?,
+                None,
+            ),
+            None => {
+                let answers = a
+                    .answers
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty());
+                let prompt = answers.unwrap_or(HONEST_GAP_PROMPT);
+                let rz = self.store.fix_salt_on_new_parent(
+                    prompt,
+                    &a.realization,
+                    &a.domains,
+                    a.child_question.as_deref(),
+                )?;
+                let note = if answers.is_some() {
+                    None
+                } else {
+                    let open: Vec<String> = self
+                        .store
+                        .open_threads()?
+                        .into_iter()
+                        .map(|t| crate::ids::handle_of(&t.id))
+                        .collect();
+                    Some(format!(
+                        "fixed on a new thread; open threads: {}",
+                        if open.is_empty() {
+                            "(none)".to_string()
+                        } else {
+                            open.join(" ")
+                        }
+                    ))
+                };
+                (rz, note)
+            }
+        };
+        self.link(&realization.thread_id, "fixed")?;
+        if let Some(child) = realization.child_thread_id.as_deref() {
+            self.link(child, "born")?;
+        }
+        let mut out = json!({
+            "realization_id": realization.id,
+            "child_thread_id": realization.child_thread_id,
+        });
+        if let Some(n) = note {
+            out["note"] = json!(n);
+        }
+        Ok(out)
     }
 
     /// Moves the session's register (lane 13). Validates against the real mask
@@ -218,7 +295,9 @@ impl Mystagogue {
                     "type": "object",
                     "properties": {
                         "realization": { "type": "string", "description": "the immutable insight, in the learner's own words" },
-                        "thread_id": { "type": "string", "description": "optional — the thread this realization condenses; omit to condense the current ripe thread (you see thread prompts, not ids, so prefer omitting it)" },
+                        "thread": { "type": "string", "description": "the #handle from ripe_mercury, if this salt answers one of those threads" },
+                        "answers": { "type": "string", "description": "if it answers no listed thread: the question it answers, in the learner's words" },
+                        "thread_id": { "type": "string", "description": "legacy: a uuid or #handle; prefer `thread`" },
                         "domains": { "type": "array", "items": { "type": "string" }, "description": "domain names this realization touches" },
                         "child_question": { "type": "string", "description": "the next question this opens (optional; one is synthesized if absent)" }
                     },
@@ -231,7 +310,7 @@ impl Mystagogue {
                     "type": "object",
                     "properties": {
                         "question": { "type": "string" },
-                        "domain": { "type": "string", "description": "domain name (optional)" }
+                        "domain": { "type": "string", "description": "the learner's domain this belongs to; reuse an active_domains name; else name it in their words" }
                     },
                     "required": ["question"]
                 }),
@@ -240,8 +319,11 @@ impl Mystagogue {
                 name: "evaporate_thread".into(),
                 json_schema: json!({
                     "type": "object",
-                    "properties": { "id": { "type": "string" } },
-                    "required": ["id"]
+                    "description": "Let a thread go (it is archived, never deleted). Name it by its #handle from ripe_mercury.",
+                    "properties": {
+                        "thread": { "type": "string", "description": "the #handle from ripe_mercury" },
+                        "id": { "type": "string", "description": "legacy: the thread uuid; give `thread` or `id`" }
+                    }
                 }),
             },
             AcpToolSpec {
@@ -305,28 +387,7 @@ impl Mystagogue {
     /// hands back. Errors surface as values (`dispatch` never fails the turn).
     fn run(&self, name: &str, args: Value) -> Result<Value, CoreError> {
         match name {
-            "fix_salt" => {
-                let a: FixSaltArgs = serde_json::from_value(args)?;
-                // Tolerate a fumbled/omitted thread id — the model can't see
-                // uuids, only prompts. Resolve to the real thread this salt
-                // condenses (given → focal → ripest) so a good realization is
-                // never lost to a bad reference.
-                let thread_id = self.resolve_salt_thread(a.thread_id.as_deref())?;
-                let realization = self.store.fix_salt(
-                    &thread_id,
-                    &a.realization,
-                    &a.domains,
-                    a.child_question.as_deref(),
-                )?;
-                self.link(&thread_id, "fixed")?;
-                if let Some(child) = realization.child_thread_id.as_deref() {
-                    self.link(child, "born")?;
-                }
-                Ok(json!({
-                    "realization_id": realization.id,
-                    "child_thread_id": realization.child_thread_id,
-                }))
-            }
+            "fix_salt" => self.fix_salt(serde_json::from_value(args)?),
             "open_thread" => {
                 let a: OpenThreadArgs = serde_json::from_value(args)?;
                 // The model speaks in domain names; resolve to an id if given.
@@ -344,9 +405,34 @@ impl Mystagogue {
             }
             "evaporate_thread" => {
                 let a: EvaporateArgs = serde_json::from_value(args)?;
-                self.store.evaporate_thread(&a.id)?;
-                self.link(&a.id, "evaporated")?;
-                Ok(json!({ "thread_id": a.id, "state": "evaporated" }))
+                let given = [a.id.as_deref(), a.thread.as_deref()];
+                let given: Vec<&str> = given
+                    .iter()
+                    .flatten()
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                if given.is_empty() {
+                    return Err(CoreError::BadState(
+                        "evaporate_thread needs `thread` (a #handle) or `id`".into(),
+                    ));
+                }
+                let mut target: Option<String> = None;
+                for g in &given {
+                    if self.store.get_thread(g).is_ok() {
+                        target = Some((*g).to_string());
+                        break;
+                    }
+                    if let Ok(Some(t)) = self.store.thread_by_handle(g) {
+                        target = Some(t.id);
+                        break;
+                    }
+                }
+                let id = target
+                    .ok_or_else(|| CoreError::NotFound(format!("thread {}", given.join(" / "))))?;
+                self.store.evaporate_thread(&id)?;
+                self.link(&id, "evaporated")?;
+                Ok(json!({ "thread_id": id, "state": "evaporated" }))
             }
             "kindle_passage" => {
                 let a: KindleArgs = serde_json::from_value(args)?;
@@ -393,11 +479,16 @@ impl ToolDispatch for Mystagogue {
 #[derive(Deserialize)]
 struct FixSaltArgs {
     realization: String,
-    /// Optional: the model only sees thread prompts, not uuids, so a missing or
-    /// fumbled id resolves to the session's focal/ripest thread
-    /// (`resolve_salt_thread`).
+    /// A `#handle` from ripe_mercury, if this salt answers one.
+    #[serde(default)]
+    thread: Option<String>,
+    /// Legacy/fumbled reference: a uuid or a `#handle` (`resolve_salt_thread`).
     #[serde(default)]
     thread_id: Option<String>,
+    /// If it answers no listed thread: the question it answers, in the
+    /// learner's words — a new parent is opened with this prompt.
+    #[serde(default)]
+    answers: Option<String>,
     #[serde(default)]
     domains: Vec<String>,
     #[serde(default)]
@@ -413,7 +504,10 @@ struct OpenThreadArgs {
 
 #[derive(Deserialize)]
 struct EvaporateArgs {
-    id: String,
+    #[serde(default)]
+    thread: Option<String>,
+    #[serde(default)]
+    id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -499,30 +593,40 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fix_salt_with_no_thread_id_condenses_the_ripest_open_thread() {
+    async fn fix_salt_unresolved_fixes_on_a_new_honest_gap_parent() {
         let store = Store::open_in_memory("dev").unwrap();
-        let ripe = store.open_thread("the ripe one", None, None).unwrap();
-        store
-            .set_thread_state(&ripe.id, ThreadState::Condensing)
-            .unwrap();
-        store
-            .open_thread("a younger volatile one", None, None)
-            .unwrap();
-        // No focal thread, and the model omits thread_id entirely.
+        let one = store.open_thread("the first open one", None, None).unwrap();
+        let two = store.open_thread("a second open one", None, None).unwrap();
+        // No focal thread, no handle, no `answers`: nothing resolves.
         let myst = Mystagogue::new(store_arc(store));
         let res = myst
             .dispatch(call("fix_salt", json!({ "realization": "it clicked" })))
             .await;
         assert!(res.value.get("realization_id").is_some(), "{:?}", res.value);
-        assert_eq!(
-            myst.store().get_thread(&ripe.id).unwrap().state,
-            ThreadState::Fixed,
-            "the condensing (ripest) thread was chosen"
-        );
+        assert!(res.value.get("child_thread_id").is_some());
+        let note = res.value["note"].as_str().expect("a note");
+        assert!(note.contains(&crate::ids::handle_of(&one.id)), "{note}");
+        assert!(note.contains(&crate::ids::handle_of(&two.id)), "{note}");
+        // The realization is unchanged and sits on a NEW parent that names the gap.
+        let rid = res.value["realization_id"].as_str().unwrap();
+        let rz = myst.store().get_realization(rid).unwrap();
+        assert_eq!(rz.text, "it clicked");
+        assert_ne!(rz.thread_id, one.id);
+        assert_ne!(rz.thread_id, two.id);
+        let parent = myst.store().get_thread(&rz.thread_id).unwrap();
+        assert_eq!(parent.prompt, HONEST_GAP_PROMPT);
+        assert_eq!(parent.state, ThreadState::Fixed);
+        // Neither pre-existing thread was touched.
+        for t in [&one, &two] {
+            assert_eq!(
+                myst.store().get_thread(&t.id).unwrap().state,
+                ThreadState::Volatile
+            );
+        }
     }
 
     #[tokio::test]
-    async fn fix_salt_with_no_open_threads_errors_crisply() {
+    async fn fix_salt_with_no_open_threads_still_fixes_on_a_new_parent() {
         let store = Store::open_in_memory("dev").unwrap();
         let myst = Mystagogue::new(store_arc(store));
         let res = myst
@@ -531,8 +635,150 @@ mod tests {
                 json!({ "realization": "nowhere to put it" }),
             ))
             .await;
-        let err = res.value["error"].as_str().unwrap();
-        assert!(err.contains("no open thread"), "crisp error: {err}");
+        assert!(res.value.get("error").is_none(), "{:?}", res.value);
+        let rid = res.value["realization_id"].as_str().unwrap();
+        let rz = myst.store().get_realization(rid).unwrap();
+        assert_eq!(rz.text, "nowhere to put it");
+        assert_eq!(
+            myst.store().get_thread(&rz.thread_id).unwrap().prompt,
+            HONEST_GAP_PROMPT
+        );
+    }
+
+    #[tokio::test]
+    async fn fix_salt_accepts_a_handle_in_thread_or_legacy_thread_id() {
+        let store = Store::open_in_memory("dev").unwrap();
+        let a = store.open_thread("thread a", None, None).unwrap();
+        let b = store.open_thread("thread b", None, None).unwrap();
+        let myst = Mystagogue::new(store_arc(store));
+        let ha = crate::ids::handle_of(&a.id);
+        let hb = crate::ids::handle_of(&b.id);
+        let r1 = myst
+            .dispatch(call(
+                "fix_salt",
+                json!({ "realization": "one", "thread": ha }),
+            ))
+            .await;
+        let r2 = myst
+            .dispatch(call(
+                "fix_salt",
+                json!({ "realization": "two", "thread_id": hb }),
+            ))
+            .await;
+        assert!(r1.value.get("note").is_none(), "{:?}", r1.value);
+        assert!(r2.value.get("note").is_none(), "{:?}", r2.value);
+        for t in [&a, &b] {
+            assert_eq!(
+                myst.store().get_thread(&t.id).unwrap().state,
+                ThreadState::Fixed
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn fix_salt_with_answers_opens_a_parent_in_the_learners_question() {
+        let store = Store::open_in_memory("dev").unwrap();
+        let bystander = store.open_thread("unrelated", None, None).unwrap();
+        let myst = Mystagogue::new(store_arc(store));
+        let res = myst
+            .dispatch(call(
+                "fix_salt",
+                json!({ "realization": "the grain decides the cut",
+                        "answers": "why does the saw wander?" }),
+            ))
+            .await;
+        let rid = res.value["realization_id"].as_str().unwrap();
+        let rz = myst.store().get_realization(rid).unwrap();
+        let parent = myst.store().get_thread(&rz.thread_id).unwrap();
+        assert_eq!(parent.prompt, "why does the saw wander?");
+        assert_eq!(parent.state, ThreadState::Fixed);
+        assert_eq!(
+            myst.store().get_thread(&bystander.id).unwrap().state,
+            ThreadState::Volatile
+        );
+    }
+
+    #[tokio::test]
+    async fn fix_salt_sets_null_parent_domain_from_first_domain_and_child_inherits() {
+        let store = Store::open_in_memory("dev").unwrap();
+        let parent = store.open_thread("no domain yet", None, None).unwrap();
+        let myst = Mystagogue::new(store_arc(store));
+        let res = myst
+            .dispatch(call(
+                "fix_salt",
+                json!({ "realization": "r", "thread_id": parent.id,
+                        "domains": ["woodworking", "joinery"] }),
+            ))
+            .await;
+        let rid = res.value["realization_id"].as_str().unwrap();
+        let dom = myst.store().upsert_domain("woodworking").unwrap();
+        assert_eq!(
+            myst.store().get_thread(&parent.id).unwrap().domain_id,
+            Some(dom.id.clone())
+        );
+        let child = myst.store().realization_child_thread(rid).unwrap();
+        assert_eq!(
+            child.domain_id,
+            Some(dom.id),
+            "child inherits the parent's domain"
+        );
+    }
+
+    #[tokio::test]
+    async fn fix_salt_never_replaces_an_existing_parent_domain() {
+        let store = Store::open_in_memory("dev").unwrap();
+        let d = store.upsert_domain("optics").unwrap();
+        let parent = store.open_thread("placed", Some(&d.id), None).unwrap();
+        let myst = Mystagogue::new(store_arc(store));
+        myst.dispatch(call(
+            "fix_salt",
+            json!({ "realization": "r", "thread_id": parent.id, "domains": ["acoustics"] }),
+        ))
+        .await;
+        assert_eq!(
+            myst.store().get_thread(&parent.id).unwrap().domain_id,
+            Some(d.id)
+        );
+    }
+
+    #[tokio::test]
+    async fn evaporate_thread_accepts_handle() {
+        let store = Store::open_in_memory("dev").unwrap();
+        let thread = store.open_thread("a dead end", None, None).unwrap();
+        let myst = Mystagogue::new(store_arc(store));
+        let res = myst
+            .dispatch(call(
+                "evaporate_thread",
+                json!({ "thread": crate::ids::handle_of(&thread.id) }),
+            ))
+            .await;
+        assert_eq!(res.value["state"], "evaporated", "{:?}", res.value);
+        assert_eq!(
+            myst.store().get_thread(&thread.id).unwrap().state,
+            ThreadState::Evaporated
+        );
+        let none = myst.dispatch(call("evaporate_thread", json!({}))).await;
+        assert!(none.value.get("error").is_some(), "needs id or thread");
+    }
+
+    #[tokio::test]
+    async fn open_thread_in_session_then_fix_salt_binds_to_it() {
+        // Resolution step 4: the only thread this session opened.
+        let store = Store::open_in_memory("dev").unwrap();
+        let s = store
+            .create_session(None, "philosophus", "explain")
+            .unwrap();
+        let myst = Mystagogue::new(store_arc(store))
+            .with_mask_state(crate::mask::shared("philosophus", "explain"), s.id);
+        let opened = myst
+            .dispatch(call("open_thread", json!({ "question": "why?" })))
+            .await;
+        let tid = opened.value["thread_id"].as_str().unwrap().to_string();
+        let res = myst
+            .dispatch(call("fix_salt", json!({ "realization": "because" })))
+            .await;
+        let rid = res.value["realization_id"].as_str().unwrap();
+        assert_eq!(myst.store().get_realization(rid).unwrap().thread_id, tid);
     }
 
     // ---- the load-bearing spiral test (plan Task 9, Step 1) ----

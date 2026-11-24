@@ -110,6 +110,22 @@ impl Store {
         rows.collect::<Result<Vec<_>, _>>().map_err(CoreError::from)
     }
 
+    /// Sets a thread's domain only if it has none. Returns whether it changed.
+    /// A domain a learner (or an earlier pass) already placed is never replaced.
+    pub fn set_thread_domain_if_null(
+        &self,
+        thread_id: &str,
+        domain_id: &str,
+    ) -> Result<bool, CoreError> {
+        let now = self.now();
+        let changed = self.conn().execute(
+            "UPDATE threads SET domain_id = ?1, updated_at = ?2
+             WHERE id = ?3 AND domain_id IS NULL AND deleted_at IS NULL",
+            params![domain_id, now, thread_id],
+        )?;
+        Ok(changed > 0)
+    }
+
     /// Resolves a `#handle` (the last six hex characters of a thread id, as
     /// shown in `ripe_mercury`) to its live thread. The leading `#` is
     /// optional. Anything that is not exactly six lowercase hex digits is
