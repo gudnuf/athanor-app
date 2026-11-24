@@ -84,10 +84,48 @@ impl Store {
     }
 }
 
+/// What kind of session is being assembled. `ColdRoom` joins in Release 2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SessionKind {
+    #[default]
+    Ordinary,
+    Initiation,
+}
+
+/// The cold-room reading rendered into the injection. Release 2 gives it
+/// content; until then it is an empty placeholder so the context's shape is
+/// settled once, shared by the clock (core ask #1) and the cold room.
+#[derive(Debug, Clone, Default)]
+pub struct ColdLine;
+
+/// One context for everything `assemble` needs beyond the store. The default
+/// reproduces the old `assemble` byte for byte. `now`/`tz_offset_min` carry the
+/// clock in (core ask #1): assembly itself never reads a clock, so the same
+/// store + ctx always yields the same prompt.
+#[derive(Debug, Clone, Default)]
+pub struct AssembleCtx<'a> {
+    /// `None` → `DEFAULT_SESSION_BUDGET_MIN`.
+    pub budget_min: Option<u32>,
+    /// Epoch seconds "now"; `None` → `last_session_ago: (not supplied)`.
+    pub now: Option<u64>,
+    /// The device's UTC offset in minutes; `None` → "(not supplied)".
+    pub tz_offset_min: Option<i32>,
+    /// Release 2 (cold room); `None` → the line is omitted.
+    pub cold: Option<&'a ColdLine>,
+    pub kind: SessionKind,
+}
+
+impl AssembleCtx<'_> {
+    fn budget(&self) -> u32 {
+        self.budget_min.unwrap_or(DEFAULT_SESSION_BUDGET_MIN)
+    }
+}
+
 /// Renders the seven knows-you placeholders as a labeled injection block.
 /// Each empty field renders documented not-knowing language, never a fabricated
 /// history (core-identity §1: "behave as if you genuinely don't know yet").
-fn profile_injection(store: &Store, focal_thread: Option<&str>, budget_min: u32) -> String {
+fn profile_injection(store: &Store, focal_thread: Option<&str>, ctx: &AssembleCtx) -> String {
+    let budget_min = ctx.budget();
     let learner_name = store.get_profile_section("name").unwrap_or_default();
     let how_they_learn = store.get_profile_section("how_i_learn").unwrap_or_default();
 
@@ -273,7 +311,7 @@ fn session_sections(
     mode: &str,
     thread_id: Option<&str>,
     store: &Store,
-    budget_min: u32,
+    ctx: &AssembleCtx,
 ) -> Vec<(&'static str, String)> {
     vec![
         (SECTION_IDENTITY, assets::IDENTITY.trim_end().to_string()),
@@ -283,7 +321,7 @@ fn session_sections(
         ),
         (
             SECTION_PROFILE_INJECTION,
-            profile_injection(store, thread_id, budget_min),
+            profile_injection(store, thread_id, ctx),
         ),
         (
             SECTION_MODE,
@@ -305,7 +343,7 @@ fn session_sections(
 
 /// Builds the labeled sections for the initiation prompt (`assemble_initiation`'s
 /// layering), without joining them.
-fn initiation_sections(store: &Store) -> Vec<(&'static str, String)> {
+fn initiation_sections(store: &Store, ctx: &AssembleCtx) -> Vec<(&'static str, String)> {
     vec![
         (SECTION_IDENTITY, assets::IDENTITY.trim_end().to_string()),
         (
@@ -314,7 +352,7 @@ fn initiation_sections(store: &Store) -> Vec<(&'static str, String)> {
         ),
         (
             SECTION_PROFILE_INJECTION,
-            profile_injection(store, None, DEFAULT_SESSION_BUDGET_MIN),
+            profile_injection(store, None, ctx),
         ),
         (
             SECTION_INITIATION,
@@ -332,7 +370,7 @@ fn initiation_sections(store: &Store) -> Vec<(&'static str, String)> {
 /// the function is total (callers select from [`assets::MASK_IDS`] /
 /// [`assets::MODE_IDS`]).
 pub fn assemble(mask: &str, mode: &str, thread_id: Option<&str>, store: &Store) -> SessionPlan {
-    assemble_with_budget(mask, mode, thread_id, store, DEFAULT_SESSION_BUDGET_MIN)
+    assemble_ctx(mask, mode, thread_id, store, &AssembleCtx::default())
 }
 
 /// [`assemble`] with an explicit session budget (minutes).
@@ -343,7 +381,23 @@ pub fn assemble_with_budget(
     store: &Store,
     budget_min: u32,
 ) -> SessionPlan {
-    let sections = session_sections(mask, mode, thread_id, store, budget_min);
+    let ctx = AssembleCtx {
+        budget_min: Some(budget_min),
+        ..AssembleCtx::default()
+    };
+    assemble_ctx(mask, mode, thread_id, store, &ctx)
+}
+
+/// The one assemble entry point: [`assemble`] and [`assemble_with_budget`] are
+/// wrappers over it.
+pub fn assemble_ctx(
+    mask: &str,
+    mode: &str,
+    thread_id: Option<&str>,
+    store: &Store,
+    ctx: &AssembleCtx,
+) -> SessionPlan {
+    let sections = session_sections(mask, mode, thread_id, store, ctx);
     let system_prompt = sections
         .into_iter()
         .map(|(_, body)| body)
@@ -363,7 +417,11 @@ pub fn assemble_with_budget(
 /// selected yet — the cold start is about the learner, not a subject
 /// (initiation.md). Runs against an empty profile by design.
 pub fn assemble_initiation(store: &Store) -> SessionPlan {
-    let sections = initiation_sections(store);
+    let ctx = AssembleCtx {
+        kind: SessionKind::Initiation,
+        ..AssembleCtx::default()
+    };
+    let sections = initiation_sections(store, &ctx);
     let system_prompt = sections
         .into_iter()
         .map(|(_, body)| body)
@@ -391,12 +449,18 @@ pub fn assemble_sections(
     thread_id: Option<&str>,
     store: &Store,
 ) -> Vec<(&'static str, String)> {
-    session_sections(mask, mode, thread_id, store, DEFAULT_SESSION_BUDGET_MIN)
+    session_sections(mask, mode, thread_id, store, &AssembleCtx::default())
 }
 
 /// [`assemble_sections`] for the initiation prompt.
 pub fn assemble_initiation_sections(store: &Store) -> Vec<(&'static str, String)> {
-    initiation_sections(store)
+    initiation_sections(
+        store,
+        &AssembleCtx {
+            kind: SessionKind::Initiation,
+            ..AssembleCtx::default()
+        },
+    )
 }
 
 /// Assembles the close-only distillation prompt (`Conductor::condense`):
@@ -406,7 +470,7 @@ pub fn assemble_initiation_sections(store: &Store) -> Vec<(&'static str, String)
 pub fn assemble_condensation(store: &Store, thread_id: Option<&str>) -> String {
     [
         assets::IDENTITY.trim_end().to_string(),
-        profile_injection(store, thread_id, DEFAULT_SESSION_BUDGET_MIN),
+        profile_injection(store, thread_id, &AssembleCtx::default()),
         assets::CONDENSE.trim_end().to_string(),
     ]
     .join(SEP)
@@ -548,6 +612,35 @@ pub fn parse_condensation(text: &str) -> Condensation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn assemble_ctx_default_is_byte_identical_to_assemble() {
+        let store = Store::open_in_memory("d").unwrap();
+        store
+            .open_thread("why does ice float?", None, None)
+            .unwrap();
+        let a = assemble("philosophus", "explain", None, &store);
+        let b = assemble_ctx(
+            "philosophus",
+            "explain",
+            None,
+            &store,
+            &AssembleCtx::default(),
+        );
+        assert_eq!(a.system_prompt, b.system_prompt);
+        let c = assemble_with_budget("adamas", "trace", None, &store, 30);
+        let d = assemble_ctx(
+            "adamas",
+            "trace",
+            None,
+            &store,
+            &AssembleCtx {
+                budget_min: Some(30),
+                ..AssembleCtx::default()
+            },
+        );
+        assert_eq!(c.system_prompt, d.system_prompt);
+    }
 
     /// Store with a domain, a ripe thread, profile.how_i_learn, and a last trace.
     fn seeded_store() -> (Store, String) {

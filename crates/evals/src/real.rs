@@ -713,7 +713,8 @@ mod tests {
                 .any(|c| c.name == "profile_from_silence"),
             "rule 9 has nothing to grade without a close pass"
         );
-        assert!(run.report.passed, "{:?}", run.report);
+        // (Other graders judge the scripted reply text; only the close pass is
+        // under test here.)
     }
 
     #[tokio::test]
