@@ -236,6 +236,47 @@ pub fn dead_air() -> Persona {
     }
 }
 
+/// The leaver: works one turn, then says they have to go. v1 rule 3: one
+/// question per reply, and the reply to "I have to go" names what stayed
+/// open and asks nothing.
+pub fn leaver() -> Persona {
+    Persona {
+        name: "leaver",
+        mask: "philosophus",
+        mode: "explain",
+        field: &[
+            FieldCheck::OneQuestion,
+            FieldCheck::Landing,
+            FieldCheck::ElapsedTime(None),
+        ],
+        build: |_thread_id| {
+            vec![
+                Step::Engine(vec![
+                    AcpUpdate::text_delta(
+                        "Last time you left the tide question open — what's it doing now?",
+                    ),
+                    AcpUpdate::TurnComplete,
+                ]),
+                Step::Learner(
+                    "it's like the moon pulls a sheet and the water just goes where the sheet goes"
+                        .into(),
+                ),
+                Step::Engine(vec![
+                    AcpUpdate::text_delta("A sheet — what's holding the other end?"),
+                    AcpUpdate::TurnComplete,
+                ]),
+                Step::Learner("not sure. I have to go, actually.".into()),
+                Step::Engine(vec![
+                    AcpUpdate::text_delta(
+                        "Who holds the other end of the sheet stays open. We start there.",
+                    ),
+                    AcpUpdate::TurnComplete,
+                ]),
+            ]
+        },
+    }
+}
+
 /// The four README personas, then the v1 field personas.
 pub fn all_personas() -> Vec<Persona> {
     vec![
@@ -244,5 +285,6 @@ pub fn all_personas() -> Vec<Persona> {
         tangent_chaser(),
         silent_one(),
         dead_air(),
+        leaver(),
     ]
 }

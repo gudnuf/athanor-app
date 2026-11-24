@@ -58,6 +58,14 @@ pub const FIELD_RULES: &[PackRule] = &[
         surface: Surface::Condense,
         anchors: &["empty turns", "tell you about the mic, not the learner"],
     },
+    PackRule {
+        id: "3_one_question_landing",
+        surface: Surface::Session("philosophus"),
+        anchors: &[
+            "one question per reply",
+            "the last thing you say is not a question",
+        ],
+    },
 ];
 
 /// A small fixed store so every placeholder renders (the rule text lives in

@@ -201,7 +201,7 @@ pub fn gated_llm_judge_enabled() -> bool {
 mod tests {
     use super::*;
     use crate::personas::{
-        all_personas, dead_air, eager_parroter, silent_one, stuck_one, tangent_chaser,
+        all_personas, dead_air, eager_parroter, leaver, silent_one, stuck_one, tangent_chaser,
     };
     use athanor_core::engine::AcpToolCall;
     use serde_json::json;
@@ -396,5 +396,31 @@ mod tests {
             "SuiteReport JSON drifted from the checked-in fixture — if intentional, \
              re-run with UPDATE_FIXTURES=1 and review the diff"
         );
+    }
+
+    #[tokio::test]
+    async fn leaver_lands_and_the_v0_parting_question_fails() {
+        let report = run_persona(&leaver()).await;
+        assert!(check(&report, "landing").passed);
+        assert!(check(&report, "one_question").passed);
+        assert!(
+            check(&report, "mask_fidelity").passed,
+            "landing line is exempt"
+        );
+        assert!(report.passed);
+
+        let parting = run_with_step(
+            leaver(),
+            4,
+            vec![
+                AcpUpdate::text_delta(
+                    "Before you go — who holds the other end? And does the sheet ever tear?",
+                ),
+                AcpUpdate::TurnComplete,
+            ],
+        )
+        .await;
+        assert!(!check(&parting, "landing").passed);
+        assert!(!check(&parting, "one_question").passed);
     }
 }

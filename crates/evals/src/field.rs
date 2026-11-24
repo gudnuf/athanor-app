@@ -243,6 +243,7 @@ fn empty_run_lengths(trace: &SessionTrace) -> Vec<usize> {
 /// landing line.
 pub fn is_landing_context(trace: &SessionTrace, idx: usize) -> bool {
     empty_run_lengths(trace).get(idx).copied().unwrap_or(0) >= 2
+        || learner_before(trace, idx).is_some_and(is_leave_signal)
 }
 
 /// An empty turn is not a turn (pack v1 rule 2). Within a run of empty
@@ -298,6 +299,106 @@ pub fn grade_empty_turns(trace: &SessionTrace) -> CheckResult {
     )
 }
 
+// ---- 3. one question; the last turn lands -------------------------------
+
+/// Number of question sentences in `text` ("Who issued it — did you? And
+/// when?" is two).
+pub fn question_count(text: &str) -> usize {
+    crate::grade::terminated_sentences(text)
+        .iter()
+        .filter(|(_, t)| *t == '?')
+        .count()
+}
+
+/// Phrases a learner uses to say they're done for now.
+const LEAVE_SIGNALS: &[&str] = &[
+    "have to go",
+    "got to go",
+    "gotta go",
+    "need to go",
+    "i'm done",
+    "im done",
+    "that's enough",
+    "thats enough",
+    "enough for today",
+    "stop here",
+    "signing off",
+    "heading out",
+    "leave it there",
+    "call it a night",
+    "call it a day",
+];
+
+pub fn is_leave_signal(text: &str) -> bool {
+    let lower = text.to_lowercase().replace('\u{2019}', "'");
+    LEAVE_SIGNALS.iter().any(|p| lower.contains(p))
+}
+
+/// The learner turn nearest before `idx`, if any.
+fn learner_before(trace: &SessionTrace, idx: usize) -> Option<&str> {
+    trace.turns[..idx].iter().rev().find_map(|t| match t {
+        Turn::LearnerText(s) => Some(s.as_str()),
+        _ => None,
+    })
+}
+
+/// One live question per reply (pack v1 rule 3, first half).
+///
+/// Gated judge question: did any reply hand the learner a choice of
+/// questions, or ask a second question inside the first ("…, and why?")?
+pub fn grade_one_question(trace: &SessionTrace) -> CheckResult {
+    let violations = replies(trace)
+        .iter()
+        .enumerate()
+        .filter_map(|(n, r)| {
+            let q = question_count(&r.text);
+            (q > 1).then(|| format!("reply {n}: {q} questions in \"{}\"", r.text))
+        })
+        .collect();
+    result(
+        "one_question",
+        violations,
+        "no reply asks more than one question",
+    )
+}
+
+/// The final turn lands, it doesn't ask (pack v1 rule 3, second half). When
+/// a learner turn signals they're done, the reply to it must exist (the
+/// Mystagogue lands it) and must contain no question.
+///
+/// Gated judge question: did the last reply name what stayed open in the
+/// learner's words and stop, or did it ask something on the way out?
+pub fn grade_landing(trace: &SessionTrace) -> CheckResult {
+    let all = replies(trace);
+    let mut violations = Vec::new();
+    for (i, turn) in trace.turns.iter().enumerate() {
+        let Turn::LearnerText(text) = turn else {
+            continue;
+        };
+        if !is_leave_signal(text) {
+            continue;
+        }
+        match all.iter().find(|r| r.after_learner == Some(i)) {
+            None => violations.push(format!(
+                "turn {i}: learner signalled done; no landing reply"
+            )),
+            Some(r) if r.text.contains('?') => violations.push(format!(
+                "turn {i}: learner signalled done; the reply still asks: \"{}\"",
+                r.text
+            )),
+            Some(r) if r.text.trim().is_empty() => violations.push(format!(
+                "turn {i}: learner signalled done; the reply says nothing"
+            )),
+            Some(_) => {}
+        }
+    }
+    result(
+        "landing",
+        violations,
+        "every done-signal met with a landing that asks nothing",
+    )
+}
+
 // ---- dispatch -----------------------------------------------------------
 
 /// A field grader a persona opts into (each needs at most one fixed
@@ -308,12 +409,18 @@ pub enum FieldCheck {
     ElapsedTime(Option<&'static str>),
     /// v1 rule 2.
     EmptyTurns,
+    /// v1 rule 3.
+    OneQuestion,
+    /// v1 rule 3.
+    Landing,
 }
 
 pub fn run_check(check: FieldCheck, trace: &SessionTrace) -> CheckResult {
     match check {
         FieldCheck::ElapsedTime(known) => grade_elapsed_time(trace, known),
         FieldCheck::EmptyTurns => grade_empty_turns(trace),
+        FieldCheck::OneQuestion => grade_one_question(trace),
+        FieldCheck::Landing => grade_landing(trace),
     }
 }
 
@@ -457,5 +564,44 @@ mod tests {
             assistant("The tide thing. What about it?"),
         ]);
         assert!(grade_empty_turns(&ok).passed);
+    }
+
+    // --- 3. one question; landing ----------------------------------------
+
+    #[test]
+    fn stacked_questions_fail() {
+        let bad = trace(&[assistant(
+            "Who set that rule — did you? And if you did, when?",
+        )]);
+        assert!(!grade_one_question(&bad).passed);
+        let ok = trace(&[assistant("Who set that rule?")]);
+        assert!(grade_one_question(&ok).passed);
+    }
+
+    #[test]
+    fn asking_on_the_way_out_fails_and_landing_passes() {
+        let bad = trace(&[
+            assistant("What's holding the other end?"),
+            learner("not sure. I have to go, actually."),
+            assistant("Before you go: what would it take to find out?"),
+        ]);
+        assert!(!grade_landing(&bad).passed);
+
+        let silent_exit = trace(&[
+            assistant("What's holding the other end?"),
+            learner("I have to go."),
+        ]);
+        assert!(
+            !grade_landing(&silent_exit).passed,
+            "a done-signal needs a landing"
+        );
+
+        let ok = trace(&[
+            assistant("What's holding the other end?"),
+            learner("not sure. I have to go, actually."),
+            assistant("The other end stays open. We'll start there."),
+        ]);
+        assert!(grade_landing(&ok).passed);
+        assert!(is_landing_context(&ok, 2));
     }
 }
