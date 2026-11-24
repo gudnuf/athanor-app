@@ -60,3 +60,7 @@ athanor-vault-*.md
 *.sqlite-wal
 *.sqlite-shm
 *.db
+
+# gated real-API eval output (README.md stays)
+crates/evals/reports/real-api/*
+!crates/evals/reports/real-api/README.md

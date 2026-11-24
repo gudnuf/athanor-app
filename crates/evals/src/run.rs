@@ -180,19 +180,9 @@ pub async fn run_suite(personas: &[Persona]) -> SuiteReport {
     SuiteReport::assemble("v1", scenarios)
 }
 
-/// The gated real-API LLM-judge tier (Task 15 Step 4 scaffold). Reads
-/// `ANTHROPIC_API_KEY`; when a real engine is wired (Phase 4's
-/// `GooseEngine`/`goosed_client`), this tier replays the four personas
-/// through it (not `MockEngine`), asks `prompts/judge.md` to grade each
-/// session, and writes the report to `docs/research/` — never to CI, and
-/// never automatically: the review's reconciliation #7 requires the judge
-/// see the FULL transcript (assistant + tool calls + `LearnerText`), the same
-/// `SessionTrace` shape the deterministic graders already use, not just the
-/// Mystagogue tool-call side — mask-fidelity and condensation-honesty
-/// grading are meaningless without the learner's actual words.
-///
-/// Today this only proves the gate: no key means no call, full stop. The
-/// real engine wiring is follow-up work once Phase 4's engine lands.
+/// Whether a key is present for the gated real-API tier (see `real.rs`,
+/// run with `--features real-api -- --ignored`). Presence only; the key itself
+/// is read by the gated test from the env, never from a file.
 pub fn gated_llm_judge_enabled() -> bool {
     std::env::var("ANTHROPIC_API_KEY").is_ok()
 }
@@ -358,21 +348,6 @@ mod tests {
         )
         .await;
         assert!(!check(&chase, "empty_turns").passed);
-    }
-
-    #[test]
-    #[ignore = "gated real-API tier: requires ANTHROPIC_API_KEY, on-demand only, never in CI"]
-    fn gated_llm_judge_grades_full_transcripts_against_prompts_judge_md() {
-        assert!(
-            gated_llm_judge_enabled(),
-            "set ANTHROPIC_API_KEY to run the gated LLM-judge tier"
-        );
-        // Real-engine replay + prompts/judge.md grading over the FULL
-        // transcript (assistant + tool calls + LearnerText — review
-        // reconciliation #7) lands here once Phase 4's real engine
-        // (GooseEngine/goosed_client) is wired. Never runs in CI: no key,
-        // and #[ignore] besides.
-        todo!("wire real engine + prompts/judge.md once Phase 4's engine lands");
     }
 
     #[test]

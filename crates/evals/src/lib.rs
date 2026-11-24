@@ -12,5 +12,6 @@ pub mod grade;
 pub mod normalize;
 pub mod pack;
 pub mod personas;
+pub mod real;
 pub mod report;
 pub mod run;
