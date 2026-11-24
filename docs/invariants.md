@@ -33,8 +33,6 @@ this repo. Violating one of these is a bug even if the tests pass.
    question is a defect (it made duplicate threads in field use). This is
    also a deterministic eval check in `crates/evals`: a prompt-pack change
    that breaks it is a regression, not a style choice.
-   (`evals::grade::grade_spiral`) — a prompt-pack change that breaks this is
-   a regression, not a style choice.
 7. **No plausible hallucination stands in for an honest gap.** Anything the
    Mystagogue didn't actually establish with the learner renders as
    acknowledged uncertainty, never a confident invented fact — same spirit as
