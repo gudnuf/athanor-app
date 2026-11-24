@@ -1561,7 +1561,7 @@ mod tests {
             AcpUpdate::ToolCall(AcpToolCall {
                 id: "1".into(),
                 name: "open_thread".into(),
-                args: json!({ "question": "why does the grain decide the cut?" }),
+                args: json!({ "question": "why does the tide wait for the moon?" }),
             }),
             AcpUpdate::TurnComplete,
         ]);
@@ -1611,7 +1611,7 @@ mod tests {
     async fn condense_worked_line_links_thread_before_close_marks_it_worked() {
         let (store, t) = clock_store(1_800_000_000);
         let thread = store
-            .open_thread("why does the saw wander?", None, None)
+            .open_thread("why does the tide wait for the moon?", None, None)
             .unwrap();
         let handle = crate::ids::handle_of(&thread.id);
         let mut c = Conductor::begin(Arc::clone(&store), "philosophus", "explain", None).unwrap();
@@ -1619,14 +1619,14 @@ mod tests {
         t.store(1_800_000_120, Ordering::SeqCst);
         c.run_turn(
             &say("Say more."),
-            Some("the saw wanders along the grain"),
+            Some("the tide lags the moon"),
             &mut |_| {},
         )
         .await
         .unwrap();
         let engine = MockEngine::new(vec![
             AcpUpdate::text_delta(format!(
-                "NOTE: Worked the wandering saw.\nWORKED: {handle}\nWORKED: #ffffff\nDOMAIN {handle}: woodworking"
+                "NOTE: Worked the waiting tide.\nWORKED: {handle}\nWORKED: #ffffff\nDOMAIN {handle}: tides"
             )),
             AcpUpdate::TurnComplete,
         ]);
@@ -1645,7 +1645,7 @@ mod tests {
         c.close(0).unwrap();
         let after = store.get_thread(&thread.id).unwrap();
         assert_eq!(after.last_worked, Some(1_800_000_180));
-        let dom = store.upsert_domain("woodworking").unwrap();
+        let dom = store.upsert_domain("tides").unwrap();
         assert_eq!(after.domain_id, Some(dom.id));
         assert_eq!(store.get_session(&sid).unwrap().thread_id, Some(thread.id));
     }

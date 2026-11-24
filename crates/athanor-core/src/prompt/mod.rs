@@ -145,13 +145,26 @@ fn last_session_ago_line(
     let interval = match last_end {
         None => "(no prior session)".to_string(),
         Some(end) => {
+            // The ACTUAL elapsed time first, then calendar days in the
+            // learner's own zone — 20 minutes across midnight is minutes, never
+            // "1 day" (the honest-time rule exists to stop that).
+            let elapsed = now.saturating_sub(end);
             let days = (local(now).div_euclid(86_400) - local(end).div_euclid(86_400)).max(0);
-            match days {
-                0 => "earlier today".to_string(),
-                1 => "1 day".to_string(),
-                2..=13 => format!("{days} days"),
-                14..=62 => format!("{} weeks", days / 7),
-                _ => format!("{} months", days / 30),
+            let plural =
+                |n: u64, unit: &str| format!("{n} {unit}{}", if n == 1 { "" } else { "s" });
+            if elapsed < 3_600 {
+                plural((elapsed / 60).max(1), "minute")
+            } else if days == 0 || elapsed < 12 * 3_600 {
+                // Same calendar day, or too recent for "yesterday" to be honest.
+                plural(elapsed / 3_600, "hour")
+            } else if days == 1 {
+                "yesterday".to_string()
+            } else {
+                match days {
+                    2..=13 => format!("{days} days"),
+                    14..=62 => format!("{} weeks", days / 7),
+                    _ => format!("{} months", days / 30),
+                }
             }
         }
     };
@@ -1032,16 +1045,16 @@ mod tests {
     #[test]
     fn parse_condensation_reads_worked_and_domain_lines() {
         let c = parse_condensation(
-            "NOTE: Circled the grain question.\nstill the note\nWORKED: #a3f9c2\nWORKED: #0b1c2d, #ffffff\nDOMAIN #a3f9c2: woodworking\nPROFILE frictions: loses the thread when rushed",
+            "NOTE: Circled the tide question.\nstill the note\nWORKED: #a3f9c2\nWORKED: #0b1c2d, #ffffff\nDOMAIN #a3f9c2: tides\nPROFILE frictions: loses the thread when rushed",
         );
         assert_eq!(
             c.note.as_deref(),
-            Some("Circled the grain question.\nstill the note")
+            Some("Circled the tide question.\nstill the note")
         );
         assert_eq!(c.worked, vec!["#a3f9c2", "#0b1c2d", "#ffffff"]);
         assert_eq!(
             c.domains,
-            vec![("#a3f9c2".to_string(), "woodworking".to_string())]
+            vec![("#a3f9c2".to_string(), "tides".to_string())]
         );
         assert_eq!(c.profile_updates.len(), 1);
     }
@@ -1067,12 +1080,27 @@ mod tests {
         let line = |ago_secs: u64, tz: i32| {
             last_session_ago_line(Some(NOW - ago_secs), Some(NOW), Some(tz))
         };
-        // same local day
+        // NOW is 19:00 local at UTC+0.
+        assert_eq!(
+            line(30, 0),
+            "last_session_ago: 1 minute; their time: evening"
+        );
+        assert_eq!(
+            line(20 * 60, 0),
+            "last_session_ago: 20 minutes; their time: evening"
+        );
         assert_eq!(
             line(3_600, 0),
-            "last_session_ago: earlier today; their time: evening"
+            "last_session_ago: 1 hour; their time: evening"
         );
-        assert_eq!(line(DAY, 0), "last_session_ago: 1 day; their time: evening");
+        assert_eq!(
+            line(5 * 3_600, 0),
+            "last_session_ago: 5 hours; their time: evening"
+        );
+        assert_eq!(
+            line(DAY, 0),
+            "last_session_ago: yesterday; their time: evening"
+        );
         assert_eq!(
             line(2 * DAY, 0),
             "last_session_ago: 2 days; their time: evening"
@@ -1100,11 +1128,38 @@ mod tests {
     }
 
     #[test]
-    fn last_session_ago_uses_the_devices_local_day_and_part_of_day() {
-        // 19:00Z is 04:00 the next local day at UTC+9: "night", and a session
-        // 5h ago (14:00Z = 23:00 the previous local day) is 1 day ago, not today.
+    fn last_session_ago_across_midnight_reports_the_real_interval() {
+        // 00:10 local now; the last session ended 23:50 the previous local day.
+        let midnight = (NOW / DAY) * DAY;
+        let now = midnight + 10 * 60;
+        let l = last_session_ago_line(Some(now - 20 * 60), Some(now), Some(0));
+        assert_eq!(
+            l, "last_session_ago: 20 minutes; their time: night",
+            "not '1 day'"
+        );
+        // 2 hours across midnight: hours, not yesterday/1 day.
+        let now = midnight + 3600;
+        let l = last_session_ago_line(Some(now - 2 * 3600), Some(now), Some(0));
+        assert_eq!(l, "last_session_ago: 2 hours; their time: night");
+        // 23:50 yesterday → 23:10 today (23h20m, previous calendar day): "yesterday".
+        let now = midnight + 23 * 3600 + 600;
+        let l = last_session_ago_line(Some(now - (23 * 3600 + 1200)), Some(now), Some(0));
+        assert_eq!(l, "last_session_ago: yesterday; their time: night");
+        // The learner's zone decides the calendar day: at UTC+9, 19:00Z is 04:00
+        // local and a session 5h ago was 23:00 the day before — still "5 hours"
+        // (too recent to call yesterday); 15h ago (13:00 the day before) is
+        // "yesterday".
         let l = last_session_ago_line(Some(NOW - 5 * 3_600), Some(NOW), Some(540));
-        assert_eq!(l, "last_session_ago: 1 day; their time: night");
+        assert_eq!(l, "last_session_ago: 5 hours; their time: night");
+        let l = last_session_ago_line(Some(NOW - 15 * 3_600), Some(NOW), Some(540));
+        assert_eq!(l, "last_session_ago: yesterday; their time: night");
+        // Same UTC instants at UTC-5: both on the same local day → hours.
+        let l = last_session_ago_line(Some(NOW - 5 * 3_600), Some(NOW), Some(-300));
+        assert_eq!(l, "last_session_ago: 5 hours; their time: afternoon");
+    }
+
+    #[test]
+    fn last_session_ago_part_of_day_boundaries() {
         for (hour_utc, part) in [
             (4, "night"),
             (5, "morning"),
@@ -1116,7 +1171,7 @@ mod tests {
             (22, "night"),
         ] {
             let now = (NOW / DAY) * DAY + hour_utc * 3_600;
-            let l = last_session_ago_line(Some(now - 60), Some(now), Some(0));
+            let l = last_session_ago_line(Some(now - 600), Some(now), Some(0));
             assert!(
                 l.ends_with(&format!("their time: {part}")),
                 "{hour_utc}h → {l}"

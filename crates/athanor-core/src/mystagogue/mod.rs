@@ -640,7 +640,6 @@ mod tests {
             .dispatch(call("fix_salt", json!({ "realization": "it clicked" })))
             .await;
         assert!(res.value.get("realization_id").is_some(), "{:?}", res.value);
-        assert!(res.value.get("child_thread_id").is_some());
         let note = res.value["note"].as_str().expect("a note");
         assert!(note.contains(&crate::ids::handle_of(&one.id)), "{note}");
         assert!(note.contains(&crate::ids::handle_of(&two.id)), "{note}");
@@ -648,6 +647,18 @@ mod tests {
         let rid = res.value["realization_id"].as_str().unwrap();
         let rz = myst.store().get_realization(rid).unwrap();
         assert_eq!(rz.text, "it clicked");
+        // Invariant #6 (the spiral): the child is a real stored thread, born
+        // from THIS realization, and the realization points back at it.
+        let child_id = res.value["child_thread_id"]
+            .as_str()
+            .expect("child id, not null");
+        let child = myst.store().get_thread(child_id).unwrap();
+        assert_eq!(child.parent_realization_id.as_deref(), Some(rid));
+        assert_eq!(rz.child_thread_id.as_deref(), Some(child_id));
+        assert_eq!(
+            myst.store().realization_child_thread(rid).unwrap().id,
+            child_id
+        );
         assert_ne!(rz.thread_id, one.id);
         assert_ne!(rz.thread_id, two.id);
         let parent = myst.store().get_thread(&rz.thread_id).unwrap();
@@ -720,14 +731,14 @@ mod tests {
         let res = myst
             .dispatch(call(
                 "fix_salt",
-                json!({ "realization": "the grain decides the cut",
-                        "answers": "why does the saw wander?" }),
+                json!({ "realization": "the tide waits for the moon",
+                        "answers": "why does the tide wait for the moon?" }),
             ))
             .await;
         let rid = res.value["realization_id"].as_str().unwrap();
         let rz = myst.store().get_realization(rid).unwrap();
         let parent = myst.store().get_thread(&rz.thread_id).unwrap();
-        assert_eq!(parent.prompt, "why does the saw wander?");
+        assert_eq!(parent.prompt, "why does the tide wait for the moon?");
         assert_eq!(parent.state, ThreadState::Fixed);
         assert_eq!(
             myst.store().get_thread(&bystander.id).unwrap().state,
@@ -744,11 +755,11 @@ mod tests {
             .dispatch(call(
                 "fix_salt",
                 json!({ "realization": "r", "thread_id": parent.id,
-                        "domains": ["woodworking", "joinery"] }),
+                        "domains": ["tides", "lunar cycles"] }),
             ))
             .await;
         let rid = res.value["realization_id"].as_str().unwrap();
-        let dom = myst.store().upsert_domain("woodworking").unwrap();
+        let dom = myst.store().upsert_domain("tides").unwrap();
         assert_eq!(
             myst.store().get_thread(&parent.id).unwrap().domain_id,
             Some(dom.id.clone())
