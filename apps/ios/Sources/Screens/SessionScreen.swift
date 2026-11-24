@@ -703,14 +703,23 @@ private struct SttOverlay: View {
 
             if let m = metrics {
                 row("engine", m.engine)
-                if m.engine != "apple" {
+                if m.engine == "apple" {
+                    row("pickup", dash(m.pickupMs))
+                    row("latch", dash(m.latchMs))
+                    row("finalize", dash(m.utteranceEndLatencyMs))
+                    row("felt send", dash(m.latchMs + m.utteranceEndLatencyMs))
+                    row("requests", m.decodePasses == 0 ? "—" : "\(m.decodePasses)")
+                    row("timeouts", m.timeouts == 0 ? "—" : "\(m.timeouts)")
+                } else {
                 row("decode", "\(m.lastDecodeMs) ms")
                 row("window", String(format: "%.1f s", Double(m.lastWindowMs) / 1000))
                 row("rtf", rtf + (m.realtimeFactor > 0 && m.realtimeFactor < 1 ? " ⚡︎" : ""))
                 row("passes", "\(m.decodePasses)")
                 row("metal", m.gpuRequested ? "on (device)" : "off (sim/cpu)")
                 }
-                row("send latch", m.utteranceEndLatencyMs == 0 ? "— (no turn yet)" : "\(m.utteranceEndLatencyMs) ms")
+                if m.engine != "apple" {
+                    row("send latch", m.utteranceEndLatencyMs == 0 ? "— (no turn yet)" : "\(m.utteranceEndLatencyMs) ms")
+                }
             } else {
                 Text("no live decode yet")
                     .font(.system(.caption2, design: .monospaced))
@@ -764,6 +773,9 @@ private struct SttOverlay: View {
         default: return "switching…"
         }
     }
+
+    /// Milliseconds, or an em dash for zero.
+    private func dash(_ ms: UInt64) -> String { ms == 0 ? "—" : "\(ms) ms" }
 
     private func row(_ label: String, _ value: String) -> some View {
         HStack {
