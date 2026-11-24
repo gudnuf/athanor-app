@@ -409,6 +409,38 @@ pub fn explainer() -> Persona {
     }
 }
 
+/// The banker's idea, and its keep request.
+pub const BANKER_IDEA: &str = "honestly something else. I want a tide clock app where the phone buzzes when the water at my beach turns, not at a fixed time, just when it turns. save that.";
+
+/// The banker: drops an idea and asks the Mystagogue to keep it. v1 rule
+/// 7: store it in their words, at most one snag question, then stop.
+pub fn banker() -> Persona {
+    Persona {
+        name: "banker",
+        mask: "philosophus",
+        mode: "explain",
+        field: &[FieldCheck::BankVerbatim, FieldCheck::OneQuestion],
+        build: |_thread_id| {
+            vec![
+                Step::Engine(vec![
+                    AcpUpdate::text_delta("That tide question — what's alive in it?"),
+                    AcpUpdate::TurnComplete,
+                ]),
+                Step::Learner(BANKER_IDEA.into()),
+                Step::Engine(vec![
+                    tool_call(
+                        "1",
+                        "open_thread",
+                        json!({ "question": "a tide clock app where the phone buzzes when the water at my beach turns, not at a fixed time, just when it turns" }),
+                    ),
+                    AcpUpdate::text_delta("Saved, in your words — what would the buzz tell you?"),
+                    AcpUpdate::TurnComplete,
+                ]),
+            ]
+        },
+    }
+}
+
 /// The four README personas, then the v1 field personas.
 pub fn all_personas() -> Vec<Persona> {
     vec![
@@ -421,5 +453,6 @@ pub fn all_personas() -> Vec<Persona> {
         fork_picker(),
         returner(),
         explainer(),
+        banker(),
     ]
 }

@@ -201,7 +201,7 @@ pub fn gated_llm_judge_enabled() -> bool {
 mod tests {
     use super::*;
     use crate::personas::{
-        all_personas, dead_air, eager_parroter, explainer, fork_picker, leaver, returner,
+        all_personas, banker, dead_air, eager_parroter, explainer, fork_picker, leaver, returner,
         silent_one, stuck_one, tangent_chaser,
     };
     use athanor_core::engine::AcpToolCall;
@@ -517,5 +517,28 @@ mod tests {
         )
         .await;
         assert!(!check(&unwoven, "weave_on_rhyme").passed);
+    }
+
+    #[tokio::test]
+    async fn banker_is_stored_verbatim_and_the_v0_paraphrase_fails() {
+        let report = run_persona(&banker()).await;
+        assert!(check(&report, "bank_verbatim").passed);
+        assert!(report.passed, "{report:?}");
+
+        let paraphrased = run_with_step(
+            banker(),
+            2,
+            vec![
+                AcpUpdate::ToolCall(AcpToolCall {
+                    id: "1".into(),
+                    name: "open_thread".into(),
+                    args: json!({ "question": "Event-driven ambient notification versus scheduled alerting: what does the human add?" }),
+                }),
+                AcpUpdate::text_delta("Saved. Is it about control? Or attention?"),
+                AcpUpdate::TurnComplete,
+            ],
+        )
+        .await;
+        assert!(!check(&paraphrased, "bank_verbatim").passed);
     }
 }

@@ -28,6 +28,12 @@ conversationally and call the tool.
 | `update_memory(...)` | Maintain profile sections: domains, pulls (sulfur), recurring frictions, working history. At the landing, not mid-session — and never on the strength of silence. |
 | `recall(query)` | The learner asks "what was I saying about…", "remind me…", or refers to something earlier you don't have in front of you. Search past transcripts for their own words, then quote them back and push from there. Their rambles were kept for exactly this. |
 
+**When they ask you to keep something** — "save that," "bank it," "hold onto
+this" — keep it in their words. Use `bank_pull` if this session's tools list
+it; otherwise `open_thread`, with their sentence as close to verbatim as
+legibility allows. Not your summary, and not `update_memory` (it replaces the
+whole section). Say it's kept, ask one snag question at most, then stop.
+
 ---
 
 ## The sequence

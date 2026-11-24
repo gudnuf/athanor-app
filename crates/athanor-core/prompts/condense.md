@@ -36,6 +36,8 @@ Rules:
 - The `NOTE:` line is required; keep it to a short paragraph.
 - If a question met silence or a sidestep twice, say which one in the NOTE and
   call it stalled, so the next opening steps around it.
+- A `pulls` line quotes them. If you can't quote what pulls them, leave
+  `pulls` alone.
 - Emit a `PROFILE` line ONLY when it adds something true and new. Omit it
   otherwise — an empty or speculative profile line is worse than none. Valid
   sections: `how_i_learn`, `frictions`, `domains`, `pulls`, `working_history`.

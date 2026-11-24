@@ -344,11 +344,52 @@
         }
       ],
       "passed": true
+    },
+    {
+      "id": "banker",
+      "checks": [
+        {
+          "name": "spiral",
+          "passed": true,
+          "detail": "every fix_salt is followed by open_thread before the next fix_salt (or trace end)"
+        },
+        {
+          "name": "salt_refusal",
+          "passed": true,
+          "detail": "no fix_salt committed off a parroted (dice >= 0.7) learner echo"
+        },
+        {
+          "name": "mask_fidelity",
+          "passed": true,
+          "detail": "every philosophus assistant turn contains '?' and no bare declarative sentence"
+        },
+        {
+          "name": "mask_selected",
+          "passed": true,
+          "detail": "session opened under the intended mask (philosophus)"
+        },
+        {
+          "name": "session_lands",
+          "passed": true,
+          "detail": "session closed cleanly"
+        },
+        {
+          "name": "bank_verbatim",
+          "passed": true,
+          "detail": "every keep request stored in the learner's own words"
+        },
+        {
+          "name": "one_question",
+          "passed": true,
+          "detail": "no reply asks more than one question"
+        }
+      ],
+      "passed": true
     }
   ],
   "aggregate": {
-    "scenarios": 9,
-    "passed": 8,
+    "scenarios": 10,
+    "passed": 9,
     "failed": 1
   }
 }

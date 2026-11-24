@@ -627,6 +627,111 @@ pub fn grade_weave_on_rhyme(trace: &SessionTrace) -> CheckResult {
     )
 }
 
+// ---- 7. "save that" means their words ------------------------------------
+
+/// Ways a learner asks the Mystagogue to keep something.
+const KEEP_REQUESTS: &[&str] = &[
+    "bank that",
+    "bank this",
+    "bank it",
+    "save that",
+    "save this",
+    "keep that",
+    "hold onto that",
+    "hold on to that",
+    "write that down",
+];
+
+/// Tools that store learner material, and the arg that carries the text.
+const STORING_TOOLS: &[(&str, &str)] = &[
+    ("bank_pull", "text"),
+    ("open_thread", "question"),
+    ("update_memory", "content"),
+];
+
+fn arg_text(args: &str, key: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(args)
+        .ok()
+        .and_then(|v| v.get(key).and_then(|s| s.as_str()).map(str::to_string))
+        .unwrap_or_default()
+}
+
+/// Fraction of `stored`'s content tokens that appear in `source`.
+fn containment(stored: &str, source: &str) -> f64 {
+    use crate::normalize::token_set;
+    let st = token_set(stored);
+    if st.is_empty() {
+        return 0.0;
+    }
+    let so = token_set(source);
+    st.intersection(&so).count() as f64 / st.len() as f64
+}
+
+/// A keep request stores the learner's words (pack v1 rule 7). After a
+/// learner turn asking to keep something, the next storing tool call
+/// (`bank_pull`, `open_thread`, `update_memory`) must carry text at least
+/// 60% drawn from the learner's own words (that turn plus the one before,
+/// for "…yes, save that"). Fixing salt instead is a violation (an idea is
+/// not a realization), as is storing nothing or asking more than one
+/// question in the reply.
+///
+/// Gated judge question: did the stored text read as the learner's
+/// sentence, or as the Mystagogue's summary of it?
+pub fn grade_bank_verbatim(trace: &SessionTrace) -> CheckResult {
+    let all = replies(trace);
+    let mut violations = Vec::new();
+    for (i, turn) in trace.turns.iter().enumerate() {
+        let Turn::LearnerText(text) = turn else {
+            continue;
+        };
+        let lower = text.to_lowercase();
+        if !KEEP_REQUESTS.iter().any(|k| lower.contains(k)) {
+            continue;
+        }
+        let mut source = text.clone();
+        if let Some(prev) = learner_before(trace, i) {
+            source.push(' ');
+            source.push_str(prev);
+        }
+        let Some(reply) = all.iter().find(|r| r.after_learner == Some(i)) else {
+            violations.push(format!("turn {i}: keep request with no reply"));
+            continue;
+        };
+        if reply.tools.iter().any(|(n, _)| n == "fix_salt") {
+            violations.push(format!("turn {i}: keep request fixed as salt"));
+        }
+        let stored = reply.tools.iter().find_map(|(n, args)| {
+            STORING_TOOLS
+                .iter()
+                .find(|(t, _)| t == n)
+                .map(|(_, key)| arg_text(args, key))
+        });
+        match stored {
+            None => violations.push(format!("turn {i}: keep request, nothing stored")),
+            Some(st) => {
+                let c = containment(&st, &source);
+                if c < 0.6 {
+                    violations.push(format!(
+                        "turn {i}: stored text is {:.0}% the learner's words (min 60%): \"{st}\"",
+                        c * 100.0
+                    ));
+                }
+            }
+        }
+        let q = question_count(&reply.text);
+        if q > 1 {
+            violations.push(format!(
+                "turn {i}: {q} questions after a keep request (max 1)"
+            ));
+        }
+    }
+    result(
+        "bank_verbatim",
+        violations,
+        "every keep request stored in the learner's own words",
+    )
+}
+
 // ---- dispatch -----------------------------------------------------------
 
 /// A field grader a persona opts into (each needs at most one fixed
@@ -649,6 +754,8 @@ pub enum FieldCheck {
     OfferAfter(&'static str),
     /// v1 rule 6.
     WeaveOnRhyme,
+    /// v1 rule 7.
+    BankVerbatim,
 }
 
 pub fn run_check(check: FieldCheck, trace: &SessionTrace) -> CheckResult {
@@ -661,6 +768,7 @@ pub fn run_check(check: FieldCheck, trace: &SessionTrace) -> CheckResult {
         FieldCheck::NoReask(stalled) => grade_no_reask(trace, stalled),
         FieldCheck::OfferAfter(mechanism) => grade_offer_after(trace, mechanism),
         FieldCheck::WeaveOnRhyme => grade_weave_on_rhyme(trace),
+        FieldCheck::BankVerbatim => grade_bank_verbatim(trace),
     }
 }
 
@@ -973,6 +1081,55 @@ mod tests {
         assert!(
             grade_weave_on_rhyme(&reflection).passed,
             "not a rhyme claim"
+        );
+    }
+
+    // --- 7. keep requests --------------------------------------------------
+
+    const IDEA: &str = "I want a tide clock app where the phone buzzes when the water at my beach turns, not at a fixed time. save that.";
+
+    #[test]
+    fn a_paraphrased_bank_fails() {
+        let bad = trace(&[
+            learner(IDEA),
+            tool(
+                "open_thread",
+                r#"{"question":"Event-driven ambient notification as a design principle versus scheduled alerting"}"#,
+            ),
+            assistant("Saved. Is it about control? Or about attention?"),
+        ]);
+        let r = grade_bank_verbatim(&bad);
+        assert!(!r.passed);
+        assert!(
+            r.detail.contains("min 60%") && r.detail.contains("max 1"),
+            "{}",
+            r.detail
+        );
+
+        let as_salt = trace(&[
+            learner(IDEA),
+            tool("fix_salt", r#"{"realization":"tide clock"}"#),
+        ]);
+        assert!(!grade_bank_verbatim(&as_salt).passed);
+
+        let nothing = trace(&[learner(IDEA), assistant("Saved.")]);
+        assert!(!grade_bank_verbatim(&nothing).passed);
+    }
+
+    #[test]
+    fn their_words_stored_passes() {
+        let ok = trace(&[
+            learner(IDEA),
+            tool(
+                "open_thread",
+                r#"{"question":"a tide clock app where the phone buzzes when the water at my beach turns, not at a fixed time"}"#,
+            ),
+            assistant("Saved, in your words — what would the buzz tell you?"),
+        ]);
+        assert!(
+            grade_bank_verbatim(&ok).passed,
+            "{:?}",
+            grade_bank_verbatim(&ok)
         );
     }
 }
