@@ -632,4 +632,22 @@ mod tests {
         .await;
         assert!(!check(&long_bye, "landed_reply").passed);
     }
+
+    /// Gated run 2 shape: one fork (allowed), then the pick is built on as
+    /// if it were the learner's own picture.
+    #[tokio::test]
+    async fn building_on_a_picked_option_fails_mask_fidelity() {
+        let built = run_persona_with(&fork_picker(), |steps| {
+            steps[2] = Step::Engine(vec![
+                AcpUpdate::text_delta("Which is closer: the water sits still until the moon shows up, or it's always moving and lags behind?"),
+                AcpUpdate::TurnComplete,
+            ]);
+            steps[4] = Step::Engine(vec![
+                AcpUpdate::text_delta("So the water sits still until the moon shows up. When the moon arrives, what does it do?"),
+                AcpUpdate::TurnComplete,
+            ]);
+        })
+        .await;
+        assert!(!check(&built, "mask_fidelity").passed);
+    }
 }
