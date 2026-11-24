@@ -118,7 +118,7 @@ enum BellowsFactory {
         #if canImport(AthanorCoreFFI)
         switch engine.whisperTier {
         case nil:
-            return nil   // Task 7 replaces this with AppleBellowsController(biasTerms:)
+            return AppleBellowsController(biasTerms: biasTerms)
         case let tier?:
             await downloader.ensureModel(tier: tier)             // lazy: only when whisper is chosen
             guard let path = downloader.readyPath else { return nil }
