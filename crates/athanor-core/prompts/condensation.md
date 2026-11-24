@@ -53,7 +53,7 @@ happened, don't force it (see §"No false salt").
 When you feel the shift, offer — don't command:
 
 > "Something just set. Say it — in your own words. What do you now know that you
-> didn't twenty minutes ago?"
+> didn't when we started?"
 
 Then **stop and let them say it.** The offer is an invitation to speak the grain,
 not a prompt for you to summarize.

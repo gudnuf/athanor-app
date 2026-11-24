@@ -228,4 +228,39 @@ mod tests {
         };
         assert!(!check_rule(&rule).passed);
     }
+
+    /// v1 rule 1 applied to the pack itself: no example line in any asset
+    /// may model an interval or time of day the core didn't supply. The one
+    /// allowed claim is the rule's own counter-example ("not 'this
+    /// morning.'" in identity §1).
+    #[test]
+    fn the_pack_models_no_invented_clock() {
+        use athanor_core::prompt::assets::*;
+        let assets = [
+            ("identity", IDENTITY),
+            ("condensation", CONDENSATION),
+            ("condense", CONDENSE),
+            ("initiation", INITIATION),
+            ("philosophus", MASK_PHILOSOPHUS),
+            ("adamas", MASK_ADAMAS),
+            ("solve", MASK_SOLVE),
+            ("trace", MODE_TRACE),
+            ("explain", MODE_EXPLAIN),
+            ("predict", MODE_PREDICT),
+            ("challenge", MODE_CHALLENGE),
+            ("design", MODE_DESIGN),
+        ];
+        let mut found = Vec::new();
+        for (name, text) in assets {
+            for claim in crate::field::time_claims(text) {
+                if !(name == "identity" && claim == "this morning") {
+                    found.push(format!("{name}: \"{claim}\""));
+                }
+            }
+        }
+        assert!(
+            found.is_empty(),
+            "prompt examples model an invented clock: {found:?}"
+        );
+    }
 }
