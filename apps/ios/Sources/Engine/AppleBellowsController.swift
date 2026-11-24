@@ -123,6 +123,12 @@ final class AppleBellowsController: BellowsController {
     // MARK: - Capture
 
     private func startCapture() throws {
+        #if DEBUG
+        if let url = Self.injectedAudioURL() {   // QA: no mic on the simulator
+            injectFile(url)
+            return
+        }
+        #endif
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.record, mode: .measurement, options: [])
         try session.setActive(true)
