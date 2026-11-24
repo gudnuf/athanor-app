@@ -40,3 +40,16 @@ from a login shell, which it now enforces itself.
 
 Remaining are the operator gates: device install, on-phone RTF, the first
 live device turn, and the taste-check that only the learner can perform.
+
+## 2026-11-23 — The latch stays in Rust, even for a Swift recognizer
+
+Whisper was too slow for daily use, so the Bellows now defaults to Apple's
+on-device recognizer, which lives entirely in Swift. The tempting shape was to
+let it also decide when you had finished speaking. We did not: the turn
+boundary and the committed text decide what you said and when it reaches the
+Mystagogue, so they stay in Rust (`stt::TextBellows`). Swift forwards audio and
+recognizer text and obeys "cycle this request". That kept one latch semantics
+for both engines (same threshold, same 800 ms window, same latency metric), and
+let the whole thing be tested with scripted text-plus-audio, no recognizer, no
+network. First simulator run: the recognizer heard the fixture, the turn closed
+41 ms after the latch, and the felt cost is now the latch, not the engine.

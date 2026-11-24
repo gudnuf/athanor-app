@@ -5,7 +5,7 @@ repo cold.
 
 ## What this is
 
-The Athanor iOS app: an embedded-Goose Mystagogue, a whisper-STT Bellows, a
+The Athanor iOS app: an embedded-Goose Mystagogue, an on-device Bellows (Apple speech by default, whisper selectable in the dev overlay), a
 tria prima (salt/mercury/sulfur) learning-journal store, rendered with an
 Ember aesthetic. Product spec and machine architecture live in the meta repo,
 `~/athanor` (`docs/superpowers/specs/2026-07-04-athanor-app-design.md` +
