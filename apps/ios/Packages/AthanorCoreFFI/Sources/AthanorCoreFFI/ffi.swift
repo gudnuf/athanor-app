@@ -1491,6 +1491,11 @@ public protocol TextBellowsHandleProtocol: AnyObject, Sendable {
     
     func sendNow() 
     
+    /**
+     * The mic is banked (muted) or live again; see `TextBellows::set_muted`.
+     */
+    func setMuted(muted: Bool) 
+    
 }
 open class TextBellowsHandle: TextBellowsHandleProtocol, @unchecked Sendable {
     fileprivate let handle: UInt64
@@ -1633,6 +1638,17 @@ open func resetEndpoint()  {try! rustCall() {
 open func sendNow()  {try! rustCall() {
     uniffi_ffi_fn_method_textbellowshandle_send_now(
             self.uniffiCloneHandle(),$0
+    )
+}
+}
+    
+    /**
+     * The mic is banked (muted) or live again; see `TextBellows::set_muted`.
+     */
+open func setMuted(muted: Bool)  {try! rustCall() {
+    uniffi_ffi_fn_method_textbellowshandle_set_muted(
+            self.uniffiCloneHandle(),
+        FfiConverterBool.lower(muted),$0
     )
 }
 }
@@ -3528,6 +3544,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_ffi_checksum_method_textbellowshandle_send_now() != 13004) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ffi_checksum_method_textbellowshandle_set_muted() != 7509) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_ffi_checksum_constructor_athanorengine_new() != 57070) {

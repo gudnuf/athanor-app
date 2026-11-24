@@ -136,6 +136,11 @@ impl TextBellowsHandle {
         self.lock().reset_endpoint();
     }
 
+    /// The mic is banked (muted) or live again; see `TextBellows::set_muted`.
+    pub fn set_muted(&self, muted: bool) {
+        self.lock().set_muted(muted);
+    }
+
     /// `tick(now)` then `drain()`.
     pub fn poll(&self) -> Vec<FfiTextBellowsEvent> {
         let now = (self.clock)();

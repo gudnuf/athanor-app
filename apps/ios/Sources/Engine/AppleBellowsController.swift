@@ -112,6 +112,7 @@ final class AppleBellowsController: BellowsController {
 
     func setMuted(_ muted: Bool) {
         self.muted = muted
+        handle.setMuted(muted: muted)
         if muted { handle.resetEndpoint() }
     }
 

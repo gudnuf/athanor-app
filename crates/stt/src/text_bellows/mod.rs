@@ -54,6 +54,8 @@ struct Request {
     /// Words (alphanumeric content) this request has committed.
     words: usize,
     started_ms: u64,
+    /// The mic was banked (muted) at some point while this request lived.
+    muted_seen: bool,
     status: Status,
 }
 
@@ -73,6 +75,8 @@ pub struct TextBellows {
     onset_ms: Option<u64>,
     empty_self_closes: u32,
     halted: bool,
+    /// The mic is banked: no audio reaches the recognizer, so its self-closes mean nothing.
+    muted: bool,
     /// Words committed by already-closed requests of the turn in progress.
     turn_words: usize,
 }
@@ -114,6 +118,7 @@ impl TextBellows {
             onset_ms: None,
             empty_self_closes: 0,
             halted: false,
+            muted: false,
             turn_words: 0,
         }
     }
@@ -147,6 +152,7 @@ impl TextBellows {
             outbox: Vec::new(),
             words: 0,
             started_ms: now_ms,
+            muted_seen: self.muted,
             status: Status::Active,
         });
         self.metrics.requests += 1;
@@ -207,6 +213,19 @@ impl TextBellows {
         self.metrics.latch_ms = 0;
         self.endpointer.reset();
         self.end_turn(now_ms);
+    }
+
+    /// Tell the machine the mic is banked (muted) or live. A self-close while
+    /// banked says nothing about recognizer health.
+    pub fn set_muted(&mut self, muted: bool) {
+        self.muted = muted;
+        if muted {
+            for r in self.requests.iter_mut() {
+                if matches!(r.status, Status::Active) {
+                    r.muted_seen = true;
+                }
+            }
+        }
     }
 
     /// Mute/bank: clears the endpointer only.
@@ -300,10 +319,17 @@ impl TextBellows {
                 self.requests[i].status = Status::Closed;
                 self.turn_words += self.requests[i].words;
                 self.metrics.self_closes += 1;
+                // Storm backoff (R4/S1): only a self-close with no words that came
+                // within 1 s of the request starting, with a live mic, is a sign
+                // the recognizer is broken. A close after real silence (a long
+                // pause, a banked mic) neither counts nor resets.
                 if self.requests[i].committer.has_seen_words() {
                     self.empty_self_closes = 0;
                 } else {
-                    self.empty_self_closes += 1;
+                    let quick = now_ms.saturating_sub(self.requests[i].started_ms) < 1_000;
+                    if quick && !self.requests[i].muted_seen && !self.muted {
+                        self.empty_self_closes += 1;
+                    }
                 }
                 if self.empty_self_closes >= 3 {
                     self.control.push(TextBellowsEvent::Unavailable);
@@ -879,5 +905,70 @@ mod turn_tests {
         let ev = drain_no_preview(&mut b);
         assert!(ev.contains(&UtteranceEnded), "{ev:?}");
         assert_eq!(b.metrics().empty_turns, 0);
+    }
+
+    #[test]
+    fn slow_self_closes_after_real_silence_never_halt() {
+        let mut b = fresh();
+        for n in 1..=4u64 {
+            let t = n * 10_000;
+            assert_eq!(b.begin_request(t), n);
+            b.ingest_error(n, t + 4_000); // a long pause: "no speech detected"
+            assert_eq!(
+                drain_no_preview(&mut b),
+                vec![CycleRequest { request_id: n }],
+                "request {n} cycles, no Unavailable"
+            );
+        }
+        assert_eq!(b.metrics().self_closes, 4);
+    }
+
+    #[test]
+    fn muted_mic_self_closes_do_not_count() {
+        let mut b = fresh();
+        b.set_muted(true);
+        for n in 1..=4u64 {
+            assert_eq!(b.begin_request(0), n);
+            b.ingest_error(n, 10); // quick, but the mic is banked
+            assert_eq!(
+                drain_no_preview(&mut b),
+                vec![CycleRequest { request_id: n }]
+            );
+        }
+        // muting mid-request also exempts that request, even after un-muting
+        b.set_muted(false);
+        let mut c = fresh();
+        c.begin_request(0);
+        c.set_muted(true);
+        c.set_muted(false);
+        c.ingest_error(1, 10);
+        c.begin_request(0);
+        c.ingest_error(2, 10);
+        c.begin_request(0);
+        c.ingest_error(3, 10);
+        assert_eq!(
+            drain_no_preview(&mut c),
+            vec![
+                CycleRequest { request_id: 1 },
+                CycleRequest { request_id: 2 },
+                CycleRequest { request_id: 3 }
+            ],
+            "only two live quick closes: below the threshold"
+        );
+    }
+
+    #[test]
+    fn a_slow_close_neither_resets_nor_counts_toward_the_halt() {
+        let mut b = fresh();
+        b.begin_request(0);
+        b.ingest_error(1, 100); // quick: 1
+        b.begin_request(200);
+        b.ingest_error(2, 5_000); // slow: neither
+        b.begin_request(6_000);
+        b.ingest_error(3, 6_100); // quick: 2
+        b.begin_request(6_200);
+        b.ingest_error(4, 6_300); // quick: 3 -> halt
+        let ev = drain_no_preview(&mut b);
+        assert_eq!(ev.last(), Some(&Unavailable), "{ev:?}");
     }
 }
