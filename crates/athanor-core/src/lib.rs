@@ -28,6 +28,7 @@ pub use error::CoreError;
 pub use mystagogue::Mystagogue;
 pub use session::{abandon_session, close_session};
 pub use store::Store;
+pub use transcript::format_block;
 
 pub mod engine;
 

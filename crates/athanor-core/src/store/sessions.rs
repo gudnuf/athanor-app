@@ -118,7 +118,7 @@ impl Store {
 
     /// Writes what close learned onto the row: measured minutes, the tended
     /// UTC day, and (only if the row has none) the primary thread.
-    pub(crate) fn finish_session_row(
+    pub fn finish_session_row(
         &self,
         id: &str,
         minutes: u32,
