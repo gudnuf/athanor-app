@@ -14,9 +14,10 @@
 //! written next to the report as a markdown checklist, with each transcript,
 //! for the operator's taste check.
 //!
-//! Known limit: personas whose script opens with a Mystagogue line (returner,
-//! explainer, ...) lose that opener — the engine requires a prompt that ends
-//! on a learner turn — so the real model answers the first learner line cold.
+//! Opening: a persona whose script starts with a Mystagogue line gets the
+//! Conductor's opening turn first (the real model speaks, then the learner
+//! lines follow); one that starts with a learner line (the returner's "hey.")
+//! speaks first, as in the app. Each persona seeds its own topic.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -98,6 +99,14 @@ pub fn select_personas(
         out.push(slot.take().unwrap());
     }
     Ok(out)
+}
+
+/// Whether the persona's script has the Mystagogue speak first.
+pub fn opens_with_mystagogue(persona: &Persona, seed_thread_id: &str) -> bool {
+    matches!(
+        (persona.build)(seed_thread_id).first(),
+        Some(Step::Engine(_))
+    )
 }
 
 /// The persona's own learner lines, in order, capped. The scripted Mystagogue
@@ -234,9 +243,10 @@ pub async fn run_persona_real(
     max_turns: usize,
 ) -> RealRun {
     let store = Arc::new(Store::open_in_memory(persona.name).expect("open in-memory store"));
-    let domain = store.upsert_domain("entropy").expect("seed domain");
+    let (question, domain_name) = persona.topic.unwrap_or(("what is entropy?", "entropy"));
+    let domain = store.upsert_domain(domain_name).expect("seed domain");
     let thread = store
-        .open_thread("what is entropy?", Some(&domain.id), None)
+        .open_thread(question, Some(&domain.id), None)
         .expect("seed thread");
     seed_prior_state(&store, persona, &thread.id);
 
@@ -251,7 +261,20 @@ pub async fn run_persona_real(
 
     let mut rec = TurnRecorder::default();
     let mut engine_error: Option<String> = None;
+    // A persona scripted to start with the Mystagogue speaking gets the
+    // Conductor's opening turn (the arrival marker, no learner text), so the
+    // real model opens the session before the first learner line. A persona
+    // that starts with the learner ("hey.") just speaks first, as in the app.
+    if opens_with_mystagogue(persona, &thread.id) {
+        let mut sink = |u: AcpUpdate| rec.push(u);
+        if let Err(e) = conductor.open_turn(engine, &mut sink).await {
+            engine_error = Some(e.to_string());
+        }
+    }
     for line in &lines {
+        if engine_error.is_some() {
+            break;
+        }
         rec.learner(line);
         let mut sink = |u: AcpUpdate| rec.push(u);
         if let Err(e) = conductor.run_turn(engine, Some(line), &mut sink).await {
@@ -554,6 +577,12 @@ mod tests {
         }
     }
 
+    /// Engine calls a session makes before the close pass: the opener (when
+    /// the script has the Mystagogue speak first) plus one per learner line.
+    fn session_calls(p: &Persona) -> usize {
+        learner_lines(p, "t", 6).len() + usize::from(opens_with_mystagogue(p, "t"))
+    }
+
     fn say(t: &str) -> Vec<AcpUpdate> {
         vec![AcpUpdate::text_delta(t), AcpUpdate::TurnComplete]
     }
@@ -591,7 +620,10 @@ mod tests {
     #[test]
     fn learner_lines_drop_the_scripted_mystagogue_and_cap() {
         let lines = learner_lines(&returner(), "t", 6);
-        assert_eq!(lines, ["a kite, kind of. the string goes slack and taut"]);
+        assert_eq!(
+            lines,
+            ["hey.", "a kite, kind of. the string goes slack and taut"]
+        );
         assert!(learner_lines(&crate::personas::explainer(), "t", 1).len() == 1);
     }
 
@@ -618,7 +650,7 @@ mod tests {
     #[tokio::test]
     async fn a_persona_runs_through_the_conductor_and_is_graded() {
         let p = explainer();
-        let n = learner_lines(&p, "t", 6).len();
+        let n = session_calls(&p);
         let mut replies: Vec<_> = (0..n).map(|_| say("I'm here.")).collect();
         replies.push(say("NOTE: Sourdough rise, learner's own words.\nPROFILE how_i_learn: goes quiet, so likely a slow processor"));
         let engine = PerTurn::new(replies);
@@ -668,7 +700,7 @@ mod tests {
     #[tokio::test]
     async fn a_clean_close_passes_rule_9() {
         let p = explainer();
-        let n = learner_lines(&p, "t", 6).len();
+        let n = session_calls(&p);
         let mut replies: Vec<_> = (0..n).map(|_| say("Here.")).collect();
         replies.push(say("NOTE: Sourdough rise, learner's own words."));
         let engine = PerTurn::new(replies);
@@ -685,7 +717,7 @@ mod tests {
     #[tokio::test]
     async fn a_silent_session_gets_no_close_pass_and_that_is_not_a_failure() {
         let p = dead_air();
-        let n = learner_lines(&p, "t", 6).len();
+        let n = session_calls(&p);
         // Only session replies are scripted: a close-pass call would exhaust it.
         let engine = PerTurn::new(
             (0..n)
@@ -715,6 +747,43 @@ mod tests {
         );
         // (Other graders judge the scripted reply text; only the close pass is
         // under test here.)
+    }
+
+    #[tokio::test]
+    async fn the_mystagogue_opens_first_unless_the_script_starts_with_the_learner() {
+        // dead_air's script opens with the Mystagogue: opener, then 3 lines.
+        let p = dead_air();
+        assert_eq!(session_calls(&p), 4);
+        let mut replies = vec![say("What's alive in the tide question?")];
+        replies.extend((0..3).map(|_| say("Here — anything?")));
+        replies.push(say("NOTE: x"));
+        let engine = PerTurn::new(replies);
+        let run = run_persona_real(&engine, &p, 6).await;
+        assert!(matches!(&run.turns[0], Turn::Assistant(s) if s.contains("tide question")));
+        assert!(matches!(&run.turns[1], Turn::LearnerText(s) if s == "."));
+        // the returner starts with the learner's arrival line: no opener.
+        let r = returner();
+        assert!(!opens_with_mystagogue(&r, "t"));
+        let engine = PerTurn::new(vec![say("Hm.")]);
+        let run = run_persona_real(&engine, &r, 6).await;
+        assert!(matches!(&run.turns[0], Turn::LearnerText(s) if s == "hey."));
+    }
+
+    #[tokio::test]
+    async fn each_persona_seeds_its_own_topic() {
+        let p = returner();
+        let engine = PerTurn::new(vec![say("Hm.")]);
+        let _ = run_persona_real(&engine, &p, 6).await;
+        let sys = engine.systems.lock().unwrap()[0].clone();
+        assert!(
+            sys.contains("why does the tide wait for the moon?"),
+            "{sys}"
+        );
+        assert!(!sys.contains("what is entropy?"));
+        let q = crate::personas::eager_parroter();
+        let engine = PerTurn::new(vec![say("Hm.")]);
+        let _ = run_persona_real(&engine, &q, 6).await;
+        assert!(engine.systems.lock().unwrap()[0].contains("what is entropy?"));
     }
 
     #[tokio::test]
@@ -796,7 +865,7 @@ mod tests {
     async fn the_suite_writes_json_and_checklist_side_by_side() {
         let dir = std::env::temp_dir().join(format!("evals-real-suite-{}", std::process::id()));
         let p = dead_air();
-        let n = learner_lines(&p, "t", 6).len();
+        let n = session_calls(&p);
         let mut replies: Vec<_> = (0..n).map(|_| say("Here.")).collect();
         replies.push(say("NOTE: ok"));
         let engine = PerTurn::new(replies);

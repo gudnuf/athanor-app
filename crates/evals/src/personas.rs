@@ -36,6 +36,10 @@ pub struct Persona {
     pub name: &'static str,
     pub mask: &'static str,
     pub mode: &'static str,
+    /// The seed thread the session opens on: `(question, domain)`. `None` is
+    /// the default entropy thread; the hermetic tier ignores this, the gated
+    /// real-API tier uses it so a tide persona's prompt is about tides.
+    pub topic: Option<(&'static str, &'static str)>,
     pub build: fn(seed_thread_id: &str) -> Vec<Step>,
     /// Field-use graders (prompt pack v1) this scenario opts into, beyond
     /// the five every persona runs.
@@ -51,6 +55,7 @@ pub fn eager_parroter() -> Persona {
         name: "eager_parroter",
         mask: "philosophus",
         mode: "explain",
+        topic: None,
         field: &[],
         build: |thread_id| {
             let question = "what happens to disorder in an isolated system over time";
@@ -96,6 +101,7 @@ pub fn stuck_one() -> Persona {
         name: "stuck_one",
         mask: "solve",
         mode: "trace",
+        topic: None,
         field: &[],
         build: |_thread_id| {
             vec![
@@ -131,6 +137,7 @@ pub fn tangent_chaser() -> Persona {
         name: "tangent_chaser",
         mask: "adamas",
         mode: "predict",
+        topic: None,
         field: &[],
         build: |_thread_id| {
             vec![
@@ -178,6 +185,7 @@ pub fn silent_one() -> Persona {
         name: "silent_one",
         mask: "philosophus",
         mode: "design",
+        topic: None,
         field: &[],
         build: |_thread_id| {
             vec![
@@ -213,6 +221,7 @@ pub fn dead_air() -> Persona {
         name: "dead_air",
         mask: "philosophus",
         mode: "explain",
+        topic: Some(("why does the tide wait for the moon?", "tides")),
         field: &[FieldCheck::EmptyTurns, FieldCheck::ElapsedTime(None)],
         build: |_thread_id| {
             vec![
@@ -244,6 +253,7 @@ pub fn leaver() -> Persona {
         name: "leaver",
         mask: "philosophus",
         mode: "explain",
+        topic: Some(("why does the tide wait for the moon?", "tides")),
         field: &[
             FieldCheck::OneQuestion,
             FieldCheck::Landing,
@@ -287,6 +297,7 @@ pub fn fork_picker() -> Persona {
         name: "fork_picker",
         mask: "philosophus",
         mode: "explain",
+        topic: Some(("why does the tide wait for the moon?", "tides")),
         field: &[FieldCheck::Forks, FieldCheck::OneQuestion],
         build: |_thread_id| {
             vec![
@@ -331,6 +342,7 @@ pub fn returner() -> Persona {
         name: "returner",
         mask: "philosophus",
         mode: "explain",
+        topic: Some(("why does the tide wait for the moon?", "tides")),
         field: &[
             FieldCheck::NoReask(RETURNER_STALLED),
             FieldCheck::ElapsedTime(None),
@@ -338,6 +350,7 @@ pub fn returner() -> Persona {
         ],
         build: |_thread_id| {
             vec![
+                Step::Learner("hey.".into()),
                 Step::Engine(vec![
                     AcpUpdate::text_delta(
                         "Last time you had the moon lifting a sheet — where else have you seen something pulled from far away?",
@@ -365,6 +378,7 @@ pub fn explainer() -> Persona {
         name: "explainer",
         mask: "adamas",
         mode: "explain",
+        topic: Some(("why does the tide wait for the moon?", "tides")),
         field: &[
             FieldCheck::OfferAfter(EXPLAINER_MECHANISM),
             FieldCheck::WeaveOnRhyme,
@@ -428,6 +442,7 @@ pub fn banker() -> Persona {
         name: "banker",
         mask: "philosophus",
         mode: "explain",
+        topic: Some(("why does the tide wait for the moon?", "tides")),
         field: &[FieldCheck::BankVerbatim, FieldCheck::OneQuestion],
         build: |_thread_id| {
             vec![
@@ -464,6 +479,7 @@ pub fn room_noise() -> Persona {
         name: "room_noise",
         mask: "philosophus",
         mode: "explain",
+        topic: Some(("why does the tide wait for the moon?", "tides")),
         field: &[FieldCheck::RoomSpeech(ROOM_LINES), FieldCheck::OneQuestion],
         build: |_thread_id| {
             vec![
