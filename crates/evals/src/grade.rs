@@ -19,16 +19,23 @@
 //!   near-verbatim echoes, not any paraphrase that happens to share
 //!   vocabulary with the assistant.
 //! - `grade_mask_fidelity` — a *coarse, structural proxy* for the
-//!   Philosophus mask: every assistant turn must contain a `?`, and must
-//!   not contain a bare declarative sentence (one that ends in `.` and
-//!   contains no `?`). This is intentionally shallow — it catches
-//!   "Entropy always increases." but says nothing about whether a
-//!   question is *good* Socratic questioning. Deeper fidelity (tone,
-//!   genuine inquiry vs. rhetorical trap) is the gated LLM-judge tier's
-//!   job (Task 15), not this one's. Graders here only ever look at
-//!   surface structure.
+//!   Philosophus mask: every assistant turn must ask (contain a `?`), except
+//!   a landing line; and no declarative may assert what the learner didn't
+//!   supply. A declarative fails only if it brings in two or more content
+//!   words the learner never said, AND isn't addressed to the dialogue
+//!   (I/you/we, or a word like "question" or "picture"), AND isn't an
+//!   imperative set-up ("Picture a table."). Reflections, meta-moves and
+//!   set-ups are allowed by the mask itself (`masks/philosophus.md`
+//!   ALLOWED). An earlier version failed every declarative; scripted replies
+//!   satisfied it, but real model output (gated run 1) did not. It catches
+//!   "Entropy always increases in a closed system." It says nothing about
+//!   whether a question is *good*, and a fact smuggled inside an imperative
+//!   ("Picture a sealed box, nothing in or out.") passes. Both are the gated
+//!   LLM-judge tier's job. Graders here only ever look at surface structure.
 
-use crate::normalize::{dice, token_set};
+use std::collections::BTreeSet;
+
+use crate::normalize::{dice, token_set, tokens};
 use crate::report::CheckResult;
 
 /// One turn in a scripted session trace. Tool calls carry their name and a
@@ -195,6 +202,210 @@ pub(crate) fn terminated_sentences(text: &str) -> Vec<(String, char)> {
     sentences
 }
 
+/// Words that carry no domain content on their own.
+const FUNCTION_WORDS: &[&str] = &[
+    "a",
+    "an",
+    "the",
+    "and",
+    "or",
+    "but",
+    "so",
+    "if",
+    "then",
+    "than",
+    "of",
+    "to",
+    "in",
+    "on",
+    "at",
+    "for",
+    "with",
+    "from",
+    "by",
+    "as",
+    "into",
+    "onto",
+    "about",
+    "over",
+    "under",
+    "up",
+    "down",
+    "out",
+    "off",
+    "toward",
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "being",
+    "am",
+    "do",
+    "does",
+    "did",
+    "doesn",
+    "don",
+    "didn",
+    "isn",
+    "aren",
+    "wasn",
+    "t",
+    "s",
+    "re",
+    "ve",
+    "ll",
+    "d",
+    "m",
+    "have",
+    "has",
+    "had",
+    "it",
+    "its",
+    "that",
+    "this",
+    "these",
+    "those",
+    "there",
+    "here",
+    "what",
+    "which",
+    "who",
+    "how",
+    "why",
+    "when",
+    "where",
+    "not",
+    "no",
+    "yes",
+    "just",
+    "only",
+    "even",
+    "still",
+    "yet",
+    "again",
+    "now",
+    "very",
+    "too",
+    "also",
+    "can",
+    "could",
+    "will",
+    "would",
+    "should",
+    "may",
+    "might",
+    "must",
+    "need",
+    "enough",
+    "start",
+    "keep",
+    "ready",
+    "rush",
+    "fine",
+    "good",
+    "okay",
+    "ok",
+    "right",
+    "way",
+    "either",
+    "both",
+    "all",
+    "any",
+    "some",
+    "one",
+    "bit",
+    "while",
+    "first",
+    "next",
+    "fair",
+    "sure",
+    "sorry",
+    "much",
+    "more",
+    "less",
+    "something",
+    "nothing",
+    "anything",
+    "everything",
+    "else",
+    "same",
+    "other",
+    "own",
+    "set",
+    "aside",
+    "got",
+];
+
+/// Nouns that make a sentence about the dialogue, not the domain.
+const DIALOGUE_WORDS: &[&str] = &[
+    "meant",
+    "sounded",
+    "heard",
+    "word",
+    "question",
+    "thread",
+    "picture",
+    "phrase",
+    "answer",
+    "sentence",
+    "idea",
+    "image",
+    "point",
+    "definition",
+    "list",
+    "snag",
+    "session",
+    "mic",
+];
+
+/// First/second person: a sentence addressed to the dialogue.
+const PERSON_WORDS: &[&str] = &[
+    "i", "me", "my", "mine", "you", "your", "yours", "we", "us", "our", "let",
+];
+
+/// Verbs that open an imperative set-up ("Picture a table.", "Say more.").
+const IMPERATIVE_VERBS: &[&str] = &[
+    "say", "picture", "imagine", "hold", "take", "try", "tell", "slow", "let", "don", "leave",
+    "go", "start", "think", "look", "keep", "stay", "put", "give", "name", "sit", "notice", "stop",
+    "come", "consider", "suppose", "describe", "show",
+];
+
+fn in_list(list: &[&str], tok: &str) -> bool {
+    list.iter()
+        .any(|w| tokens(w).first().map(String::as_str) == Some(tok))
+}
+
+/// The coarse "asserts a domain fact" test for one declarative sentence: it
+/// fails only if it brings in two or more content words the learner never
+/// said AND is not about the dialogue (no I/you/we, no dialogue noun) AND is
+/// not an imperative set-up. Reflections ("A kite. Slack and taut."),
+/// meta-moves ("That word's been sitting open.") and set-ups ("Picture a
+/// table.") pass; "Entropy always increases in a closed system." fails.
+fn asserts_new_fact(sentence: &str, learner_words: &BTreeSet<String>) -> bool {
+    let toks = tokens(sentence);
+    let Some(first) = toks.first() else {
+        return false;
+    };
+    if in_list(IMPERATIVE_VERBS, first) {
+        return false;
+    }
+    if toks
+        .iter()
+        .any(|t| in_list(PERSON_WORDS, t) || in_list(DIALOGUE_WORDS, t))
+    {
+        return false;
+    }
+    let novel = toks
+        .iter()
+        .filter(|t| !t.chars().all(|c| c.is_ascii_digit()))
+        .filter(|t| !in_list(FUNCTION_WORDS, t))
+        .filter(|t| !learner_words.contains(*t))
+        .count();
+    novel >= 2
+}
+
 /// Coarse, hermetic proxy for Philosophus mask fidelity (see module docs for
 /// scope). Only fires when `trace.mask == Some("philosophus")`; traces under
 /// any other (or no) mask pass trivially — this grader has nothing to say
@@ -224,10 +435,21 @@ pub fn grade_mask_fidelity(trace: &SessionTrace) -> CheckResult {
             continue;
         }
 
+        let learner_words: BTreeSet<String> = trace.turns[..i]
+            .iter()
+            .filter_map(|t| match t {
+                Turn::LearnerText(s) => Some(tokens(s)),
+                _ => None,
+            })
+            .flatten()
+            .collect();
         for (sentence, terminal) in terminated_sentences(text) {
-            if terminal == '.' && !sentence.contains('?') {
+            if terminal == '.'
+                && !sentence.contains('?')
+                && asserts_new_fact(&sentence, &learner_words)
+            {
                 violations.push(format!(
-                    "turn {i}: bare declarative sentence \"{}\"",
+                    "turn {i}: declarative asserting what the learner didn't supply \"{}\"",
                     sentence.trim()
                 ));
             }
@@ -236,7 +458,8 @@ pub fn grade_mask_fidelity(trace: &SessionTrace) -> CheckResult {
 
     let passed = violations.is_empty();
     let detail = if passed {
-        "every philosophus assistant turn contains '?' and no bare declarative sentence".into()
+        "every philosophus turn asks, and no declarative asserts what the learner didn't supply"
+            .into()
     } else {
         format!("violations: {}", violations.join("; "))
     };
@@ -405,5 +628,45 @@ mod tests {
             )],
         );
         assert!(grade_mask_fidelity(&ok).passed);
+    }
+
+    // Real-output shapes (gated run 1, synthetic personas): the mask allows
+    // reflections of the learner's words, meta-moves about the dialogue and
+    // imperatives that set up a question. None of these assert a fact.
+    #[test]
+    fn philosophus_allows_reflections_meta_moves_and_set_ups() {
+        let ok = trace_mask(
+            "philosophus",
+            &[
+                learner("a kite, kind of. the string goes slack and taut"),
+                assistant("A kite. Slack and taut. When the string goes slack, what's happening in your picture?"),
+                learner("no sorry. the tide waits because the moon is slow and the water is heavy"),
+                assistant("No need to be sorry. \"The tide waits because the moon is slow and the water is heavy.\" What does \"waits\" mean there?"),
+                assistant("That word's been sitting open. Before any definition, what picture comes to mind?"),
+                assistant("Let's not define it. Picture a table. It doesn't have to be right. What's the first thing you'd put on it?"),
+                assistant("Kept, in your words. One snag. By \"turns,\" what do you mean?"),
+                assistant("That sounded like it was meant for someone else. Was it for me?"),
+            ],
+        );
+        let r = grade_mask_fidelity(&ok);
+        assert!(r.passed, "{}", r.detail);
+    }
+
+    #[test]
+    fn philosophus_still_fails_a_fact_the_learner_never_supplied() {
+        for line in [
+            "Entropy always increases in a closed system. Why?",
+            "Heat flows from hot to cold. What follows?",
+            "Isolated systems drift toward disorder. What does that tell you?",
+        ] {
+            let bad = trace_mask(
+                "philosophus",
+                &[
+                    learner("what happens to disorder over time"),
+                    assistant(line),
+                ],
+            );
+            assert!(!grade_mask_fidelity(&bad).passed, "should fail: {line}");
+        }
     }
 }
