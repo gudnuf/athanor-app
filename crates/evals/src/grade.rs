@@ -213,6 +213,11 @@ pub fn grade_mask_fidelity(trace: &SessionTrace) -> CheckResult {
         let Turn::Assistant(text) = turn else {
             continue;
         };
+        // A landing line (identity §5, pack v1 rules 2–3) states what stayed
+        // open and stops. It is not an asking turn, so the proxy skips it.
+        if crate::field::is_landing_context(trace, i) {
+            continue;
+        }
 
         if !text.contains('?') {
             violations.push(format!("turn {i}: no '?' present in \"{text}\""));

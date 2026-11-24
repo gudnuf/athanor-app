@@ -118,6 +118,15 @@ async fn replay_engine_step(script: Vec<AcpUpdate>, mystagogue: &Mystagogue) -> 
 /// text, tool calls, and learner turns — into a `SessionTrace`), grades it,
 /// and closes the session. Returns the graded `ScenarioReport`.
 pub async fn run_persona(persona: &Persona) -> ScenarioReport {
+    run_persona_with(persona, |_| {}).await
+}
+
+/// [`run_persona`], with a hook to edit the built steps before replay (the
+/// v1 field tests swap one engine step for its v0-shaped counterpart).
+pub async fn run_persona_with(
+    persona: &Persona,
+    edit: impl FnOnce(&mut Vec<Step>),
+) -> ScenarioReport {
     let store = Store::open_in_memory(persona.name).expect("open in-memory store");
     let domain = store.upsert_domain("entropy").expect("seed domain");
     let thread = store
@@ -130,7 +139,8 @@ pub async fn run_persona(persona: &Persona) -> ScenarioReport {
     let store = Arc::new(store);
     let mystagogue = Mystagogue::new(Arc::clone(&store));
 
-    let steps = (persona.build)(&thread.id);
+    let mut steps = (persona.build)(&thread.id);
+    edit(&mut steps);
     let mut turns: Vec<Turn> = Vec::new();
 
     for step in steps {
@@ -144,13 +154,19 @@ pub async fn run_persona(persona: &Persona) -> ScenarioReport {
 
     let trace = SessionTrace::with_mask(persona.mask, turns);
 
-    let checks = vec![
+    let mut checks = vec![
         grade_spiral(&trace),
         grade_salt_refusal(&trace),
         grade_mask_fidelity(&trace),
         check_mask_selected(persona.mask, &session.mask),
         check_session_lands(&store, &session.id),
     ];
+    checks.extend(
+        persona
+            .field
+            .iter()
+            .map(|c| crate::field::run_check(*c, &trace)),
+    );
 
     ScenarioReport::new(persona.name, checks)
 }
@@ -184,7 +200,9 @@ pub fn gated_llm_judge_enabled() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::personas::{all_personas, eager_parroter, silent_one, stuck_one, tangent_chaser};
+    use crate::personas::{
+        all_personas, dead_air, eager_parroter, silent_one, stuck_one, tangent_chaser,
+    };
     use athanor_core::engine::AcpToolCall;
     use serde_json::json;
 
@@ -292,12 +310,53 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_suite_aggregates_all_four_personas() {
+    async fn run_suite_aggregates_all_personas() {
         let personas = all_personas();
         let suite = run_suite(&personas).await;
-        assert_eq!(suite.aggregate.scenarios, 4);
-        assert_eq!(suite.aggregate.passed, 3, "only the eager parroter fails");
+        assert_eq!(suite.aggregate.scenarios, personas.len());
+        assert_eq!(
+            suite.aggregate.passed,
+            personas.len() - 1,
+            "only the eager parroter fails"
+        );
         assert_eq!(suite.aggregate.failed, 1);
+    }
+
+    // ---- prompt pack v1 field personas ----
+
+    /// Replays a persona with one engine step swapped for a v0-shaped reply,
+    /// so the field grader is shown to bite on the same learner lines.
+    async fn run_with_step(
+        persona: Persona,
+        step: usize,
+        replacement: Vec<AcpUpdate>,
+    ) -> ScenarioReport {
+        run_persona_with(&persona, move |steps| {
+            steps[step] = Step::Engine(replacement)
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn dead_air_lands_and_the_v0_chase_fails() {
+        let report = run_persona(&dead_air()).await;
+        assert!(check(&report, "empty_turns").passed);
+        assert!(
+            check(&report, "mask_fidelity").passed,
+            "landing line is exempt"
+        );
+        assert!(report.passed);
+
+        let chase = run_with_step(
+            dead_air(),
+            4,
+            vec![
+                AcpUpdate::text_delta("You're back. Smaller, then: what did you eat today?"),
+                AcpUpdate::TurnComplete,
+            ],
+        )
+        .await;
+        assert!(!check(&chase, "empty_turns").passed);
     }
 
     #[test]

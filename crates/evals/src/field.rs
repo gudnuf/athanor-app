@@ -193,6 +193,130 @@ pub fn grade_elapsed_time(trace: &SessionTrace, known: Option<&str>) -> CheckRes
     )
 }
 
+// ---- 2. empty turns ------------------------------------------------------
+
+/// An empty voice turn: nothing but dots, ellipses and whitespace. The speech
+/// path can send one when it heard nothing; it is not the learner speaking.
+pub fn is_empty_turn(text: &str) -> bool {
+    text.chars()
+        .all(|c| c == '.' || c == '\u{2026}' || c.is_whitespace())
+}
+
+/// Phrases that treat an empty turn as a new arrival.
+const RETURN_PHRASES: &[&str] = &[
+    "you're back",
+    "youre back",
+    "welcome back",
+    "back again",
+    "you came back",
+    "you returned",
+    "second time",
+    "third time",
+    "fourth time",
+];
+
+/// For each learner-turn index, how many consecutive empty learner turns end
+/// there (0 if it isn't empty).
+fn empty_run_lengths(trace: &SessionTrace) -> Vec<usize> {
+    let mut run = 0;
+    trace
+        .turns
+        .iter()
+        .map(|t| match t {
+            Turn::LearnerText(s) if is_empty_turn(s) => {
+                run += 1;
+                run
+            }
+            Turn::LearnerText(_) => {
+                run = 0;
+                0
+            }
+            _ => run,
+        })
+        .collect()
+}
+
+/// True when the turn at `idx` sits where the Mystagogue should be landing,
+/// not asking: after two consecutive empty learner turns (v1 rule 2) or after
+/// the learner signalled they're done (v1 rule 3). Shared with
+/// `grade::grade_mask_fidelity`, whose ask-every-turn proxy must not punish a
+/// landing line.
+pub fn is_landing_context(trace: &SessionTrace, idx: usize) -> bool {
+    empty_run_lengths(trace).get(idx).copied().unwrap_or(0) >= 2
+}
+
+/// An empty turn is not a turn (pack v1 rule 2). Within a run of empty
+/// learner turns:
+/// - once the run reaches two, at most two more replies, and none of them
+///   asks a question (it has landed; a question chases);
+/// - no reply after an empty turn greets an arrival ("you're back");
+/// - no `update_memory` while the run lasts (nothing was said to learn from).
+///
+/// Gated judge question: after the empty turns, did the Mystagogue leave the
+/// door open and stop, or did it keep shrinking the question, close and
+/// reopen, or treat each empty turn as a visit?
+pub fn grade_empty_turns(trace: &SessionTrace) -> CheckResult {
+    let runs = empty_run_lengths(trace);
+    let mut violations = Vec::new();
+    let mut replies_in_landed_run = 0;
+    for (n, reply) in replies(trace).iter().enumerate() {
+        let Some(li) = reply.after_learner else {
+            continue;
+        };
+        let run = runs[li];
+        if run == 0 {
+            replies_in_landed_run = 0;
+            continue;
+        }
+        let lower = reply.text.to_lowercase().replace('\u{2019}', "'");
+        if let Some(p) = RETURN_PHRASES.iter().find(|p| lower.contains(*p)) {
+            violations.push(format!(
+                "reply {n}: treats an empty turn as an arrival (\"{p}\")"
+            ));
+        }
+        if reply.tools.iter().any(|(name, _)| name == "update_memory") {
+            violations.push(format!("reply {n}: update_memory on an empty turn"));
+        }
+        if run >= 2 {
+            replies_in_landed_run += 1;
+            if reply.text.contains('?') {
+                violations.push(format!(
+                    "reply {n}: still asking after {run} empty turns in a row"
+                ));
+            }
+            if replies_in_landed_run > 2 {
+                violations.push(format!(
+                    "reply {n}: reply #{replies_in_landed_run} into a landed silence (max 2)"
+                ));
+            }
+        }
+    }
+    result(
+        "empty_turns",
+        violations,
+        "empty turns met with a door left open: no chasing, no arrivals, no memory writes",
+    )
+}
+
+// ---- dispatch -----------------------------------------------------------
+
+/// A field grader a persona opts into (each needs at most one fixed
+/// parameter the scenario knows by construction).
+#[derive(Clone, Copy, Debug)]
+pub enum FieldCheck {
+    /// v1 rule 1; the interval the engine injected, if any.
+    ElapsedTime(Option<&'static str>),
+    /// v1 rule 2.
+    EmptyTurns,
+}
+
+pub fn run_check(check: FieldCheck, trace: &SessionTrace) -> CheckResult {
+    match check {
+        FieldCheck::ElapsedTime(known) => grade_elapsed_time(trace, known),
+        FieldCheck::EmptyTurns => grade_empty_turns(trace),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,5 +392,70 @@ mod tests {
         let r = grade_elapsed_time(&wrong, Some("1 day"));
         assert!(!r.passed);
         assert!(r.detail.contains("2 week"), "{}", r.detail);
+    }
+
+    // --- 2. empty turns -------------------------------------------------
+
+    #[test]
+    fn empty_turn_detection() {
+        assert!(is_empty_turn("."));
+        assert!(is_empty_turn(". . ."));
+        assert!(is_empty_turn("  \u{2026} "));
+        assert!(!is_empty_turn("no."));
+    }
+
+    #[test]
+    fn chasing_an_empty_run_fails() {
+        // The bad shape: shrink the question each time, greet each empty
+        // turn as an arrival, write memory on silence.
+        let bad = trace(&[
+            assistant("What's alive in it?"),
+            learner("."),
+            assistant("One word is enough. Anything?"),
+            learner(". . ."),
+            assistant("You're back. What did you have for lunch?"),
+            tool(
+                "update_memory",
+                r#"{"section":"working_history","content":"went quiet"}"#,
+            ),
+            learner("."),
+            assistant("Tired, or busy?"),
+            learner("."),
+            assistant("We'll leave it here."),
+        ]);
+        let r = grade_empty_turns(&bad);
+        assert!(!r.passed);
+        for needle in ["arrival", "update_memory", "still asking", "max 2"] {
+            assert!(r.detail.contains(needle), "missing {needle}: {}", r.detail);
+        }
+    }
+
+    #[test]
+    fn leaving_the_door_open_passes() {
+        let ok = trace(&[
+            assistant("What's alive in it?"),
+            learner("."),
+            assistant("Anything there, even one word?"),
+            learner(". . ."),
+            assistant("Nothing has to come. The door stays open."),
+            learner("."),
+        ]);
+        assert!(
+            grade_empty_turns(&ok).passed,
+            "{:?}",
+            grade_empty_turns(&ok)
+        );
+    }
+
+    #[test]
+    fn a_real_turn_resets_the_run() {
+        let ok = trace(&[
+            learner("."),
+            learner("."),
+            assistant("The door stays open."),
+            learner("sorry, the mic. It's the tide thing."),
+            assistant("The tide thing. What about it?"),
+        ]);
+        assert!(grade_empty_turns(&ok).passed);
     }
 }

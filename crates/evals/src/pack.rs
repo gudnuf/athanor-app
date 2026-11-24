@@ -37,11 +37,28 @@ pub struct PackRule {
 }
 
 /// The v1 field rules, in the usage review's ranked order.
-pub const FIELD_RULES: &[PackRule] = &[PackRule {
-    id: "1_elapsed_time",
-    surface: Surface::Session("philosophus"),
-    anchors: &["{{last_session_ago}}", "\"last time\"", "a date on a note"],
-}];
+pub const FIELD_RULES: &[PackRule] = &[
+    PackRule {
+        id: "1_elapsed_time",
+        surface: Surface::Session("philosophus"),
+        anchors: &["{{last_session_ago}}", "\"last time\"", "a date on a note"],
+    },
+    PackRule {
+        id: "2_empty_turn",
+        surface: Surface::Session("philosophus"),
+        anchors: &[
+            "an empty turn",
+            "two in a row",
+            "don't say they're back",
+            "never on the strength of silence",
+        ],
+    },
+    PackRule {
+        id: "2_empty_turn_close",
+        surface: Surface::Condense,
+        anchors: &["empty turns", "tell you about the mic, not the learner"],
+    },
+];
 
 /// A small fixed store so every placeholder renders (the rule text lives in
 /// the assets; the store only has to make assembly total).

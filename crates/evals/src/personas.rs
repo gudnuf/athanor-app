@@ -13,6 +13,8 @@
 use athanor_core::engine::{AcpToolCall, AcpUpdate};
 use serde_json::json;
 
+use crate::field::FieldCheck;
+
 /// One step of a scripted session, from the harness's point of view.
 pub enum Step {
     /// One `MockEngine` turn: everything it streams before `TurnComplete`.
@@ -35,6 +37,9 @@ pub struct Persona {
     pub mask: &'static str,
     pub mode: &'static str,
     pub build: fn(seed_thread_id: &str) -> Vec<Step>,
+    /// Field-use graders (prompt pack v1) this scenario opts into, beyond
+    /// the five every persona runs.
+    pub field: &'static [FieldCheck],
 }
 
 /// The eager parroter: condenses the Mystagogue's own phrasing back as if it
@@ -46,6 +51,7 @@ pub fn eager_parroter() -> Persona {
         name: "eager_parroter",
         mask: "philosophus",
         mode: "explain",
+        field: &[],
         build: |thread_id| {
             let question = "what happens to disorder in an isolated system over time";
             vec![
@@ -90,6 +96,7 @@ pub fn stuck_one() -> Persona {
         name: "stuck_one",
         mask: "solve",
         mode: "trace",
+        field: &[],
         build: |_thread_id| {
             vec![
                 Step::Engine(vec![
@@ -124,6 +131,7 @@ pub fn tangent_chaser() -> Persona {
         name: "tangent_chaser",
         mask: "adamas",
         mode: "predict",
+        field: &[],
         build: |_thread_id| {
             vec![
                 Step::Engine(vec![
@@ -170,6 +178,7 @@ pub fn silent_one() -> Persona {
         name: "silent_one",
         mask: "philosophus",
         mode: "design",
+        field: &[],
         build: |_thread_id| {
             vec![
                 Step::Engine(vec![
@@ -189,12 +198,51 @@ pub fn silent_one() -> Persona {
     }
 }
 
-/// All four personas, in the order the pack's README lists them.
+// ---- prompt pack v1 field personas -------------------------------------
+//
+// Synthetic learners for the failure shapes field use surfaced. Each script
+// pairs the learner's lines with the Mystagogue behaviour the v1 pack asks
+// for, so the hermetic suite passes; each has a unit test in `run.rs` that
+// swaps in the v0-shaped reply and shows its grader failing. In the gated
+// tier only the learner lines replay, against the real engine.
+
+/// Dead air: the speech path sends empty turns. v1 rule 2: after two, leave
+/// the door open and land; no chasing, no "you're back", no memory writes.
+pub fn dead_air() -> Persona {
+    Persona {
+        name: "dead_air",
+        mask: "philosophus",
+        mode: "explain",
+        field: &[FieldCheck::EmptyTurns, FieldCheck::ElapsedTime(None)],
+        build: |_thread_id| {
+            vec![
+                Step::Engine(vec![
+                    AcpUpdate::text_delta("That tide question you left open — what's alive in it?"),
+                    AcpUpdate::TurnComplete,
+                ]),
+                Step::Learner(".".into()),
+                Step::Engine(vec![
+                    AcpUpdate::text_delta("Anything there, even one word?"),
+                    AcpUpdate::TurnComplete,
+                ]),
+                Step::Learner(". . .".into()),
+                Step::Engine(vec![
+                    AcpUpdate::text_delta("Nothing has to come. The door stays open."),
+                    AcpUpdate::TurnComplete,
+                ]),
+                Step::Learner(".".into()),
+            ]
+        },
+    }
+}
+
+/// The four README personas, then the v1 field personas.
 pub fn all_personas() -> Vec<Persona> {
     vec![
         eager_parroter(),
         stuck_one(),
         tangent_chaser(),
         silent_one(),
+        dead_air(),
     ]
 }

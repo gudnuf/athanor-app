@@ -39,3 +39,5 @@ Rules:
   sections: `how_i_learn`, `frictions`, `domains`, `pulls`, `working_history`.
 - Write in plain prose. No headings, no bullet lists, no meta-commentary about
   the format.
+- Empty turns (dots, nothing) tell you about the mic, not the learner. Build
+  no PROFILE line on them.

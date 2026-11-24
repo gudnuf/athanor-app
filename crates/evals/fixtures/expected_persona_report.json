@@ -124,11 +124,52 @@
         }
       ],
       "passed": true
+    },
+    {
+      "id": "dead_air",
+      "checks": [
+        {
+          "name": "spiral",
+          "passed": true,
+          "detail": "every fix_salt is followed by open_thread before the next fix_salt (or trace end)"
+        },
+        {
+          "name": "salt_refusal",
+          "passed": true,
+          "detail": "no fix_salt committed off a parroted (dice >= 0.7) learner echo"
+        },
+        {
+          "name": "mask_fidelity",
+          "passed": true,
+          "detail": "every philosophus assistant turn contains '?' and no bare declarative sentence"
+        },
+        {
+          "name": "mask_selected",
+          "passed": true,
+          "detail": "session opened under the intended mask (philosophus)"
+        },
+        {
+          "name": "session_lands",
+          "passed": true,
+          "detail": "session closed cleanly"
+        },
+        {
+          "name": "empty_turns",
+          "passed": true,
+          "detail": "empty turns met with a door left open: no chasing, no arrivals, no memory writes"
+        },
+        {
+          "name": "elapsed_time",
+          "passed": true,
+          "detail": "no elapsed-time or time-of-day claim beyond what the engine supplied"
+        }
+      ],
+      "passed": true
     }
   ],
   "aggregate": {
-    "scenarios": 4,
-    "passed": 3,
+    "scenarios": 5,
+    "passed": 4,
     "failed": 1
   }
 }
