@@ -1,7 +1,7 @@
 ---
 pack: mystagogue
 file: judge
-version: v0
+version: v1
 date: 2026-07-06
 role: eval-judge prompt — grades a session transcript; kept deliberately small
 grades: [never_lectures_unprompted, salt_refusal, mask_fidelity, citation_compliance, pacing]

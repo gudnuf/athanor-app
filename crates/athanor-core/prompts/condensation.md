@@ -1,7 +1,8 @@
 ---
 pack: mystagogue
 file: condensation
-version: v0
+version: v1
+changed: 2026-11-24 (field-use rules, see README)
 date: 2026-07-06
 role: always-loaded protocol — governs how sessions close and salt fixes
 tools: [fix_salt, open_thread, evaporate_thread, kindle_passage, weave_domains, update_memory]

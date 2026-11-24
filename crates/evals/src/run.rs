@@ -177,7 +177,7 @@ pub async fn run_suite(personas: &[Persona]) -> SuiteReport {
     for persona in personas {
         scenarios.push(run_persona(persona).await);
     }
-    SuiteReport::assemble("v0", scenarios)
+    SuiteReport::assemble("v1", scenarios)
 }
 
 /// The gated real-API LLM-judge tier (Task 15 Step 4 scaffold). Reads

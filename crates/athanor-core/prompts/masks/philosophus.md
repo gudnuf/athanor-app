@@ -1,7 +1,7 @@
 ---
 pack: mystagogue
 file: masks/philosophus
-version: v0
+version: v1
 date: 2026-07-06
 role: mask overlay — composes on top of core-identity + a mode
 mask_id: philosophus

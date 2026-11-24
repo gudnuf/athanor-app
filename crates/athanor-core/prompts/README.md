@@ -1,12 +1,13 @@
 ---
 pack: mystagogue
 file: README
-version: v0
+version: v1
 date: 2026-07-06
-status: v0 — ingested into athanor-core as compiled prompt assets (include_str!)
+changed: 2026-11-24
+status: v1 — v0 plus eight rules from field use; compiled assets (include_str!)
 ---
 
-# The Mystagogue Prompt Pack — v0
+# The Mystagogue Prompt Pack — v1
 
 The Mystagogue's mind as versioned prompt assets. One resident intelligence for
 the Athanor app (a furnace you carry): it knows the learner, conducts each
@@ -89,6 +90,50 @@ Written against these four scripted learners (replayed through the real engine):
 
 Each persona stresses a specific promise of the pack; a prompt change that
 regresses any of them shows up in the graded report before it ships.
+
+## v1: eight rules from field use
+
+v1 keeps v0 whole and adds eight short rules, each from a failure shape that
+only showed up in real sessions. The full write-up (rule, synthetic pattern,
+eval, gated judge question) is
+`docs/research/2026-11-24-prompt-pack-v1-from-field-use.md`; what the core
+must still supply is `docs/plans/2026-11-24-prompt-pack-v1-core-asks.md`.
+
+| # | Rule | Where |
+|---|---|---|
+| 1 | You have no clock: no interval or time of day unless `{{last_session_ago}}` gives it. | `identity.md` §1, §4 |
+| 2 | An empty turn isn't a turn: two in a row, leave the door open and land. | `identity.md` §2; `condensation.md` tools; `condense.md` |
+| 3 | One question per reply; the last thing you say is not a question. | `identity.md` §2, §5 |
+| 4 | Ration the either/or: at most one a session; a pick isn't salt. | `identity.md` §2; `condensation.md` §4 |
+| 5 | A question met twice with silence has stalled: let it rest, don't open with it. | `identity.md` §2, §4; `condense.md` |
+| 6 | An own-words mechanism, even mid-tangent, is the moment to offer; a rhyme said aloud gets woven. | `condensation.md` §1, weaving |
+| 7 | "Save that" keeps their words verbatim, one snag question at most. | `condensation.md` tools; `condense.md` |
+| 8 | Not every voice is for you: ask once, build nothing on room speech. | `identity.md` §2; `condense.md` |
+
+Each rule has two hermetic checks in `crates/evals`:
+
+- **Pack contract** (`evals::pack::FIELD_RULES`): the assembled prompt (or
+  the close-only condense prompt) must carry the rule's anchor words. The 16
+  structure snapshots redact prose by design; this is what stops a rewording
+  from silently dropping a rule. Reword freely around the anchors; changing
+  an anchor is a deliberate edit to that table.
+- **Behavioural grader** (`evals::field`): a deterministic surface proxy
+  over a session trace, run by a synthetic field persona. Hermetically the
+  Mystagogue side is scripted, so these prove the grader bites (each has a
+  test where the v0-shaped reply fails it); the gated tier runs the same
+  graders over real-engine transcripts.
+
+The field personas, alongside the four above:
+
+| Persona | Behaviour | Rule |
+|---|---|---|
+| **Dead air** | Sends empty turns (dots). | 2 |
+| **The leaver** | Works a turn, then says they have to go. | 3 |
+| **The fork-picker** | Answers every either/or with a pick and nothing more. | 4 |
+| **The returner** | Comes back after a note marked a question stalled. | 5 |
+| **The explainer** | Explains a mechanism in their own words, inside a tangent. | 6 |
+| **The banker** | Drops an idea and asks to save it. | 7 |
+| **Room noise** | Talks to someone else in the room mid-session. | 8 |
 
 ## Design tensions resolved in v0
 

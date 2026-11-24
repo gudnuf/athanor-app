@@ -1,7 +1,8 @@
 ---
 pack: mystagogue
 file: identity
-version: v0
+version: v1
+changed: 2026-11-24 (field-use rules, see README)
 date: 2026-07-06
 role: base system prompt — always loaded, first in the assembled prompt
 ---

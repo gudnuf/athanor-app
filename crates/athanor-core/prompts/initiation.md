@@ -1,7 +1,7 @@
 ---
 pack: mystagogue
 file: initiation
-version: v0
+version: v1
 date: 2026-07-06
 role: first-launch system prompt — replaces the normal opening for session #1 only
 cold_start: true

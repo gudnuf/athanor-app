@@ -1,7 +1,7 @@
 ---
 pack: mystagogue
 file: modes/challenge
-version: v0
+version: v1
 date: 2026-07-06
 role: mode overlay — one mode composes on top of identity, under a mask
 mode_id: challenge

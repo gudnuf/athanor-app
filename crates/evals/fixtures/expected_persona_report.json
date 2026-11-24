@@ -1,5 +1,5 @@
 {
-  "pack_version": "v0",
+  "pack_version": "v1",
   "scenarios": [
     {
       "id": "eager_parroter",

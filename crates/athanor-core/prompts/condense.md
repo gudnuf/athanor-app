@@ -1,7 +1,8 @@
 ---
 pack: mystagogue
 file: condense
-version: v0
+version: v1
+changed: 2026-11-24 (field-use rules, see README)
 date: 2026-07-15
 role: close-only distillation — runs once when a session lands, produces the durable residue
 tools: []
