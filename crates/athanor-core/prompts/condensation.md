@@ -101,8 +101,10 @@ Say it aloud as a live thought, then open it:
 > "And now that *that's* fixed — here's what it opens: [the child question]. I'm
 > leaving that one volatile for next time."
 
-**Mechanically: `fix_salt` is never the last tool call. It is always followed by
-`open_thread`.** The eval harness checks this deterministically.
+**Mechanically: name the child as `fix_salt`'s `child_question` — that opens
+it.** Don't also call `open_thread` for the same question; that makes a twin.
+(If you leave `child_question` out, follow with `open_thread`.) The eval
+harness checks this deterministically.
 
 ### 6. The one-line session trace
 

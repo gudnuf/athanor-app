@@ -135,6 +135,11 @@ pub const FIELD_RULES: &[PackRule] = &[
         anchors: &["how they learn from one session"],
     },
     PackRule {
+        id: "spiral_child_question",
+        surface: Surface::Session("philosophus"),
+        anchors: &["`child_question`", "that makes a twin"],
+    },
+    PackRule {
         id: "10_say_less",
         surface: Surface::Session("philosophus"),
         anchors: &[

@@ -93,11 +93,11 @@ fn is_tool(turn: &Turn, name: &str) -> bool {
     matches!(turn, Turn::ToolCall { name: n, .. } if n == name)
 }
 
-/// Structural spiral-discipline check: every `fix_salt` tool call must be
-/// followed — before the next `fix_salt`, or before the trace ends — by an
-/// `open_thread` tool call. A `fix_salt` with nothing after it (end of
-/// trace) is a violation, same as one immediately followed by another
-/// `fix_salt`.
+/// Structural spiral-discipline check: every `fix_salt` must birth exactly
+/// one child — either its own `child_question` arg (the core opens that
+/// thread inside `fix_salt`), or an `open_thread` tool call before the next
+/// `fix_salt` or the end of the trace. Both for the same question is a twin
+/// (two identical child threads), also a violation.
 pub fn grade_spiral(trace: &SessionTrace) -> CheckResult {
     let fix_indices: Vec<usize> = trace
         .turns
@@ -106,24 +106,62 @@ pub fn grade_spiral(trace: &SessionTrace) -> CheckResult {
         .filter_map(|(i, t)| is_tool(t, "fix_salt").then_some(i))
         .collect();
 
-    let mut violations = Vec::new();
+    let arg = |args: &str, key: &str| -> Option<String> {
+        serde_json::from_str::<serde_json::Value>(args)
+            .ok()?
+            .get(key)?
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+
+    let mut missing = Vec::new();
+    let mut twins = Vec::new();
     for (k, &i) in fix_indices.iter().enumerate() {
         let next_fix = fix_indices.get(k + 1).copied().unwrap_or(trace.turns.len());
-        let has_open_thread = trace.turns[i + 1..next_fix]
+        let Turn::ToolCall { args, .. } = &trace.turns[i] else {
+            unreachable!()
+        };
+        let child = arg(args, "child_question");
+        let opened: Vec<String> = trace.turns[i + 1..next_fix]
             .iter()
-            .any(|t| is_tool(t, "open_thread"));
-        if !has_open_thread {
-            violations.push(i);
+            .filter_map(|t| match t {
+                Turn::ToolCall { name, args } if name == "open_thread" => {
+                    Some(arg(args, "question").unwrap_or_default())
+                }
+                _ => None,
+            })
+            .collect();
+        if child.is_none() && opened.is_empty() {
+            missing.push(i);
+        }
+        if let Some(c) = &child {
+            if opened
+                .iter()
+                .any(|q| dice(&token_set(q), &token_set(c)) >= 0.7)
+            {
+                twins.push(i);
+            }
         }
     }
 
-    let passed = violations.is_empty();
+    let passed = missing.is_empty() && twins.is_empty();
+    let mut parts = Vec::new();
+    if !missing.is_empty() {
+        parts.push(format!(
+            "fix_salt at turn index(es) {missing:?} named no child (no child_question, no open_thread before the next fix_salt or the end of the trace)"
+        ));
+    }
+    if !twins.is_empty() {
+        parts.push(format!(
+            "fix_salt at turn index(es) {twins:?} opened a twin: child_question and an open_thread for the same question"
+        ));
+    }
     let detail = if passed {
-        "every fix_salt is followed by open_thread before the next fix_salt (or trace end)".into()
+        "every fix_salt births one child (child_question, or a following open_thread)".into()
     } else {
-        format!(
-            "fix_salt at turn index(es) {violations:?} had no open_thread before the next fix_salt or the end of the trace"
-        )
+        parts.join("; ")
     };
     CheckResult {
         name: "spiral".into(),
@@ -735,5 +773,47 @@ mod tests {
             ],
         );
         assert!(!grade_mask_fidelity(&bad).passed);
+    }
+
+    // Gated run 2: fix_salt names its child via child_question, and the core
+    // opens that thread itself. That keeps the spiral; a second open_thread
+    // for the same question makes a twin.
+    #[test]
+    fn spiral_accepts_child_question_and_rejects_a_twin() {
+        let named = trace(&[
+            tool(
+                "fix_salt",
+                r#"{"realization":"the delay is the point","child_question":"what does the waiting cost?"}"#,
+            ),
+            tool("kindle_passage", r#"{"term":"SALT"}"#),
+        ]);
+        assert!(
+            grade_spiral(&named).passed,
+            "{}",
+            grade_spiral(&named).detail
+        );
+
+        let twin = trace(&[
+            tool(
+                "fix_salt",
+                r#"{"realization":"the delay is the point","child_question":"what does the waiting cost?"}"#,
+            ),
+            tool(
+                "open_thread",
+                r#"{"question":"what does the waiting cost?"}"#,
+            ),
+        ]);
+        let r = grade_spiral(&twin);
+        assert!(!r.passed);
+        assert!(r.detail.contains("twin"), "{}", r.detail);
+
+        let blank = trace(&[tool(
+            "fix_salt",
+            r#"{"realization":"x","child_question":"  "}"#,
+        )]);
+        assert!(
+            !grade_spiral(&blank).passed,
+            "a blank child_question names nothing"
+        );
     }
 }

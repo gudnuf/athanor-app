@@ -150,9 +150,12 @@ Recorded here because they matter to the eval lane:
    trace to the learner's own prior words/profile; questions are exempt unless
    they smuggle an asserted fact in a presupposition. Gives the judge a clean
    pass/fail.
-3. **Spiral invariant as tool-order law.** `fix_salt` is *never* the last tool
-   call — always followed by `open_thread`. Stated in the protocol so the
-   deterministic checker and the prose agree.
+3. **Spiral invariant as tool-order law.** Every `fix_salt` births exactly one
+   child: its own `child_question` (the core opens that thread inside
+   `fix_salt`), or a following `open_thread`. Both for one question is a
+   twin. (v1: v0 said "always followed by `open_thread`", which the core's
+   `child_question` path made a duplicate-maker.) Stated in the protocol so
+   the deterministic checker and the prose agree.
 4. **Pacing vs. honesty.** ~15-min landing must not manufacture salt. Resolved:
    no false salt is an explicit, higher rule than "produce a grain"; days tended
    is the score, not grains.
