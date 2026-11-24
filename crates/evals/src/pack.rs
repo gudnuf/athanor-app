@@ -134,6 +134,14 @@ pub const FIELD_RULES: &[PackRule] = &[
         surface: Surface::Session("philosophus"),
         anchors: &["say less than they did"],
     },
+    PackRule {
+        id: "11_landed_reply",
+        surface: Surface::Session("philosophus"),
+        anchors: &[
+            "answer it with one short line",
+            "in one short line, and stop",
+        ],
+    },
 ];
 
 /// A small fixed store so every placeholder renders (the rule text lives in

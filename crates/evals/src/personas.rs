@@ -56,7 +56,7 @@ pub fn eager_parroter() -> Persona {
         mask: "philosophus",
         mode: "explain",
         topic: None,
-        field: &[FieldCheck::TalkRatio],
+        field: &[FieldCheck::TalkRatio, FieldCheck::LandedReply],
         build: |thread_id| {
             let question = "what happens to disorder in an isolated system over time";
             vec![
@@ -102,7 +102,7 @@ pub fn stuck_one() -> Persona {
         mask: "solve",
         mode: "trace",
         topic: None,
-        field: &[FieldCheck::TalkRatio],
+        field: &[FieldCheck::TalkRatio, FieldCheck::LandedReply],
         build: |_thread_id| {
             vec![
                 Step::Engine(vec![
@@ -138,7 +138,7 @@ pub fn tangent_chaser() -> Persona {
         mask: "adamas",
         mode: "predict",
         topic: None,
-        field: &[FieldCheck::TalkRatio],
+        field: &[FieldCheck::TalkRatio, FieldCheck::LandedReply],
         build: |_thread_id| {
             vec![
                 Step::Engine(vec![
@@ -186,7 +186,7 @@ pub fn silent_one() -> Persona {
         mask: "philosophus",
         mode: "design",
         topic: None,
-        field: &[FieldCheck::TalkRatio],
+        field: &[FieldCheck::TalkRatio, FieldCheck::LandedReply],
         build: |_thread_id| {
             vec![
                 Step::Engine(vec![
@@ -226,6 +226,7 @@ pub fn dead_air() -> Persona {
             FieldCheck::EmptyTurns,
             FieldCheck::ElapsedTime(None),
             FieldCheck::TalkRatio,
+            FieldCheck::LandedReply,
         ],
         build: |_thread_id| {
             vec![
@@ -263,6 +264,7 @@ pub fn leaver() -> Persona {
             FieldCheck::Landing,
             FieldCheck::ElapsedTime(None),
             FieldCheck::TalkRatio,
+            FieldCheck::LandedReply,
         ],
         build: |_thread_id| {
             vec![
@@ -307,6 +309,7 @@ pub fn fork_picker() -> Persona {
             FieldCheck::Forks,
             FieldCheck::OneQuestion,
             FieldCheck::TalkRatio,
+            FieldCheck::LandedReply,
         ],
         build: |_thread_id| {
             vec![
@@ -357,6 +360,7 @@ pub fn returner() -> Persona {
             FieldCheck::ElapsedTime(None),
             FieldCheck::OneQuestion,
             FieldCheck::TalkRatio,
+            FieldCheck::LandedReply,
         ],
         build: |_thread_id| {
             vec![
@@ -394,6 +398,7 @@ pub fn explainer() -> Persona {
             FieldCheck::WeaveOnRhyme,
             FieldCheck::OneQuestion,
             FieldCheck::TalkRatio,
+            FieldCheck::LandedReply,
         ],
         build: |_thread_id| {
             vec![
@@ -458,6 +463,7 @@ pub fn banker() -> Persona {
             FieldCheck::BankVerbatim,
             FieldCheck::OneQuestion,
             FieldCheck::TalkRatio,
+            FieldCheck::LandedReply,
         ],
         build: |_thread_id| {
             vec![
@@ -499,6 +505,7 @@ pub fn room_noise() -> Persona {
             FieldCheck::RoomSpeech(ROOM_LINES),
             FieldCheck::OneQuestion,
             FieldCheck::TalkRatio,
+            FieldCheck::LandedReply,
         ],
         build: |_thread_id| {
             vec![

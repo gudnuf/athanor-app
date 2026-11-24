@@ -33,6 +33,11 @@
           "name": "talk_ratio",
           "passed": true,
           "detail": "said less than the learner (or kept each reply short for a quiet one)"
+        },
+        {
+          "name": "landed_reply",
+          "passed": true,
+          "detail": "every reply to an empty turn or a goodbye is one short line"
         }
       ],
       "passed": false
@@ -69,6 +74,11 @@
           "name": "talk_ratio",
           "passed": true,
           "detail": "said less than the learner (or kept each reply short for a quiet one)"
+        },
+        {
+          "name": "landed_reply",
+          "passed": true,
+          "detail": "every reply to an empty turn or a goodbye is one short line"
         }
       ],
       "passed": true
@@ -105,6 +115,11 @@
           "name": "talk_ratio",
           "passed": true,
           "detail": "said less than the learner (or kept each reply short for a quiet one)"
+        },
+        {
+          "name": "landed_reply",
+          "passed": true,
+          "detail": "every reply to an empty turn or a goodbye is one short line"
         }
       ],
       "passed": true
@@ -141,6 +156,11 @@
           "name": "talk_ratio",
           "passed": true,
           "detail": "said less than the learner (or kept each reply short for a quiet one)"
+        },
+        {
+          "name": "landed_reply",
+          "passed": true,
+          "detail": "every reply to an empty turn or a goodbye is one short line"
         }
       ],
       "passed": true
@@ -187,6 +207,11 @@
           "name": "talk_ratio",
           "passed": true,
           "detail": "said less than the learner (or kept each reply short for a quiet one)"
+        },
+        {
+          "name": "landed_reply",
+          "passed": true,
+          "detail": "every reply to an empty turn or a goodbye is one short line"
         }
       ],
       "passed": true
@@ -238,6 +263,11 @@
           "name": "talk_ratio",
           "passed": true,
           "detail": "said less than the learner (or kept each reply short for a quiet one)"
+        },
+        {
+          "name": "landed_reply",
+          "passed": true,
+          "detail": "every reply to an empty turn or a goodbye is one short line"
         }
       ],
       "passed": true
@@ -284,6 +314,11 @@
           "name": "talk_ratio",
           "passed": true,
           "detail": "said less than the learner (or kept each reply short for a quiet one)"
+        },
+        {
+          "name": "landed_reply",
+          "passed": true,
+          "detail": "every reply to an empty turn or a goodbye is one short line"
         }
       ],
       "passed": true
@@ -335,6 +370,11 @@
           "name": "talk_ratio",
           "passed": true,
           "detail": "said less than the learner (or kept each reply short for a quiet one)"
+        },
+        {
+          "name": "landed_reply",
+          "passed": true,
+          "detail": "every reply to an empty turn or a goodbye is one short line"
         }
       ],
       "passed": true
@@ -386,6 +426,11 @@
           "name": "talk_ratio",
           "passed": true,
           "detail": "said less than the learner (or kept each reply short for a quiet one)"
+        },
+        {
+          "name": "landed_reply",
+          "passed": true,
+          "detail": "every reply to an empty turn or a goodbye is one short line"
         }
       ],
       "passed": true
@@ -432,6 +477,11 @@
           "name": "talk_ratio",
           "passed": true,
           "detail": "said less than the learner (or kept each reply short for a quiet one)"
+        },
+        {
+          "name": "landed_reply",
+          "passed": true,
+          "detail": "every reply to an empty turn or a goodbye is one short line"
         }
       ],
       "passed": true
@@ -478,6 +528,11 @@
           "name": "talk_ratio",
           "passed": true,
           "detail": "said less than the learner (or kept each reply short for a quiet one)"
+        },
+        {
+          "name": "landed_reply",
+          "passed": true,
+          "detail": "every reply to an empty turn or a goodbye is one short line"
         }
       ],
       "passed": true

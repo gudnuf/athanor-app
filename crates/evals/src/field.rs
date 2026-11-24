@@ -940,6 +940,55 @@ pub fn grade_talk_ratio(trace: &SessionTrace) -> CheckResult {
     )
 }
 
+// ---- 11. a landed reply is one short line -------------------------------
+
+/// A reply to an empty turn or a done-signal: at most this many sentences
+/// and words. One spoken line, about seven seconds aloud.
+pub const LANDED_MAX_SENTENCES: usize = 2;
+pub const LANDED_MAX_WORDS: usize = 20;
+
+/// A landed reply is one short line (pack v1 rules 2–3, "knowing when to
+/// stop"). Every reply to an empty learner turn or to a done-signal must fit
+/// in [`LANDED_MAX_SENTENCES`] sentences and [`LANDED_MAX_WORDS`] words.
+///
+/// Gated judge question: was each reply to an empty turn or a goodbye one
+/// short line, or did it keep talking?
+pub fn grade_landed_reply(trace: &SessionTrace) -> CheckResult {
+    let mut violations = Vec::new();
+    for (n, r) in replies(trace).iter().enumerate() {
+        let Some(li) = r.after_learner else {
+            continue;
+        };
+        let Turn::LearnerText(l) = &trace.turns[li] else {
+            continue;
+        };
+        if !(is_empty_turn(l) || is_leave_signal(l)) {
+            continue;
+        }
+        let mut sentences = crate::grade::terminated_sentences(&r.text).len();
+        let tail_has_words = r
+            .text
+            .rsplit(['.', '!', '?'])
+            .next()
+            .is_some_and(|t| word_count(t) > 0);
+        if tail_has_words {
+            sentences += 1;
+        }
+        let words = word_count(&r.text);
+        if sentences > LANDED_MAX_SENTENCES || words > LANDED_MAX_WORDS {
+            violations.push(format!(
+                "reply {n}: {sentences} sentences / {words} words to an empty turn or goodbye (max {LANDED_MAX_SENTENCES} / {LANDED_MAX_WORDS}): \"{}\"",
+                r.text
+            ));
+        }
+    }
+    result(
+        "landed_reply",
+        violations,
+        "every reply to an empty turn or a goodbye is one short line",
+    )
+}
+
 // ---- dispatch -----------------------------------------------------------
 
 /// A field grader a persona opts into (each needs at most one fixed
@@ -968,6 +1017,8 @@ pub enum FieldCheck {
     RoomSpeech(&'static [&'static str]),
     /// v1 rule 10.
     TalkRatio,
+    /// v1 rules 2–3: a landed reply is one short line.
+    LandedReply,
 }
 
 pub fn run_check(check: FieldCheck, trace: &SessionTrace) -> CheckResult {
@@ -983,6 +1034,7 @@ pub fn run_check(check: FieldCheck, trace: &SessionTrace) -> CheckResult {
         FieldCheck::BankVerbatim => grade_bank_verbatim(trace),
         FieldCheck::RoomSpeech(room) => grade_room_speech(trace, room),
         FieldCheck::TalkRatio => grade_talk_ratio(trace),
+        FieldCheck::LandedReply => grade_landed_reply(trace),
     }
 }
 
@@ -1513,5 +1565,39 @@ mod tests {
     fn empty_turns_do_not_count_as_learner_words() {
         assert_eq!(word_count(". . ."), 0);
         assert_eq!(word_count("A kite — slack."), 3);
+    }
+
+    // --- 11. landed reply ---------------------------------------------------
+
+    #[test]
+    fn a_four_sentence_answer_to_an_empty_turn_fails() {
+        // Run-1 shape (dead_air).
+        let bad = trace(&[
+            assistant("What picture comes to mind?"),
+            learner(". . ."),
+            assistant("No rush. The question will keep. Whenever a picture comes to you, start there. Even a rough one will do."),
+        ]);
+        let r = grade_landed_reply(&bad);
+        assert!(!r.passed);
+        assert!(r.detail.contains("4 sentences"), "{}", r.detail);
+
+        // Run-1 shape (leaver): a long goodbye.
+        let long_bye = trace(&[
+            learner("not sure. I have to go, actually."),
+            assistant("Go. Your picture is kept as you said it: the moon pulls a sheet, and the water goes where the sheet goes. We haven't worked out what the sheet is yet. That's where we'll pick up."),
+        ]);
+        assert!(!grade_landed_reply(&long_bye).passed);
+
+        let ok = trace(&[
+            learner(". . ."),
+            assistant("Nothing has to come. The door stays open."),
+            learner("I have to go."),
+            assistant("What the sheet is stays open. We start there."),
+        ]);
+        assert!(
+            grade_landed_reply(&ok).passed,
+            "{:?}",
+            grade_landed_reply(&ok)
+        );
     }
 }

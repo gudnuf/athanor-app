@@ -605,4 +605,31 @@ mod tests {
         .await;
         assert!(!check(&talky, "talk_ratio").passed);
     }
+
+    /// Run-1 shapes for the landed-reply cap: four sentences to an empty
+    /// turn (dead_air), and a long goodbye (leaver).
+    #[tokio::test]
+    async fn long_landings_fail_the_landed_reply_cap() {
+        let rambling = run_with_step(
+            dead_air(),
+            4,
+            vec![
+                AcpUpdate::text_delta("No rush. The question will keep. Whenever a picture comes to you, start there. Even a rough one will do."),
+                AcpUpdate::TurnComplete,
+            ],
+        )
+        .await;
+        assert!(!check(&rambling, "landed_reply").passed);
+
+        let long_bye = run_with_step(
+            leaver(),
+            4,
+            vec![
+                AcpUpdate::text_delta("Go. Your picture is kept as you said it: the moon pulls a sheet, and the water goes where the sheet goes. We haven't worked out what the sheet is yet. That's where we'll pick up."),
+                AcpUpdate::TurnComplete,
+            ],
+        )
+        .await;
+        assert!(!check(&long_bye, "landed_reply").passed);
+    }
 }
