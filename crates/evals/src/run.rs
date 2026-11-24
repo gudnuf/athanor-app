@@ -500,7 +500,7 @@ mod tests {
         // both replies after the mechanism.
         let pressed = run_persona_with(&explainer(), |steps| {
             steps[2] = Step::Engine(vec![
-                AcpUpdate::text_delta("The mechanism is clear. What is the starter like?"),
+                AcpUpdate::text_delta("The mechanism is clear. What is the kayak like?"),
                 AcpUpdate::TurnComplete,
             ]);
             steps[4] = Step::Engine(vec![

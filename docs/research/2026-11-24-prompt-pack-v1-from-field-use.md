@@ -167,8 +167,8 @@ the Mystagogue hears itself name a rhyme across domains, it puts it to the
 learner and calls `weave_domains` if they take it up. A rhyme said aloud and
 never recorded is lost. (`condensation.md` §1, Kindling & weaving.)
 
-**Pattern.** Mid-tangent, the learner explains why a sourdough starter
-rises hours after feeding. The v0 reply is *"Interesting. Back to the
+**Pattern.** Mid-tangent, the learner explains why the rope on a kayak goes
+tight long before the boat moves up the beach. The v0 reply is *"Interesting. Back to the
 tide."* Later the Mystagogue says *"same shape as the tide"*, the learner
 agrees, and nothing is recorded. The store ends with zero correspondences.
 

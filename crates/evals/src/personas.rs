@@ -382,7 +382,7 @@ pub fn returner() -> Persona {
 }
 
 /// The explainer's own-words mechanism, offered inside a tangent.
-pub const EXPLAINER_MECHANISM: &str = "ok sidetrack. my sourdough starter doesn't rise when I feed it, it rises hours later, because the yeast has to eat through the flour first and only then does the gas build. the feeding and the rise aren't the same moment";
+pub const EXPLAINER_MECHANISM: &str = "ok sidetrack. when I haul my kayak up the beach the rope goes tight long before the boat moves, because the wet sand has to let go of the hull first and only then does it slide. the pull and the slide aren't the same moment";
 
 /// The explainer: wanders into a tangent and, inside it, explains a
 /// mechanism in their own words. v1 rule 6: offer condensation on it, and
@@ -409,27 +409,27 @@ pub fn explainer() -> Persona {
                 Step::Learner(EXPLAINER_MECHANISM.into()),
                 Step::Engine(vec![
                     AcpUpdate::text_delta(
-                        "The feeding and the rise aren't the same moment. Say that as the thing you now know.",
+                        "The pull and the slide aren't the same moment. Say that as the thing you now know.",
                     ),
                     AcpUpdate::TurnComplete,
                 ]),
                 Step::Learner(
-                    "the push and what it causes are never the same moment. there's always a chewing-through in between."
+                    "the push and what it causes are never the same moment. there's always a letting-go in between."
                         .into(),
                 ),
                 Step::Engine(vec![
                     tool_call(
                         "1",
                         "fix_salt",
-                        json!({ "realization": "the push and what it causes are never the same moment; there's always a chewing-through in between" }),
+                        json!({ "realization": "the push and what it causes are never the same moment; there's always a letting-go in between" }),
                     ),
                     tool_call(
                         "2",
                         "open_thread",
-                        json!({ "question": "what does the chewing-through cost?" }),
+                        json!({ "question": "what does the letting-go cost?" }),
                     ),
                     AcpUpdate::text_delta(
-                        "Fixed. The tide waiting on the moon has the same shape as your starter. One thing, or two?",
+                        "Fixed. The tide waiting on the moon has the same shape as your kayak. One thing, or two?",
                     ),
                     AcpUpdate::TurnComplete,
                 ]),
@@ -438,7 +438,7 @@ pub fn explainer() -> Persona {
                     tool_call(
                         "3",
                         "weave_domains",
-                        json!({ "a": "tides", "b": "baking", "note": "the delay is the point" }),
+                        json!({ "a": "tides", "b": "boats", "note": "the delay is the point" }),
                     ),
                     AcpUpdate::text_delta("Woven, in your words."),
                     AcpUpdate::TurnComplete,

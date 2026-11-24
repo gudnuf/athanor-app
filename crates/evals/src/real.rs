@@ -753,7 +753,7 @@ mod tests {
         let p = explainer();
         let n = session_calls(&p);
         let mut replies: Vec<_> = (0..n).map(|_| say("I'm here.")).collect();
-        replies.push(say("NOTE: Sourdough rise, learner's own words.\nPROFILE how_i_learn: goes quiet, so likely a slow processor"));
+        replies.push(say("NOTE: Kayak pull, learner's own words.\nPROFILE how_i_learn: goes quiet, so likely a slow processor"));
         let engine = PerTurn::new(replies);
         let run = run_persona_real(&engine, &p, 6).await;
         assert!(run.report.checks.iter().any(|c| c.name == "spiral"));
@@ -783,7 +783,7 @@ mod tests {
         assert!(close.raw.contains("slow processor"));
         assert_eq!(
             close.note.as_deref(),
-            Some("Sourdough rise, learner's own words.")
+            Some("Kayak pull, learner's own words.")
         );
         assert_eq!(close.profile.len(), 1);
         let g = run
@@ -803,7 +803,7 @@ mod tests {
         let p = explainer();
         let n = session_calls(&p);
         let mut replies: Vec<_> = (0..n).map(|_| say("Here.")).collect();
-        replies.push(say("NOTE: Sourdough rise, learner's own words."));
+        replies.push(say("NOTE: Kayak pull, learner's own words."));
         let engine = PerTurn::new(replies);
         let run = run_persona_real(&engine, &p, 6).await;
         let g = run

@@ -1333,7 +1333,7 @@ mod tests {
 
     // --- 6. offer; weave ---------------------------------------------------
 
-    const MECH: &str = "it rises hours later because the yeast has to eat through the flour first";
+    const MECH: &str = "the rope goes tight long before the boat moves because the wet sand has to let go of the hull first";
 
     #[test]
     fn steering_past_a_mechanism_fails_and_an_offer_passes() {
@@ -1349,7 +1349,7 @@ mod tests {
         let ok = trace(&[
             assistant("Why does the tide wait?"),
             learner(MECH),
-            assistant("The feeding and the rise aren't the same moment. Say that as the thing you now know."),
+            assistant("The pull and the slide aren't the same moment. Say that as the thing you now know."),
         ]);
         assert!(grade_offer_after(&ok, MECH).passed);
     }
@@ -1357,18 +1357,18 @@ mod tests {
     #[test]
     fn a_spoken_rhyme_needs_a_weave() {
         let bad = trace(&[
-            assistant("You keep reaching for delay — the tide, the starter. One thing?"),
+            assistant("You keep reaching for delay — the tide, the kayak. One thing?"),
             learner("yeah, same thing"),
             assistant("Good."),
         ]);
         assert!(!grade_weave_on_rhyme(&bad).passed);
 
         let ok = trace(&[
-            assistant("You keep reaching for delay — the tide, the starter. One thing?"),
+            assistant("You keep reaching for delay — the tide, the kayak. One thing?"),
             learner("yeah, same thing"),
             tool(
                 "weave_domains",
-                r#"{"a":"tides","b":"baking","note":"delay is the point"}"#,
+                r#"{"a":"tides","b":"boats","note":"delay is the point"}"#,
             ),
         ]);
         assert!(grade_weave_on_rhyme(&ok).passed);
