@@ -20,7 +20,7 @@ active_domains: magnetism
 recent_salt:
   (none yet — a young practice)
 ripe_mercury:
-  - [volatile] why does iron remember? (focal)
+  - #<handle> [volatile] why does iron remember? (focal) (domain: magnetism)
 last_trace: Traced hysteresis; opened whether memory is energetic.
 recent_notes:
   (none yet — nothing has condensed)

@@ -87,7 +87,7 @@ impl Store {
         let mut stmt = conn.prepare(&format!(
             "SELECT {THREAD_COLS} FROM threads
              WHERE deleted_at IS NULL AND state IN ('volatile', 'condensing')
-             ORDER BY last_worked IS NOT NULL, last_worked ASC
+             ORDER BY last_worked IS NOT NULL, last_worked ASC, born ASC, id ASC
              LIMIT ?1"
         ))?;
         let rows = stmt.query_map(params![limit as i64], thread_from_row)?;
@@ -104,10 +104,39 @@ impl Store {
         let mut stmt = conn.prepare(&format!(
             "SELECT {THREAD_COLS} FROM threads
              WHERE deleted_at IS NULL AND state IN ('volatile', 'condensing')
-             ORDER BY last_worked IS NOT NULL, last_worked ASC"
+             ORDER BY last_worked IS NOT NULL, last_worked ASC, born ASC, id ASC"
         ))?;
         let rows = stmt.query_map([], thread_from_row)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(CoreError::from)
+    }
+
+    /// Resolves a `#handle` (the last six hex characters of a thread id, as
+    /// shown in `ripe_mercury`) to its live thread. The leading `#` is
+    /// optional. Anything that is not exactly six lowercase hex digits is
+    /// `Ok(None)` — never a wildcard match. Two live threads sharing a tail is
+    /// `BadState("ambiguous handle")`; the caller falls back, never guesses.
+    pub fn thread_by_handle(&self, handle: &str) -> Result<Option<Thread>, CoreError> {
+        let h = handle.trim();
+        let h = h.strip_prefix('#').unwrap_or(h);
+        if h.len() != 6
+            || !h
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            return Ok(None);
+        }
+        let conn = self.conn();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {THREAD_COLS} FROM threads WHERE substr(id, -6) = ?1 AND deleted_at IS NULL LIMIT 2"
+        ))?;
+        let rows: Vec<Thread> = stmt
+            .query_map(params![h], thread_from_row)?
+            .collect::<Result<_, _>>()?;
+        match rows.len() {
+            0 => Ok(None),
+            1 => Ok(rows.into_iter().next()),
+            _ => Err(CoreError::BadState("ambiguous handle".into())),
+        }
     }
 
     pub fn get_thread(&self, id: &str) -> Result<Thread, CoreError> {
@@ -290,5 +319,65 @@ mod tests {
             .iter()
             .any(|t| t.id == b.id && t.state == ThreadState::Evaporated));
         assert!(store.open_threads().unwrap().iter().all(|t| t.id == a.id)); // contrast
+    }
+
+    // ---- S4: handles + ripe order ----
+
+    fn raw_thread(store: &Store, id: &str, born: u64, last_worked: Option<u64>) {
+        store
+            .conn()
+            .execute(
+                "INSERT INTO threads (id, prompt, state, born, last_worked, created_at, updated_at, device_id)
+                 VALUES (?1, 'q?', 'volatile', ?2, ?3, ?2, ?2, 'd')",
+                params![id, born, last_worked],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn thread_by_handle_resolves_suffix_with_or_without_hash() {
+        let store = Store::open_in_memory("d").unwrap();
+        let t = store.open_thread("a?", None, None).unwrap();
+        let h = crate::ids::handle_of(&t.id);
+        assert_eq!(store.thread_by_handle(&h).unwrap().unwrap().id, t.id);
+        assert_eq!(store.thread_by_handle(&h[1..]).unwrap().unwrap().id, t.id);
+    }
+
+    #[test]
+    fn thread_by_handle_rejects_wildcards_and_short_input() {
+        let store = Store::open_in_memory("d").unwrap();
+        store.open_thread("a?", None, None).unwrap();
+        for bad in [
+            "%", "_a", "", "abc", "#%%%%%%", "aaaaa_", "ABCDEF", "#abcdefg",
+        ] {
+            assert!(
+                matches!(store.thread_by_handle(bad), Ok(None)),
+                "{bad:?} must not match"
+            );
+        }
+    }
+
+    #[test]
+    fn ambiguous_handle_errors() {
+        let store = Store::open_in_memory("d").unwrap();
+        raw_thread(&store, "aaaa-111111", 1, None);
+        raw_thread(&store, "bbbb-111111", 2, None);
+        assert!(matches!(
+            store.thread_by_handle("#111111"),
+            Err(CoreError::BadState(m)) if m.contains("ambiguous")
+        ));
+    }
+
+    #[test]
+    fn ripe_order_ties_break_by_born_then_id() {
+        let store = Store::open_in_memory("d").unwrap();
+        raw_thread(&store, "c", 5, Some(50));
+        raw_thread(&store, "b", 2, None);
+        raw_thread(&store, "a", 2, None);
+        raw_thread(&store, "d", 1, Some(50));
+        let ids = |v: Vec<Thread>| v.into_iter().map(|t| t.id).collect::<Vec<_>>();
+        // never-worked first (born, then id), then worked oldest-first (born, id)
+        assert_eq!(ids(store.ripe_threads(10).unwrap()), ["a", "b", "d", "c"]);
+        assert_eq!(ids(store.open_threads().unwrap()), ["a", "b", "d", "c"]);
     }
 }

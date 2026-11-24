@@ -141,17 +141,40 @@ fn profile_injection(store: &Store, focal_thread: Option<&str>, ctx: &AssembleCt
     // Ripe mercury: focal thread first (if given and still ripe), then the other
     // ripe threads, deterministically ordered by ripeness (see ripe_threads).
     let ripe = store.ripe_threads(RIPE_LIMIT).unwrap_or_default();
+    // Each line leads with the thread's #handle (the model's only way to name a
+    // pre-existing thread) and ends with its domain, or "no domain".
+    let domain_names: std::collections::HashMap<String, String> = store
+        .list_domains()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|d| (d.id, d.name))
+        .collect();
+    let ripe_line = |t: &crate::domain::Thread, focal: bool| -> String {
+        let domain = t
+            .domain_id
+            .as_deref()
+            .and_then(|id| domain_names.get(id))
+            .map(|n| format!("domain: {n}"))
+            .unwrap_or_else(|| "no domain".to_string());
+        format!(
+            "  - {} [{}] {}{} ({domain})",
+            crate::ids::handle_of(&t.id),
+            t.state.as_str(),
+            t.prompt,
+            if focal { " (focal)" } else { "" }
+        )
+    };
     let mut ripe_lines: Vec<String> = Vec::new();
     if let Some(fid) = focal_thread {
         if let Ok(t) = store.get_thread(fid) {
-            ripe_lines.push(format!("  - [{}] {} (focal)", t.state.as_str(), t.prompt));
+            ripe_lines.push(ripe_line(&t, true));
         }
     }
     for t in &ripe {
         if Some(t.id.as_str()) == focal_thread {
             continue;
         }
-        ripe_lines.push(format!("  - [{}] {}", t.state.as_str(), t.prompt));
+        ripe_lines.push(ripe_line(t, false));
     }
 
     let last_trace = store.last_trace().unwrap_or_default();
@@ -684,7 +707,8 @@ mod tests {
         assert!(p.contains("active_domains: magnetism"));
         // ripe thread injected (focal)
         assert!(p.contains("ripe_mercury:"));
-        assert!(p.contains("why does iron remember? (focal)"));
+        assert!(p.contains("why does iron remember? (focal) (domain: magnetism)"));
+        assert!(p.contains(&format!("- {} [volatile]", crate::ids::handle_of(&tid))));
         // trace injected
         assert!(p.contains("last_trace: Traced hysteresis"));
         // budget + tools
@@ -887,5 +911,32 @@ mod tests {
         assert!(plan
             .system_prompt
             .contains("recent_salt:\n  (none yet — a young practice)"));
+    }
+
+    #[test]
+    fn ripe_mercury_lines_carry_handle_and_domain() {
+        let store = Store::open_in_memory("d").unwrap();
+        let d = store.upsert_domain("optics").unwrap();
+        let a = store
+            .open_thread("why is the sky dark at night?", Some(&d.id), None)
+            .unwrap();
+        let b = store
+            .open_thread("an unplaced thought?", None, None)
+            .unwrap();
+        let p = assemble("philosophus", "explain", None, &store).system_prompt;
+        let ha = crate::ids::handle_of(&a.id);
+        let hb = crate::ids::handle_of(&b.id);
+        assert!(
+            p.contains(&format!(
+                "  - {ha} [volatile] why is the sky dark at night? (domain: optics)"
+            )),
+            "{p}"
+        );
+        assert!(
+            p.contains(&format!(
+                "  - {hb} [volatile] an unplaced thought? (no domain)"
+            )),
+            "{p}"
+        );
     }
 }

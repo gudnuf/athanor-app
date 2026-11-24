@@ -68,6 +68,30 @@ fn redact(label: &str) -> String {
     format!("<<{label}: opaque prose asset, not snapshotted>>")
 }
 
+/// Replaces every `#` followed by exactly six lowercase hex digits (a thread
+/// handle, the tail of a non-deterministic uuid v7) with `#<handle>`. A hand
+/// scan: no regex crate.
+fn redact_handles(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let is_hex = |c: char| c.is_ascii_digit() || ('a'..='f').contains(&c);
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '#'
+            && i + 7 <= chars.len()
+            && chars[i + 1..i + 7].iter().all(|c| is_hex(*c))
+            && chars.get(i + 7).is_none_or(|c| !is_hex(*c))
+        {
+            out.push_str("#<handle>");
+            i += 7;
+        } else {
+            out.push(chars[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
 /// Rebuilds the structural view of a labeled section list (from
 /// [`assemble_sections`] / [`assemble_initiation_sections`] — the same
 /// layering `assemble`/`assemble_initiation` produce, kept as labeled parts
@@ -101,7 +125,7 @@ fn structural_view(
         let (header, rendered): (String, String) = match *label {
             SECTION_PROFILE_INJECTION | SECTION_TOOLS => (
                 format!("{}: {label} (placeholder-fill, literal)", i + 1),
-                body.clone(),
+                redact_handles(body),
             ),
             SECTION_MODE => (
                 format!("{}: {label} asset \"{mode}\" (opaque)", i + 1),
