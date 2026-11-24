@@ -900,7 +900,8 @@ pub const QUIET_REPLY_MAX_WORDS: usize = 25;
 /// words / learner words (empty turns excluded) must not exceed
 /// [`TALK_RATIO_MAX`]. When the learner said fewer than
 /// [`TALK_RATIO_MIN_LEARNER_WORDS`], each reply is capped at
-/// [`QUIET_REPLY_MAX_WORDS`] instead.
+/// [`QUIET_REPLY_MAX_WORDS`] instead. The opening move (a reply to no
+/// learner turn) is not counted.
 ///
 /// Gated judge question: did the Mystagogue talk more than the learner, or
 /// answer a short turn with a paragraph?
@@ -913,7 +914,13 @@ pub fn grade_talk_ratio(trace: &SessionTrace) -> CheckResult {
             _ => None,
         })
         .sum();
-    let all = replies(trace);
+    // The opening move answers no learner turn, so it can't be "talking more
+    // than they did": counting it charged every session with ~30 words the
+    // learner never had a chance to match (gated run 2). Replies only.
+    let all: Vec<Reply> = replies(trace)
+        .into_iter()
+        .filter(|r| r.after_learner.is_some())
+        .collect();
     let mut violations = Vec::new();
     if learner_words >= TALK_RATIO_MIN_LEARNER_WORDS {
         let mine: usize = all.iter().map(|r| word_count(&r.text)).sum();
@@ -1599,5 +1606,17 @@ mod tests {
             "{:?}",
             grade_landed_reply(&ok)
         );
+    }
+
+    #[test]
+    fn the_opening_move_is_not_charged_to_the_ratio() {
+        // Run-2 shape: a 38-word opener, then short replies to a terse learner.
+        let t = trace(&[
+            assistant("\"What is entropy?\" You left that one open. Let's not chase the word yet. A cup of hot coffee sits on a desk and nobody touches it. What's the one thing that cup never does on its own?"),
+            learner("I don't know."),
+            assistant("Good. Skip the \"never.\" What had the coffee turned into?"),
+        ]);
+        let r = grade_talk_ratio(&t);
+        assert!(r.passed, "{}", r.detail);
     }
 }
