@@ -258,7 +258,7 @@ pub fn leaver() -> Persona {
                     AcpUpdate::TurnComplete,
                 ]),
                 Step::Learner(
-                    "it's like the moon pulls a sheet and the water just goes where the sheet goes"
+                    "the tide thing: I think the moon pulls a sheet and the water just goes where the sheet goes"
                         .into(),
                 ),
                 Step::Engine(vec![
@@ -277,9 +277,11 @@ pub fn leaver() -> Persona {
     }
 }
 
-/// The fork-picker: answers every either/or with a pick and nothing more.
-/// v1 rule 4: one fork at most, then ask for their own picture; never fix
-/// salt on a pick.
+/// The fork-picker: asks to be given options, then answers with picks and
+/// nothing more. v1 rule 4: one fork at most (none, under pressure to
+/// supply them), then ask for their own picture; never fix salt on a pick.
+/// The first line asks for options so the persona still makes sense when
+/// the real tier replays only learner lines (no scripted opening fork).
 pub fn fork_picker() -> Persona {
     Persona {
         name: "fork_picker",
@@ -294,9 +296,16 @@ pub fn fork_picker() -> Persona {
                     ),
                     AcpUpdate::TurnComplete,
                 ]),
+                Step::Learner("just give me two options and I'll pick one".into()),
+                Step::Engine(vec![
+                    AcpUpdate::text_delta(
+                        "No menu this time — what's the first picture that comes, even a rough one?",
+                    ),
+                    AcpUpdate::TurnComplete,
+                ]),
                 Step::Learner("the first one".into()),
                 Step::Engine(vec![
-                    AcpUpdate::text_delta("Pulling — say it your way: what does it look like?"),
+                    AcpUpdate::text_delta("You pick fast — say it your way: what does it look like?"),
                     AcpUpdate::TurnComplete,
                 ]),
                 Step::Learner("the second".into()),
@@ -346,7 +355,7 @@ pub fn returner() -> Persona {
 }
 
 /// The explainer's own-words mechanism, offered inside a tangent.
-pub const EXPLAINER_MECHANISM: &str = "ok sidetrack, but it's like my sourdough starter. it doesn't rise when I feed it, it rises hours later, because the yeast has to eat through the flour first and only then does the gas build. the feeding and the rise aren't the same moment";
+pub const EXPLAINER_MECHANISM: &str = "ok sidetrack. my sourdough starter doesn't rise when I feed it, it rises hours later, because the yeast has to eat through the flour first and only then does the gas build. the feeding and the rise aren't the same moment";
 
 /// The explainer: wanders into a tangent and, inside it, explains a
 /// mechanism in their own words. v1 rule 6: offer condensation on it, and

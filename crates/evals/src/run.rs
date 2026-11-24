@@ -406,11 +406,14 @@ mod tests {
         assert!(check(&report, "forks").passed);
         assert!(report.passed);
 
-        // v0 shape: another fork, then salt fixed on the learner's pick.
-        let forked = run_with_step(
-            fork_picker(),
-            2,
-            vec![
+        // v0 shape: hand over the options asked for, fork again, then fix
+        // salt on the learner's pick.
+        let forked = run_persona_with(&fork_picker(), |steps| {
+            steps[2] = Step::Engine(vec![
+                AcpUpdate::text_delta("Is the moon pulling, or is the water leaning?"),
+                AcpUpdate::TurnComplete,
+            ]);
+            steps[4] = Step::Engine(vec![
                 AcpUpdate::text_delta("A rope, or a sheet?"),
                 AcpUpdate::ToolCall(AcpToolCall {
                     id: "1".into(),
@@ -423,8 +426,8 @@ mod tests {
                     args: json!({ "question": "what holds the other end?" }),
                 }),
                 AcpUpdate::TurnComplete,
-            ],
-        )
+            ]);
+        })
         .await;
         let forks = check(&forked, "forks");
         assert!(!forks.passed);
