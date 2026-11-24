@@ -91,9 +91,9 @@ Written against these four scripted learners (replayed through the real engine):
 Each persona stresses a specific promise of the pack; a prompt change that
 regresses any of them shows up in the graded report before it ships.
 
-## v1: eight rules from field use
+## v1: nine rules from field use
 
-v1 keeps v0 whole and adds eight short rules, each from a failure shape that
+v1 keeps v0 whole and adds nine short rules, each from a failure shape that
 only showed up in real sessions. The full write-up (rule, synthetic pattern,
 eval, gated judge question) is
 `docs/research/2026-11-24-prompt-pack-v1-from-field-use.md`; what the core
@@ -109,6 +109,7 @@ must still supply is `docs/plans/2026-11-24-prompt-pack-v1-core-asks.md`.
 | 6 | An own-words mechanism, even mid-tangent, is the moment to offer; a rhyme said aloud gets woven. | `condensation.md` §1, weaving |
 | 7 | "Save that" keeps their words verbatim, one snag question at most. | `condensation.md` tools; `condense.md` |
 | 8 | Not every voice is for you: ask once, build nothing on room speech. | `identity.md` §2; `condense.md` |
+| 9 | Never infer how they learn from silence, short turns or gaps; one session is not a pattern. | `condense.md`; `condensation.md` tools |
 
 Each rule has two hermetic checks in `crates/evals`:
 
@@ -118,7 +119,8 @@ Each rule has two hermetic checks in `crates/evals`:
   from silently dropping a rule. Reword freely around the anchors; changing
   an anchor is a deliberate edit to that table.
 - **Behavioural grader** (`evals::field`): a deterministic surface proxy
-  over a session trace, run by a synthetic field persona. Hermetically the
+  over a session trace, run by a synthetic field persona (rule 9's grader
+  reads the close-pass output instead, through the real `parse_condensation`). Hermetically the
   Mystagogue side is scripted, so these prove the grader bites (each has a
   test where the v0-shaped reply fails it); the gated tier runs the same
   graders over real-engine transcripts.

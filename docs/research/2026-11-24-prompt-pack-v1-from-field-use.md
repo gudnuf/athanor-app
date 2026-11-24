@@ -1,6 +1,6 @@
-# Prompt pack v1: eight rules from field use
+# Prompt pack v1: nine rules from field use
 
-The v0 pack was written against four scripted personas. v1 adds eight rules
+The v0 pack was written against four scripted personas. v1 adds nine rules
 drawn from a private review of real sessions on an early build. That review
 and the session data it read stay off the repo. Everything here is stated as
 a pattern, and every example is invented (a learner working on why the tide
@@ -27,11 +27,21 @@ should answer.
   same learner lines and shows the grader failing.
 - **Limit, stated plainly.** In the hermetic tier the Mystagogue side is
   scripted, so these graders prove they bite, not that the model obeys.
-  Whether the model obeys is the gated tier's job: the persona learner lines
-  replayed against the real engine, with the same `field` graders plus the
-  judge questions below. The gated runner in `evals::run` is still a stub
-  (`todo!()` behind `#[ignore]` and `ANTHROPIC_API_KEY`). Wiring it to the
-  real engine is a prerequisite for the operator run.
+  Whether the model obeys is the gated tier's job: `evals::real` replays the
+  persona learner lines against the real engine, runs the same `field`
+  graders, and prints the judge questions below as the operator's checklist.
+  Rule 9's grader reads the close-pass output, which that runner does not
+  capture yet, so rule 9 is hermetic-plus-judge until it does.
+- **Faster speech.** Some of the field evidence was transcription latency,
+  not the Mystagogue. Rules 1, 3, 4, 6 and 7 come from typed sessions or the
+  model's own output and hold in full. Rule 2 is now mostly an engine fix
+  (the speech path no longer sends a turn with no words); the prompt rule
+  stays only as what to do if an empty turn still arrives. Rule 5's
+  evidence that the learner went quiet is shaky for the same reason; the
+  half that matters is not reopening a stalled question next session. The
+  in-session "asked twice, let it rest" line stays because it is what puts
+  the stalled mark in the note. Rule 9 exists because latency had already
+  been written into a profile as learning style.
 
 ## The rules
 
@@ -219,6 +229,31 @@ Persona: **room noise**.
 the live trace doesn't carry: did anything the Mystagogue said, noted or
 profiled rest on a turn that was plausibly for someone else?
 
+### 9. Never infer learning style from silence
+
+**Rule.** The close-pass profile refine treats empty turns, short turns,
+silences and gaps between sessions as facts about the mic and the app's
+speed, not about the learner. It builds no PROFILE line on them and never
+infers how they learn from them. One session is not a pattern: when in
+doubt, it leaves `how_i_learn` as it is. (`condense.md`; `condensation.md`
+`update_memory` row.)
+
+**Pattern.** A session of dots and one-word replies closes with *"PROFILE
+how_i_learn: long silences are the norm; small concrete questions work
+better."* Every later session then reads that as who the learner is. A
+typed session a week later shows long, abstract, self-driven turns.
+
+**Eval.** `pack:9_no_style_from_silence_close` and
+`pack:9_no_style_from_silence_session`; `grade_profile_from_silence(trace,
+condense_output)` parses the close output with the real
+`parse_condensation`. Any `how_i_learn` addition after a session with no
+substantive learner turn fails, and so does any `how_i_learn` claim resting
+on silence, pauses, short replies or gaps.
+
+**Judge question.** Does each `how_i_learn` line rest on something the
+learner said or did with words, seen more than once, or on one session's
+quiet?
+
 ## Outside the prompt pack
 
 These came out of the same review. They are not prompt changes, and nothing
@@ -233,7 +268,7 @@ here builds them:
 - **Solve.** v0 field use broke "one koan, then silence" and "never
   announce". Re-run the Solve scenarios on the gated tier against the
   current model before assuming it's fixed.
-- **Operator, one-time.** Rules 2 and 8 stop new latency artifacts and
+- **Operator, one-time.** Rules 2, 8 and 9 stop new latency artifacts and
   room-speech inferences from entering the profile. They don't remove ones
   already stored on a device. Retracting those is an operator task on the
   device's own data.
