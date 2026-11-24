@@ -1732,6 +1732,227 @@ public func FfiConverterTypeSessionHandle_lower(_ value: SessionHandle) -> UInt6
 
 
 
+
+
+public protocol TextBellowsHandleProtocol: AnyObject, Sendable {
+    
+    func beginRequest()  -> UInt64
+    
+    func contextualStrings()  -> [String]
+    
+    func ingestError(requestId: UInt64) 
+    
+    func ingestFinal(requestId: UInt64, text: String) 
+    
+    func ingestPartial(requestId: UInt64, text: String) 
+    
+    func metrics()  -> FfiTextBellowsMetrics
+    
+    /**
+     * `tick(now)` then `drain()`.
+     */
+    func poll()  -> [FfiTextBellowsEvent]
+    
+    func pushPcm(pcm: [Float]) 
+    
+    func resetEndpoint() 
+    
+    func sendNow() 
+    
+}
+open class TextBellowsHandle: TextBellowsHandleProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_ffi_fn_clone_textbellowshandle(self.handle, $0) }
+    }
+public convenience init(biasTerms: [String], silenceLatchMs: UInt64) {
+    let handle =
+        try! rustCall() {
+    uniffi_ffi_fn_constructor_textbellowshandle_new(
+        FfiConverterSequenceString.lower(biasTerms),
+        FfiConverterUInt64.lower(silenceLatchMs),$0
+    )
+}
+    self.init(unsafeFromHandle: handle)
+}
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_ffi_fn_free_textbellowshandle(handle, $0) }
+    }
+
+    
+
+    
+open func beginRequest() -> UInt64  {
+    return try!  FfiConverterUInt64.lift(try! rustCall() {
+    uniffi_ffi_fn_method_textbellowshandle_begin_request(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+    
+open func contextualStrings() -> [String]  {
+    return try!  FfiConverterSequenceString.lift(try! rustCall() {
+    uniffi_ffi_fn_method_textbellowshandle_contextual_strings(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+    
+open func ingestError(requestId: UInt64)  {try! rustCall() {
+    uniffi_ffi_fn_method_textbellowshandle_ingest_error(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt64.lower(requestId),$0
+    )
+}
+}
+    
+open func ingestFinal(requestId: UInt64, text: String)  {try! rustCall() {
+    uniffi_ffi_fn_method_textbellowshandle_ingest_final(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt64.lower(requestId),
+        FfiConverterString.lower(text),$0
+    )
+}
+}
+    
+open func ingestPartial(requestId: UInt64, text: String)  {try! rustCall() {
+    uniffi_ffi_fn_method_textbellowshandle_ingest_partial(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt64.lower(requestId),
+        FfiConverterString.lower(text),$0
+    )
+}
+}
+    
+open func metrics() -> FfiTextBellowsMetrics  {
+    return try!  FfiConverterTypeFfiTextBellowsMetrics_lift(try! rustCall() {
+    uniffi_ffi_fn_method_textbellowshandle_metrics(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+    
+    /**
+     * `tick(now)` then `drain()`.
+     */
+open func poll() -> [FfiTextBellowsEvent]  {
+    return try!  FfiConverterSequenceTypeFfiTextBellowsEvent.lift(try! rustCall() {
+    uniffi_ffi_fn_method_textbellowshandle_poll(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+    
+open func pushPcm(pcm: [Float])  {try! rustCall() {
+    uniffi_ffi_fn_method_textbellowshandle_push_pcm(
+            self.uniffiCloneHandle(),
+        FfiConverterSequenceFloat.lower(pcm),$0
+    )
+}
+}
+    
+open func resetEndpoint()  {try! rustCall() {
+    uniffi_ffi_fn_method_textbellowshandle_reset_endpoint(
+            self.uniffiCloneHandle(),$0
+    )
+}
+}
+    
+open func sendNow()  {try! rustCall() {
+    uniffi_ffi_fn_method_textbellowshandle_send_now(
+            self.uniffiCloneHandle(),$0
+    )
+}
+}
+    
+
+    
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeTextBellowsHandle: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = TextBellowsHandle
+
+    public static func lift(_ handle: UInt64) throws -> TextBellowsHandle {
+        return TextBellowsHandle(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: TextBellowsHandle) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TextBellowsHandle {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: TextBellowsHandle, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTextBellowsHandle_lift(_ handle: UInt64) throws -> TextBellowsHandle {
+    return try FfiConverterTypeTextBellowsHandle.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTextBellowsHandle_lower(_ value: TextBellowsHandle) -> UInt64 {
+    return FfiConverterTypeTextBellowsHandle.lower(value)
+}
+
+
+
+
 /**
  * A finalized, never-to-be-revised transcript segment crossing FFI. A thin
  * `uniffi::Record` projection of `stt::FinalizedSegment` — we never send the
@@ -1870,6 +2091,84 @@ public func FfiConverterTypeFfiSttMetrics_lift(_ buf: RustBuffer) throws -> FfiS
 #endif
 public func FfiConverterTypeFfiSttMetrics_lower(_ value: FfiSttMetrics) -> RustBuffer {
     return FfiConverterTypeFfiSttMetrics.lower(value)
+}
+
+
+public struct FfiTextBellowsMetrics: Equatable, Hashable {
+    public var pickupMs: UInt64
+    public var latchMs: UInt64
+    public var finalizeMs: UInt64
+    public var requests: UInt64
+    public var timeouts: UInt64
+    public var selfCloses: UInt64
+    public var revisionsDropped: UInt64
+    public var resets: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(pickupMs: UInt64, latchMs: UInt64, finalizeMs: UInt64, requests: UInt64, timeouts: UInt64, selfCloses: UInt64, revisionsDropped: UInt64, resets: UInt64) {
+        self.pickupMs = pickupMs
+        self.latchMs = latchMs
+        self.finalizeMs = finalizeMs
+        self.requests = requests
+        self.timeouts = timeouts
+        self.selfCloses = selfCloses
+        self.revisionsDropped = revisionsDropped
+        self.resets = resets
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension FfiTextBellowsMetrics: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiTextBellowsMetrics: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiTextBellowsMetrics {
+        return
+            try FfiTextBellowsMetrics(
+                pickupMs: FfiConverterUInt64.read(from: &buf), 
+                latchMs: FfiConverterUInt64.read(from: &buf), 
+                finalizeMs: FfiConverterUInt64.read(from: &buf), 
+                requests: FfiConverterUInt64.read(from: &buf), 
+                timeouts: FfiConverterUInt64.read(from: &buf), 
+                selfCloses: FfiConverterUInt64.read(from: &buf), 
+                revisionsDropped: FfiConverterUInt64.read(from: &buf), 
+                resets: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiTextBellowsMetrics, into buf: inout [UInt8]) {
+        FfiConverterUInt64.write(value.pickupMs, into: &buf)
+        FfiConverterUInt64.write(value.latchMs, into: &buf)
+        FfiConverterUInt64.write(value.finalizeMs, into: &buf)
+        FfiConverterUInt64.write(value.requests, into: &buf)
+        FfiConverterUInt64.write(value.timeouts, into: &buf)
+        FfiConverterUInt64.write(value.selfCloses, into: &buf)
+        FfiConverterUInt64.write(value.revisionsDropped, into: &buf)
+        FfiConverterUInt64.write(value.resets, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiTextBellowsMetrics_lift(_ buf: RustBuffer) throws -> FfiTextBellowsMetrics {
+    return try FfiConverterTypeFfiTextBellowsMetrics.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiTextBellowsMetrics_lower(_ value: FfiTextBellowsMetrics) -> RustBuffer {
+    return FfiConverterTypeFfiTextBellowsMetrics.lower(value)
 }
 
 
@@ -2982,6 +3281,103 @@ public func FfiConverterTypeEngineError_lower(_ value: EngineError) -> RustBuffe
 
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum FfiTextBellowsEvent: Equatable, Hashable {
+    
+    case preview(text: String
+    )
+    case finalized(text: String
+    )
+    case utteranceEnded
+    case cycleRequest(requestId: UInt64
+    )
+    case unavailable
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension FfiTextBellowsEvent: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiTextBellowsEvent: FfiConverterRustBuffer {
+    typealias SwiftType = FfiTextBellowsEvent
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiTextBellowsEvent {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .preview(text: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 2: return .finalized(text: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 3: return .utteranceEnded
+        
+        case 4: return .cycleRequest(requestId: try FfiConverterUInt64.read(from: &buf)
+        )
+        
+        case 5: return .unavailable
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: FfiTextBellowsEvent, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case let .preview(text):
+            writeInt(&buf, Int32(1))
+            FfiConverterString.write(text, into: &buf)
+            
+        
+        case let .finalized(text):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(text, into: &buf)
+            
+        
+        case .utteranceEnded:
+            writeInt(&buf, Int32(3))
+        
+        
+        case let .cycleRequest(requestId):
+            writeInt(&buf, Int32(4))
+            FfiConverterUInt64.write(requestId, into: &buf)
+            
+        
+        case .unavailable:
+            writeInt(&buf, Int32(5))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiTextBellowsEvent_lift(_ buf: RustBuffer) throws -> FfiTextBellowsEvent {
+    return try FfiConverterTypeFfiTextBellowsEvent.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiTextBellowsEvent_lower(_ value: FfiTextBellowsEvent) -> RustBuffer {
+    return FfiConverterTypeFfiTextBellowsEvent.lower(value)
+}
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
  * Which voice a reply run is spoken in — projected across FFI from
  * `athanor_core::engine::Register`. The Session screen (E4) switches between
@@ -3503,6 +3899,31 @@ fileprivate struct FfiConverterSequenceTypeTranscriptTurn: FfiConverterRustBuffe
         return seq
     }
 }
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeFfiTextBellowsEvent: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiTextBellowsEvent]
+
+    public static func write(_ value: [FfiTextBellowsEvent], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiTextBellowsEvent.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiTextBellowsEvent] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiTextBellowsEvent]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiTextBellowsEvent.read(from: &buf))
+        }
+        return seq
+    }
+}
 private let UNIFFI_RUST_FUTURE_POLL_READY: Int8 = 0
 private let UNIFFI_RUST_FUTURE_POLL_WAKE: Int8 = 1
 
@@ -3686,10 +4107,43 @@ private let initializationResult: InitializationResult = {
     if (uniffi_ffi_checksum_method_sessionhandle_set_listener() != 1514) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_ffi_checksum_method_textbellowshandle_begin_request() != 26510) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ffi_checksum_method_textbellowshandle_contextual_strings() != 45897) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ffi_checksum_method_textbellowshandle_ingest_error() != 46769) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ffi_checksum_method_textbellowshandle_ingest_final() != 64364) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ffi_checksum_method_textbellowshandle_ingest_partial() != 32887) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ffi_checksum_method_textbellowshandle_metrics() != 31076) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ffi_checksum_method_textbellowshandle_poll() != 24003) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ffi_checksum_method_textbellowshandle_push_pcm() != 55540) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ffi_checksum_method_textbellowshandle_reset_endpoint() != 9822) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ffi_checksum_method_textbellowshandle_send_now() != 13004) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_ffi_checksum_constructor_bellowshandle_open() != 58462) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_ffi_checksum_constructor_athanorengine_new() != 57070) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_ffi_checksum_constructor_textbellowshandle_new() != 31035) {
         return InitializationResult.apiChecksumMismatch
     }
 
