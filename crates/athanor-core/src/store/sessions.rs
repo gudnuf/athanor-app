@@ -106,6 +106,38 @@ impl Store {
         self.get_session(id)
     }
 
+    /// Whole minutes between the session's start and its last activity
+    /// (`updated_at`, which `append_transcript` advances), rounded up and
+    /// clamped to [1, 60]. Read BEFORE the row is closed: closing overwrites
+    /// `updated_at`.
+    #[allow(dead_code)] // consumed by Conductor::close (S3)
+    pub(crate) fn measured_minutes(&self, session_id: &str) -> Result<u32, CoreError> {
+        let s = self.get_session(session_id)?;
+        let span = s.updated_at.saturating_sub(s.started_at);
+        Ok(span.div_ceil(60).clamp(1, 60) as u32)
+    }
+
+    /// Writes what close learned onto the row: measured minutes, the tended
+    /// UTC day, and (only if the row has none) the primary thread.
+    #[allow(dead_code)] // consumed by Conductor::close (S3)
+    pub(crate) fn finish_session_row(
+        &self,
+        id: &str,
+        minutes: u32,
+        tended_day: Option<&str>,
+        primary_thread: Option<&str>,
+    ) -> Result<(), CoreError> {
+        let changed = self.conn().execute(
+            "UPDATE sessions SET minutes = ?1, tended_day = ?2, thread_id = COALESCE(thread_id, ?3)
+             WHERE id = ?4",
+            params![minutes, tended_day, primary_thread, id],
+        )?;
+        if changed == 0 {
+            return Err(CoreError::NotFound(format!("session {id}")));
+        }
+        Ok(())
+    }
+
     /// Per-mask last-used timestamp: `(mask, MAX(created_at))` over every
     /// session, one row per distinct mask. Feeds the home-screen mask-affinity
     /// heat (lane 14) — the mask the Mystagogue last wore runs warm, others
@@ -344,5 +376,27 @@ mod tests {
             .iter()
             .any(|s| s.id == gone.id && s.state == "abandoned"));
         assert!(store.recent_sessions(10, 0).unwrap().is_empty(), "contrast");
+    }
+
+    #[test]
+    fn measured_minutes_uses_last_activity_not_close_time() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::sync::Arc;
+        let t = Arc::new(AtomicU64::new(1000));
+        let t2 = t.clone();
+        let store = Store::open_in_memory("d")
+            .unwrap()
+            .with_clock(Arc::new(move || t2.load(Ordering::SeqCst)));
+        let s = store
+            .create_session(None, "philosophus", "explain")
+            .unwrap();
+        assert_eq!(store.measured_minutes(&s.id).unwrap(), 1, "floor of 1");
+        t.store(1430, Ordering::SeqCst);
+        store.append_transcript(&s.id, "x").unwrap();
+        t.store(9000, Ordering::SeqCst);
+        assert_eq!(store.measured_minutes(&s.id).unwrap(), 8, "430s -> 8 min");
+        t.store(1000 + 4 * 3600, Ordering::SeqCst);
+        store.append_transcript(&s.id, "y").unwrap();
+        assert_eq!(store.measured_minutes(&s.id).unwrap(), 60, "clamped to 60");
     }
 }
