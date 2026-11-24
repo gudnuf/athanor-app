@@ -441,6 +441,22 @@ fileprivate struct FfiConverterUInt32: FfiConverterPrimitive {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterInt32: FfiConverterPrimitive {
+    typealias FfiType = Int32
+    typealias SwiftType = Int32
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Int32 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: Int32, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterUInt64: FfiConverterPrimitive {
     typealias FfiType = UInt64
     typealias SwiftType = UInt64
@@ -610,14 +626,16 @@ public protocol AthanorEngineProtocol: AnyObject, Sendable {
     /**
      * Opens the first-launch initiation session (cold start).
      */
-    func beginInitiation() throws  -> SessionHandle
+    func beginInitiation(tzOffsetMin: Int32?) throws  -> SessionHandle
     
     /**
      * Opens an ordinary session against `(mask, mode, thread_id)` — each
-     * `None` falls back to the default voice/mode/no-thread. Fallible across
+     * `None` falls back to the default voice/mode/no-thread. `tz_offset_min` is the
+     * device's UTC offset in minutes (so the prompt's `last_session_ago` line can
+     * name the learner's part of day); `None` reads `(not supplied)`. Fallible across
      * FFI (no panic): a store error surfaces as `EngineError::Session`.
      */
-    func beginSession(mask: String?, mode: String?, threadId: String?) throws  -> SessionHandle
+    func beginSession(mask: String?, mode: String?, threadId: String?, tzOffsetMin: Int32?) throws  -> SessionHandle
     
 }
 /**
@@ -815,26 +833,30 @@ open func tabula()throws  -> [TabulaPassage]  {
     /**
      * Opens the first-launch initiation session (cold start).
      */
-open func beginInitiation()throws  -> SessionHandle  {
+open func beginInitiation(tzOffsetMin: Int32?)throws  -> SessionHandle  {
     return try  FfiConverterTypeSessionHandle_lift(try rustCallWithError(FfiConverterTypeEngineError_lift) {
     uniffi_ffi_fn_method_athanorengine_begin_initiation(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),
+        FfiConverterOptionInt32.lower(tzOffsetMin),$0
     )
 })
 }
     
     /**
      * Opens an ordinary session against `(mask, mode, thread_id)` — each
-     * `None` falls back to the default voice/mode/no-thread. Fallible across
+     * `None` falls back to the default voice/mode/no-thread. `tz_offset_min` is the
+     * device's UTC offset in minutes (so the prompt's `last_session_ago` line can
+     * name the learner's part of day); `None` reads `(not supplied)`. Fallible across
      * FFI (no panic): a store error surfaces as `EngineError::Session`.
      */
-open func beginSession(mask: String?, mode: String?, threadId: String?)throws  -> SessionHandle  {
+open func beginSession(mask: String?, mode: String?, threadId: String?, tzOffsetMin: Int32?)throws  -> SessionHandle  {
     return try  FfiConverterTypeSessionHandle_lift(try rustCallWithError(FfiConverterTypeEngineError_lift) {
     uniffi_ffi_fn_method_athanorengine_begin_session(
             self.uniffiCloneHandle(),
         FfiConverterOptionString.lower(mask),
         FfiConverterOptionString.lower(mode),
-        FfiConverterOptionString.lower(threadId),$0
+        FfiConverterOptionString.lower(threadId),
+        FfiConverterOptionInt32.lower(tzOffsetMin),$0
     )
 })
 }
@@ -2999,6 +3021,30 @@ public func FfiConverterTypeSessionEvent_lower(_ value: SessionEvent) -> RustBuf
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionInt32: FfiConverterRustBuffer {
+    typealias SwiftType = Int32?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterInt32.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterInt32.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionUInt64: FfiConverterRustBuffer {
     typealias SwiftType = UInt64?
 
@@ -3418,10 +3464,10 @@ private let initializationResult: InitializationResult = {
     if (uniffi_ffi_checksum_method_athanorengine_tabula() != 14998) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_ffi_checksum_method_athanorengine_begin_initiation() != 20017) {
+    if (uniffi_ffi_checksum_method_athanorengine_begin_initiation() != 36923) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_ffi_checksum_method_athanorengine_begin_session() != 49769) {
+    if (uniffi_ffi_checksum_method_athanorengine_begin_session() != 51940) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_ffi_checksum_method_sessioneventlistener_on_event() != 55851) {

@@ -216,10 +216,15 @@ final class AthanorCoreEngine: AthanorEngineProtocol {
 
     // MARK: Sessions
 
+    /// The device's UTC offset in minutes, handed to the core when a session
+    /// begins so the prompt's `last_session_ago` line can name the learner's
+    /// part of day (the core decides what to do with it).
+    private static var tzOffsetMin: Int32 { Int32(TimeZone.current.secondsFromGMT() / 60) }
+
     func beginSession(threadId: String?, mask: String?) throws -> AsyncStream<SessionEvent> {
         // A pre-chosen mask opens the session under that voice (mode left to the
         // default) but does NOT pin it — the Mystagogue can still shift.
-        attach(try engine.beginSession(mask: mask, mode: nil, threadId: threadId))
+        attach(try engine.beginSession(mask: mask, mode: nil, threadId: threadId, tzOffsetMin: Self.tzOffsetMin))
     }
 
     // BLOCKER-1 deep fix: initiation has no other first-speaker channel — the
@@ -230,7 +235,7 @@ final class AthanorCoreEngine: AthanorEngineProtocol {
     // mirroring `sendTurn`'s own Task pattern — the screen just observes the
     // stream; it never has to tap anything to make the Mystagogue speak.
     func beginInitiation() throws -> AsyncStream<SessionEvent> {
-        let handle = try engine.beginInitiation()
+        let handle = try engine.beginInitiation(tzOffsetMin: Self.tzOffsetMin)
         let stream = attach(handle)
         Task { await handle.open() }
         return stream

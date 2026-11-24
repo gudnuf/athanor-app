@@ -134,19 +134,23 @@ impl SessionHandle {
 #[uniffi::export]
 impl AthanorEngine {
     /// Opens an ordinary session against `(mask, mode, thread_id)` — each
-    /// `None` falls back to the default voice/mode/no-thread. Fallible across
+    /// `None` falls back to the default voice/mode/no-thread. `tz_offset_min` is the
+    /// device's UTC offset in minutes (so the prompt's `last_session_ago` line can
+    /// name the learner's part of day); `None` reads `(not supplied)`. Fallible across
     /// FFI (no panic): a store error surfaces as `EngineError::Session`.
     pub fn begin_session(
         &self,
         mask: Option<String>,
         mode: Option<String>,
         thread_id: Option<String>,
+        tz_offset_min: Option<i32>,
     ) -> Result<Arc<SessionHandle>, EngineError> {
         let mask = mask.unwrap_or_else(|| DEFAULT_MASK.to_string());
         let mode = mode.unwrap_or_else(|| DEFAULT_MODE.to_string());
-        let conductor =
+        let mut conductor =
             Conductor::begin(Arc::clone(&self.store), &mask, &mode, thread_id.as_deref())
                 .map_err(|e| EngineError::Session(e.to_string()))?;
+        conductor.set_tz_offset_min(tz_offset_min);
         Ok(SessionHandle::new(
             conductor,
             Arc::clone(&self.store),
@@ -156,9 +160,13 @@ impl AthanorEngine {
     }
 
     /// Opens the first-launch initiation session (cold start).
-    pub fn begin_initiation(&self) -> Result<Arc<SessionHandle>, EngineError> {
-        let conductor = Conductor::begin_initiation(Arc::clone(&self.store))
+    pub fn begin_initiation(
+        &self,
+        tz_offset_min: Option<i32>,
+    ) -> Result<Arc<SessionHandle>, EngineError> {
+        let mut conductor = Conductor::begin_initiation(Arc::clone(&self.store))
             .map_err(|e| EngineError::Session(e.to_string()))?;
+        conductor.set_tz_offset_min(tz_offset_min);
         Ok(SessionHandle::new(
             conductor,
             Arc::clone(&self.store),

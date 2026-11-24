@@ -56,6 +56,7 @@ async fn scripted_turn_fixes_salt_streams_condensation_then_reads_round_trip() {
             Some("philosophus".into()),
             Some("explain".into()),
             Some(parent.id.clone()),
+            None,
         )
         .unwrap();
 
@@ -213,7 +214,7 @@ async fn begin_initiation_open_streams_the_mystagogues_first_reply_with_no_learn
     ]);
     let engine = AthanorEngine::with_engine(Arc::clone(&store), Arc::new(mock));
 
-    let session = engine.begin_initiation().unwrap();
+    let session = engine.begin_initiation(None).unwrap();
     let collector = Arc::new(Collector(Mutex::new(Vec::new())));
     session.set_listener(collector.clone());
 
@@ -260,7 +261,7 @@ async fn pinning_a_mask_holds_it_against_a_later_shift_mask() {
         AcpUpdate::TurnComplete,
     ]);
     let engine = AthanorEngine::with_engine(Arc::clone(&store), Arc::new(mock));
-    let session = engine.begin_session(None, None, None).unwrap();
+    let session = engine.begin_session(None, None, None, None).unwrap();
     assert_eq!(
         session.current_mask(),
         "philosophus",
@@ -308,7 +309,7 @@ async fn abandon_returns_the_thread_to_volatile() {
     let engine = AthanorEngine::with_engine(Arc::clone(&store), Arc::new(MockEngine::new(vec![])));
 
     let session = engine
-        .begin_session(None, None, Some(thread.id.clone()))
+        .begin_session(None, None, Some(thread.id.clone()), None)
         .unwrap();
     session.abandon().await.unwrap();
 
@@ -384,7 +385,12 @@ async fn closing_condenses_a_note_and_the_session_reads_round_trip_both_roles() 
     );
 
     let session = engine
-        .begin_session(Some("philosophus".into()), None, Some(thread.id.clone()))
+        .begin_session(
+            Some("philosophus".into()),
+            None,
+            Some(thread.id.clone()),
+            None,
+        )
         .unwrap();
     let session_id = session.session_id();
     session
@@ -465,7 +471,7 @@ async fn a_panicking_engine_turn_is_contained_as_an_error_event_not_a_process_ab
         .open_thread("what breaks at the seam?", None, None)
         .unwrap();
     let engine = AthanorEngine::with_engine(Arc::clone(&store), Arc::new(PanickingEngine));
-    let session = engine.begin_session(None, None, None).unwrap();
+    let session = engine.begin_session(None, None, None, None).unwrap();
 
     let collector = Arc::new(Collector(Mutex::new(Vec::new())));
     session.set_listener(collector.clone());
@@ -487,4 +493,55 @@ async fn a_panicking_engine_turn_is_contained_as_an_error_event_not_a_process_ab
     );
     // The session survives cleanly — it can still be landed.
     session.close(1).await.unwrap();
+}
+
+/// Records the system prompt of every turn it runs.
+struct PromptCapture(Mutex<Vec<String>>);
+
+#[async_trait::async_trait]
+impl MystagogueEngine for PromptCapture {
+    async fn run_turn(
+        &self,
+        prompt: AcpPrompt,
+        _tools: &dyn ToolDispatch,
+        sink: &mut (dyn FnMut(AcpUpdate) + Send),
+    ) -> Result<(), EngineError> {
+        self.0.lock().unwrap().push(prompt.system.clone());
+        sink(AcpUpdate::text_delta("Hm."));
+        sink(AcpUpdate::TurnComplete);
+        Ok(())
+    }
+}
+
+/// The shell passes the device's UTC offset when it begins a session, so the
+/// prompt's `last_session_ago` line can name the learner's part of day; without
+/// it the line honestly reads "(not supplied)".
+#[tokio::test]
+async fn begin_session_plumbs_the_tz_offset_into_the_prompt() {
+    let store = Arc::new(Store::open_in_memory("dev").unwrap());
+    let cap = Arc::new(PromptCapture(Mutex::new(Vec::new())));
+    let engine = AthanorEngine::with_engine(Arc::clone(&store), cap.clone());
+
+    // A prior closed session, so there is a "last session" to be ago from.
+    let prior = engine.begin_session(None, None, None, None).unwrap();
+    prior.send_turn("an earlier thought".into()).await;
+    prior.close(5).await.unwrap();
+
+    let without = engine.begin_session(None, None, None, None).unwrap();
+    without.send_turn("hello".into()).await;
+    let with = engine.begin_session(None, None, None, Some(-420)).unwrap();
+    with.send_turn("hello again".into()).await;
+
+    let systems = cap.0.lock().unwrap().clone();
+    let line = |sys: &String| {
+        sys.lines()
+            .find(|l| l.starts_with("last_session_ago:"))
+            .unwrap_or("")
+            .to_string()
+    };
+    let plain = line(&systems[systems.len() - 2]);
+    let tz = line(&systems[systems.len() - 1]);
+    assert_eq!(plain, "last_session_ago: (not supplied)");
+    assert!(tz.contains("their time: "), "{tz}");
+    assert!(!tz.contains("(not supplied)"), "{tz}");
 }
