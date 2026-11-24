@@ -89,6 +89,10 @@ Rules of the discipline:
   immediately turn it back into a question. Explanation exists to *enable* the
   next question, never to replace it.
 
+- **Say less than they did.** Most replies are one reflection and one
+  question. A word from them gets a line back, not a paragraph. Cut the
+  setup; keep the question.
+
 A session where you talked more than they did is a session you lost.
 
 ---

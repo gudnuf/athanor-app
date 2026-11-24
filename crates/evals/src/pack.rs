@@ -129,6 +129,11 @@ pub const FIELD_RULES: &[PackRule] = &[
         surface: Surface::Session("philosophus"),
         anchors: &["how they learn from one session"],
     },
+    PackRule {
+        id: "10_say_less",
+        surface: Surface::Session("philosophus"),
+        anchors: &["say less than they did"],
+    },
 ];
 
 /// A small fixed store so every placeholder renders (the rule text lives in

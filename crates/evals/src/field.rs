@@ -877,6 +877,69 @@ pub fn grade_profile_from_silence(trace: &SessionTrace, condense_output: &str) -
     )
 }
 
+// ---- 10. say less than they did -----------------------------------------
+
+/// Spoken words in `text` (whitespace runs with at least one letter/digit).
+pub fn word_count(text: &str) -> usize {
+    text.split_whitespace()
+        .filter(|w| w.chars().any(char::is_alphanumeric))
+        .count()
+}
+
+/// Below this many learner words in a session, a ratio is noise (one terse
+/// learner makes any reply "too long"), so each reply is capped instead.
+pub const TALK_RATIO_MIN_LEARNER_WORDS: usize = 30;
+/// identity §2: "A session where you talked more than they did is a session
+/// you lost." Taken literally: Mystagogue words <= learner words.
+pub const TALK_RATIO_MAX: f64 = 1.0;
+/// Per-reply cap for a near-silent learner: one reflection and one question,
+/// about one spoken breath (~8–10 seconds aloud).
+pub const QUIET_REPLY_MAX_WORDS: usize = 25;
+
+/// Say less than they did (pack v1 rule 10). Over the session, Mystagogue
+/// words / learner words (empty turns excluded) must not exceed
+/// [`TALK_RATIO_MAX`]. When the learner said fewer than
+/// [`TALK_RATIO_MIN_LEARNER_WORDS`], each reply is capped at
+/// [`QUIET_REPLY_MAX_WORDS`] instead.
+///
+/// Gated judge question: did the Mystagogue talk more than the learner, or
+/// answer a short turn with a paragraph?
+pub fn grade_talk_ratio(trace: &SessionTrace) -> CheckResult {
+    let learner_words: usize = trace
+        .turns
+        .iter()
+        .filter_map(|t| match t {
+            Turn::LearnerText(s) if !is_empty_turn(s) => Some(word_count(s)),
+            _ => None,
+        })
+        .sum();
+    let all = replies(trace);
+    let mut violations = Vec::new();
+    if learner_words >= TALK_RATIO_MIN_LEARNER_WORDS {
+        let mine: usize = all.iter().map(|r| word_count(&r.text)).sum();
+        let ratio = mine as f64 / learner_words as f64;
+        if ratio > TALK_RATIO_MAX {
+            violations.push(format!(
+                "Mystagogue {mine} words vs learner {learner_words} (ratio {ratio:.2} > {TALK_RATIO_MAX})"
+            ));
+        }
+    } else {
+        for (n, r) in all.iter().enumerate() {
+            let w = word_count(&r.text);
+            if w > QUIET_REPLY_MAX_WORDS {
+                violations.push(format!(
+                    "reply {n}: {w} words to a near-silent learner (max {QUIET_REPLY_MAX_WORDS})"
+                ));
+            }
+        }
+    }
+    result(
+        "talk_ratio",
+        violations,
+        "said less than the learner (or kept each reply short for a quiet one)",
+    )
+}
+
 // ---- dispatch -----------------------------------------------------------
 
 /// A field grader a persona opts into (each needs at most one fixed
@@ -903,6 +966,8 @@ pub enum FieldCheck {
     BankVerbatim,
     /// v1 rule 8; the learner turns addressed to someone else.
     RoomSpeech(&'static [&'static str]),
+    /// v1 rule 10.
+    TalkRatio,
 }
 
 pub fn run_check(check: FieldCheck, trace: &SessionTrace) -> CheckResult {
@@ -917,6 +982,7 @@ pub fn run_check(check: FieldCheck, trace: &SessionTrace) -> CheckResult {
         FieldCheck::WeaveOnRhyme => grade_weave_on_rhyme(trace),
         FieldCheck::BankVerbatim => grade_bank_verbatim(trace),
         FieldCheck::RoomSpeech(room) => grade_room_speech(trace, room),
+        FieldCheck::TalkRatio => grade_talk_ratio(trace),
     }
 }
 
@@ -1402,5 +1468,50 @@ mod tests {
             "{}",
             r.detail
         );
+    }
+
+    // --- 10. talk ratio ----------------------------------------------------
+
+    #[test]
+    fn a_paragraph_to_a_short_turn_fails_the_quiet_cap() {
+        // Run-1 shape: 17 learner words, replies of 40+.
+        let bad = trace(&[
+            learner("actually, what about magnetism instead?"),
+            assistant("Magnetism it is. Start with a prediction. Picture a bar magnet with a north end and a south end. You snap it clean in half through the middle. What do you have in your two hands now? Commit to an answer and say why."),
+        ]);
+        let r = grade_talk_ratio(&bad);
+        assert!(!r.passed);
+        assert!(r.detail.contains("near-silent"), "{}", r.detail);
+
+        let ok = trace(&[
+            learner("actually, what about magnetism instead?"),
+            assistant("Magnetism, then. Snap a bar magnet in half — what's in your hands?"),
+        ]);
+        assert!(grade_talk_ratio(&ok).passed);
+    }
+
+    #[test]
+    fn out_talking_a_talking_learner_fails_the_ratio() {
+        // Run-1 shape: ratio ~1.4 on a 31-word learner turn.
+        let learner_turn = "honestly something else. I want a tide clock app where the phone buzzes when the water at my beach turns, not at a fixed time, just when it turns. save that.";
+        let bad = trace(&[
+            learner(learner_turn),
+            assistant("Kept, in your words: a tide clock where the phone buzzes when the water at your beach turns. Not at a fixed time, just when it turns. One snag. By turns, do you mean both high and low water, or just one of them?"),
+        ]);
+        let r = grade_talk_ratio(&bad);
+        assert!(!r.passed);
+        assert!(r.detail.contains("ratio"), "{}", r.detail);
+
+        let ok = trace(&[
+            learner(learner_turn),
+            assistant("Kept, in your words. By \"turns,\" do you mean high water, low, or both?"),
+        ]);
+        assert!(grade_talk_ratio(&ok).passed, "{:?}", grade_talk_ratio(&ok));
+    }
+
+    #[test]
+    fn empty_turns_do_not_count_as_learner_words() {
+        assert_eq!(word_count(". . ."), 0);
+        assert_eq!(word_count("A kite — slack."), 3);
     }
 }

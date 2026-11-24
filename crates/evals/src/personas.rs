@@ -56,7 +56,7 @@ pub fn eager_parroter() -> Persona {
         mask: "philosophus",
         mode: "explain",
         topic: None,
-        field: &[],
+        field: &[FieldCheck::TalkRatio],
         build: |thread_id| {
             let question = "what happens to disorder in an isolated system over time";
             vec![
@@ -102,7 +102,7 @@ pub fn stuck_one() -> Persona {
         mask: "solve",
         mode: "trace",
         topic: None,
-        field: &[],
+        field: &[FieldCheck::TalkRatio],
         build: |_thread_id| {
             vec![
                 Step::Engine(vec![
@@ -138,7 +138,7 @@ pub fn tangent_chaser() -> Persona {
         mask: "adamas",
         mode: "predict",
         topic: None,
-        field: &[],
+        field: &[FieldCheck::TalkRatio],
         build: |_thread_id| {
             vec![
                 Step::Engine(vec![
@@ -186,7 +186,7 @@ pub fn silent_one() -> Persona {
         mask: "philosophus",
         mode: "design",
         topic: None,
-        field: &[],
+        field: &[FieldCheck::TalkRatio],
         build: |_thread_id| {
             vec![
                 Step::Engine(vec![
@@ -222,7 +222,11 @@ pub fn dead_air() -> Persona {
         mask: "philosophus",
         mode: "explain",
         topic: Some(("why does the tide wait for the moon?", "tides")),
-        field: &[FieldCheck::EmptyTurns, FieldCheck::ElapsedTime(None)],
+        field: &[
+            FieldCheck::EmptyTurns,
+            FieldCheck::ElapsedTime(None),
+            FieldCheck::TalkRatio,
+        ],
         build: |_thread_id| {
             vec![
                 Step::Engine(vec![
@@ -258,6 +262,7 @@ pub fn leaver() -> Persona {
             FieldCheck::OneQuestion,
             FieldCheck::Landing,
             FieldCheck::ElapsedTime(None),
+            FieldCheck::TalkRatio,
         ],
         build: |_thread_id| {
             vec![
@@ -298,7 +303,11 @@ pub fn fork_picker() -> Persona {
         mask: "philosophus",
         mode: "explain",
         topic: Some(("why does the tide wait for the moon?", "tides")),
-        field: &[FieldCheck::Forks, FieldCheck::OneQuestion],
+        field: &[
+            FieldCheck::Forks,
+            FieldCheck::OneQuestion,
+            FieldCheck::TalkRatio,
+        ],
         build: |_thread_id| {
             vec![
                 Step::Engine(vec![
@@ -347,6 +356,7 @@ pub fn returner() -> Persona {
             FieldCheck::NoReask(RETURNER_STALLED),
             FieldCheck::ElapsedTime(None),
             FieldCheck::OneQuestion,
+            FieldCheck::TalkRatio,
         ],
         build: |_thread_id| {
             vec![
@@ -383,6 +393,7 @@ pub fn explainer() -> Persona {
             FieldCheck::OfferAfter(EXPLAINER_MECHANISM),
             FieldCheck::WeaveOnRhyme,
             FieldCheck::OneQuestion,
+            FieldCheck::TalkRatio,
         ],
         build: |_thread_id| {
             vec![
@@ -443,7 +454,11 @@ pub fn banker() -> Persona {
         mask: "philosophus",
         mode: "explain",
         topic: Some(("why does the tide wait for the moon?", "tides")),
-        field: &[FieldCheck::BankVerbatim, FieldCheck::OneQuestion],
+        field: &[
+            FieldCheck::BankVerbatim,
+            FieldCheck::OneQuestion,
+            FieldCheck::TalkRatio,
+        ],
         build: |_thread_id| {
             vec![
                 Step::Engine(vec![
@@ -480,7 +495,11 @@ pub fn room_noise() -> Persona {
         mask: "philosophus",
         mode: "explain",
         topic: Some(("why does the tide wait for the moon?", "tides")),
-        field: &[FieldCheck::RoomSpeech(ROOM_LINES), FieldCheck::OneQuestion],
+        field: &[
+            FieldCheck::RoomSpeech(ROOM_LINES),
+            FieldCheck::OneQuestion,
+            FieldCheck::TalkRatio,
+        ],
         build: |_thread_id| {
             vec![
                 Step::Engine(vec![

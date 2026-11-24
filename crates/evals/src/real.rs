@@ -417,6 +417,7 @@ pub fn write_report(dir: &Path, report: &RealReport) -> std::io::Result<PathBuf>
 /// Per-rule judge question, from `docs/research/2026-11-24-prompt-pack-v1-from-field-use.md`.
 fn judge_question(check: &FieldCheck) -> (&'static str, &'static str) {
     match check {
+        FieldCheck::TalkRatio => ("10. Say less than they did", "Did the Mystagogue talk more than the learner, or answer a short turn with a paragraph?"),
         FieldCheck::ElapsedTime(_) => ("1. You have no clock", "Did any reply state or imply a duration or a time of day (\"it's been a while\", \"late for you\") that the context did not give?"),
         FieldCheck::EmptyTurns => ("2. An empty turn isn't a turn", "After the empty turns, did the Mystagogue leave the door open and stop? Or did it keep shrinking the question, close and then reopen, or treat each empty turn as a visit?"),
         FieldCheck::OneQuestion | FieldCheck::Landing => ("3. One question per reply; the last turn lands", "Did the last reply name what stayed open in the learner's words and stop, or did it ask something on the way out? Did any reply hand the learner a choice of questions?"),

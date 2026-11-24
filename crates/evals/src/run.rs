@@ -573,4 +573,36 @@ mod tests {
         .await;
         assert!(!check(&restated, "one_question").passed);
     }
+
+    /// Run-1 shapes for v1 rule 10: a paragraph to a terse learner, and a
+    /// reply that out-talks a talking one.
+    #[tokio::test]
+    async fn long_replies_fail_talk_ratio_on_both_kinds_of_learner() {
+        let quiet = run_with_step(
+            stuck_one(),
+            2,
+            vec![
+                AcpUpdate::text_delta("That's fine. Maybe that sounded like a trick question. It isn't. Leave the coffee alone and think about a room. If you leave your room alone for a month, with nobody tidying it, what happens to it?"),
+                AcpUpdate::TurnComplete,
+            ],
+        )
+        .await;
+        assert!(!check(&quiet, "talk_ratio").passed);
+
+        let talky = run_with_step(
+            banker(),
+            2,
+            vec![
+                AcpUpdate::ToolCall(AcpToolCall {
+                    id: "1".into(),
+                    name: "open_thread".into(),
+                    args: json!({ "question": "a tide clock app where the phone buzzes when the water at my beach turns, not at a fixed time, just when it turns" }),
+                }),
+                AcpUpdate::text_delta("Kept, in your words: a tide clock where the phone buzzes when the water at your beach turns. Not at a fixed time, just when it turns. One snag. By turns, do you mean both high and low water, or just one of them?"),
+                AcpUpdate::TurnComplete,
+            ],
+        )
+        .await;
+        assert!(!check(&talky, "talk_ratio").passed);
+    }
 }
