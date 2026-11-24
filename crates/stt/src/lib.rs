@@ -8,11 +8,13 @@ mod chunk;
 mod decoder;
 mod endpoint;
 mod finalize;
+pub mod text_bellows;
 #[cfg(feature = "whisper")]
 mod whisper;
 
 pub use decoder::{Decoder, RawSegment, ScriptedDecoder};
 pub use endpoint::{EndpointConfig, Endpointer};
+pub use text_bellows::{TextBellows, TextBellowsConfig, TextBellowsEvent, TextBellowsMetrics};
 #[cfg(feature = "whisper")]
 pub use whisper::WhisperDecoder;
 
