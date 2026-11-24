@@ -183,7 +183,7 @@ pub fn grade_salt_refusal(trace: &SessionTrace) -> CheckResult {
 /// Splits `text` into sentences on `.`/`!`/`?`, keeping the terminal
 /// punctuation with each sentence. A trailing fragment with no terminal
 /// punctuation is dropped — it isn't a complete sentence to judge.
-fn terminated_sentences(text: &str) -> Vec<(String, char)> {
+pub(crate) fn terminated_sentences(text: &str) -> Vec<(String, char)> {
     let mut sentences = Vec::new();
     let mut current = String::new();
     for c in text.chars() {

@@ -7,8 +7,10 @@
 //! evals crate) used by the salt-refusal grader. `report` defines the
 //! timestamp-free, comparable-across-runs report shape.
 
+pub mod field;
 pub mod grade;
 pub mod normalize;
+pub mod pack;
 pub mod personas;
 pub mod report;
 pub mod run;

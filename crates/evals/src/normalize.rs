@@ -146,6 +146,17 @@ fn combine_number_words(tokens: Vec<String>) -> Vec<String> {
 /// `BTreeSet` for deterministic iteration order (matters only for debug
 /// output; scores are set ops).
 pub fn token_set(s: &str) -> BTreeSet<String> {
+    tokens(s)
+        .into_iter()
+        .filter(|w| !STOPWORDS.contains(&w.as_str()))
+        .collect()
+}
+
+/// The ordered token stream `token_set` is built from: lowercased, numbers
+/// canonicalized ("nine" → "9"), trailing plural stripped, stopwords KEPT.
+/// For graders that scan for short phrases in order ("4 day ago", "last
+/// time"), where a set would lose the sequence.
+pub fn tokens(s: &str) -> Vec<String> {
     let rewritten = rewrite_numeric_punctuation(&s.to_lowercase());
     let raw: Vec<String> = rewritten
         .split(|c: char| !c.is_alphanumeric())
@@ -153,9 +164,6 @@ pub fn token_set(s: &str) -> BTreeSet<String> {
         .map(strip_plural)
         .collect();
     combine_number_words(raw)
-        .into_iter()
-        .filter(|w| !STOPWORDS.contains(&w.as_str()))
-        .collect()
 }
 
 /// Strip a single trailing plural `s`: for word tokens, `joists`→`joist`, but
