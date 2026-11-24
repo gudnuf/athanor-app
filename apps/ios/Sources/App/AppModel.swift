@@ -16,30 +16,42 @@ final class AppModel {
         didSet { UserDefaults.standard.set(hasCompletedInitiation, forKey: Self.initiationKey) }
     }
 
-    /// Whisper model tier (Task F1) — base default, small opt-in. Read by
-    /// the real Bellows path (post-C3/D2) when opening `BellowsHandle`;
-    /// DemoEngine never looks at this.
-    var modelTier: ModelTier {
-        didSet { UserDefaults.standard.set(modelTier.rawValue, forKey: Self.modelTierKey) }
+    /// Which engine the Bellows uses. Apple on-device speech by default;
+    /// whisper (base/small) is selectable from the dev overlay. Persisted,
+    /// except when the QA launch arg `bellows-engine=<rawValue>` overrides it
+    /// for this process. DemoEngine never looks at this.
+    var bellowsEngine: BellowsEngine {
+        didSet {
+            guard !Self.engineOverridden else { return }
+            UserDefaults.standard.set(bellowsEngine.rawValue, forKey: Self.bellowsEngineKey)
+        }
     }
 
-    /// First-launch model provisioning (F1). Starts downloading immediately
-    /// at app launch (idempotent — a no-op if already verified on disk);
-    /// InitiationScreen's warming line and E4's real-Bellows gate both read
-    /// `modelDownloader.state`.
+    /// Whisper model provisioning (F1). Lazy: nothing downloads unless a
+    /// whisper engine is chosen (at launch or from the overlay). A first
+    /// launch on Apple needs no download. The overlay and the whisper
+    /// factory path read `modelDownloader.state`.
     let modelDownloader = ModelDownloader()
 
     private static let initiationKey = "athanor.hasCompletedInitiation"
-    private static let modelTierKey = "athanor.modelTier"
+    private static let bellowsEngineKey = "athanor.bellowsEngine"
+    private static let engineArgPrefix = "bellows-engine="
+    private static var engineOverridden: Bool {
+        ProcessInfo.processInfo.arguments.contains { $0.hasPrefix(engineArgPrefix) }
+    }
 
     init(engine: any AthanorEngineProtocol) {
         self.engine = engine
         self.hasCompletedInitiation = UserDefaults.standard.bool(forKey: Self.initiationKey)
-        let storedTier = UserDefaults.standard.string(forKey: Self.modelTierKey).flatMap(ModelTier.init(rawValue:))
-        self.modelTier = storedTier ?? .base
-        let tier = self.modelTier
-        Task { [modelDownloader] in
-            await modelDownloader.ensureModel(tier: tier)
+        let override = ProcessInfo.processInfo.arguments
+            .first { $0.hasPrefix(Self.engineArgPrefix) }
+            .flatMap { BellowsEngine(rawValue: String($0.dropFirst(Self.engineArgPrefix.count))) }
+        let stored = UserDefaults.standard.string(forKey: Self.bellowsEngineKey).flatMap(BellowsEngine.init(rawValue:))
+        self.bellowsEngine = override ?? stored ?? .apple
+        if let tier = self.bellowsEngine.whisperTier {
+            Task { [modelDownloader] in
+                await modelDownloader.ensureModel(tier: tier)
+            }
         }
     }
 }

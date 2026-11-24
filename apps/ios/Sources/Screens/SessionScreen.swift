@@ -70,8 +70,8 @@ struct SessionScreen: View {
     // the only way to surface numbers on a signed build with no cable.
     @State private var showDevOverlay = ProcessInfo.processInfo.arguments.contains("stt-overlay=1")
     @State private var sttMetrics: SttMetricsSnapshot?
-    /// True while a tier download+reopen is in flight (overlay disables the row).
-    @State private var switchingTier = false
+    /// True while an engine switch (incl. a lazy whisper download) is in flight (overlay disables the row).
+    @State private var switchingEngine = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -125,10 +125,10 @@ struct SessionScreen: View {
             if showDevOverlay {
                 SttOverlay(
                     metrics: sttMetrics,
-                    tier: model.modelTier,
-                    switching: switchingTier,
+                    engine: model.bellowsEngine,
+                    switching: switchingEngine,
                     downloadState: model.modelDownloader.state,
-                    onSwitchTier: { switchTier(to: $0) },
+                    onSwitchEngine: { switchEngine(to: $0) },
                     onClose: { showDevOverlay = false }
                 )
             }
@@ -499,32 +499,30 @@ struct SessionScreen: View {
     /// that's the one seam this screen needs; a no-key real build still
     /// gets real ears even while `sendTurn` reaches DemoEngine's fallback.
     private func beginRealBellows() async {
-        await openBellows(tier: model.modelTier)
+        await openBellows(engine: model.bellowsEngine)
     }
 
-    /// Dev overlay: switch the whisper model tier live. Reprovisions the chosen
-    /// tier (downloads if absent — `small.en` is ~182 MB) and reopens the
-    /// Bellows against it. No default change ships from here; this is the
-    /// operator's headroom lever, driven by the real RTF numbers the overlay
-    /// shows. The previous controller is stopped (which finishes its event
-    /// stream, unblocking the old `for await` in `openBellows`).
-    private func switchTier(to tier: ModelTier) {
-        guard tier != model.modelTier || realBellows == nil, !switchingTier else { return }
-        switchingTier = true
+    /// Dev overlay: switch the Bellows engine live (Apple / Whisper Base /
+    /// Whisper Small). A whisper engine lazily downloads its model (small.en
+    /// is ~182 MB) inside the factory, then the Bellows reopens against it.
+    /// The previous controller is stopped (which finishes its event stream,
+    /// unblocking the old `for await` in `openBellows`).
+    private func switchEngine(to engine: BellowsEngine) {
+        guard engine != model.bellowsEngine || realBellows == nil, !switchingEngine else { return }
+        switchingEngine = true
         realBellows?.stop()
         realBellows = nil
         amplitude = 0
-        model.modelTier = tier // persisted by AppModel; downloader targets it
+        model.bellowsEngine = engine // persisted by AppModel
         Task {
-            await model.modelDownloader.ensureModel(tier: tier)
-            await openBellows(tier: tier)
-            switchingTier = false
+            await openBellows(engine: engine)
+            switchingEngine = false
         }
     }
 
-    /// Opens (or reopens) the real Bellows against `tier` and consumes its
+    /// Opens (or reopens) the real Bellows for `engine` and consumes its
     /// event stream until the controller finishes (stop() / screen teardown).
-    private func openBellows(tier: ModelTier) async {
+    private func openBellows(engine: BellowsEngine) async {
         // The `debug-send-turn=1` QA hook is explicitly the AUDIO-FREE path (it
         // stands in for a learner turn where there's no mic/acoustic loopback),
         // so opening the mic here is contradictory — it only pops the system
@@ -532,22 +530,9 @@ struct SessionScreen: View {
         // Skip the Bellows on that path. Never affects a normal launch.
         guard Self.debugTurnText == nil else { return }
 
-        // The model may still be mid-download if the learner reaches a
-        // session unusually fast after first launch (normally Initiation
-        // covers this wait) — poll briefly rather than giving up on a single
-        // snapshot. Bounded so a session with no model yet (or none at all,
-        // e.g. demo build) still opens promptly.
-        var modelPath = model.modelDownloader.readyPath
-        var attempts = 0
-        while modelPath == nil, attempts < 40 {
-            try? await Task.sleep(nanoseconds: 250_000_000)
-            modelPath = model.modelDownloader.readyPath
-            attempts += 1
-        }
-        guard let modelPath else { return }
         let bias = BellowsBias.terms(engine: model.engine)
-        guard let controller = BellowsFactory.makeRealController(
-            modelPath: modelPath, tier: tier, biasTerms: bias
+        guard let controller = await BellowsFactory.make(
+            engine: engine, downloader: model.modelDownloader, biasTerms: bias
         ) else { return }
         realBellows = controller
         controller.start()
@@ -691,10 +676,10 @@ private struct RealFallbackInput: View {
 /// accuracy/speed trade — headroom lever, no default change ships from here.
 private struct SttOverlay: View {
     var metrics: SttMetricsSnapshot?
-    var tier: ModelTier
+    var engine: BellowsEngine
     var switching: Bool
     var downloadState: ModelDownloader.State
-    var onSwitchTier: (ModelTier) -> Void
+    var onSwitchEngine: (BellowsEngine) -> Void
     var onClose: () -> Void
 
     private var rtf: String {
@@ -717,11 +702,14 @@ private struct SttOverlay: View {
             }
 
             if let m = metrics {
+                row("engine", m.engine)
+                if m.engine != "apple" {
                 row("decode", "\(m.lastDecodeMs) ms")
                 row("window", String(format: "%.1f s", Double(m.lastWindowMs) / 1000))
                 row("rtf", rtf + (m.realtimeFactor > 0 && m.realtimeFactor < 1 ? " ⚡︎" : ""))
                 row("passes", "\(m.decodePasses)")
                 row("metal", m.gpuRequested ? "on (device)" : "off (sim/cpu)")
+                }
                 row("send latch", m.utteranceEndLatencyMs == 0 ? "— (no turn yet)" : "\(m.utteranceEndLatencyMs) ms")
             } else {
                 Text("no live decode yet")
@@ -732,20 +720,20 @@ private struct SttOverlay: View {
             Divider().overlay(Ember.C.hairline)
 
             HStack(spacing: 8) {
-                Text("tier")
+                Text("engine")
                     .font(.system(.caption2, design: .monospaced))
                     .foregroundStyle(Ember.C.mutedDim)
-                ForEach(ModelTier.allCases) { t in
+                ForEach(BellowsEngine.allCases) { t in
                     Button {
-                        onSwitchTier(t)
+                        onSwitchEngine(t)
                     } label: {
                         Text(t.displayName)
                             .font(Ember.F.sans(11, weight: .semibold))
-                            .foregroundStyle(t == tier ? Ember.C.heat : Ember.C.muted)
+                            .foregroundStyle(t == engine ? Ember.C.heat : Ember.C.muted)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 3)
                             .background(
-                                t == tier ? Ember.C.raised2 : Color.clear,
+                                t == engine ? Ember.C.raised2 : Color.clear,
                                 in: RoundedRectangle(cornerRadius: 7)
                             )
                     }

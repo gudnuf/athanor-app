@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(AthanorCoreFFI)
+import AthanorCoreFFI
+#endif
 
 // The Swift-side seam for real voice capture (plan Task E4 real half /
 // C3). Deliberately FFI-free in its OWN declarations (no AthanorCoreFFI
@@ -54,6 +57,14 @@ extension BellowsController {
 /// (true on device, false on the Simulator), and the last utterance-end latency
 /// (the felt "time to send").
 struct SttMetricsSnapshot: Equatable {
+    /// "apple" or "whisper-base" / "whisper-small".
+    var engine: String
+    /// Apple path: wall ms from utterance onset to the first non-empty partial.
+    var pickupMs: UInt64
+    /// Audio ms of the silence latch at the last turn end (0 for send-now).
+    var latchMs: UInt64
+    /// Apple path: closes forced by the final timeout.
+    var timeouts: UInt64
     var lastDecodeMs: UInt64
     var lastWindowMs: UInt64
     var realtimeFactor: Double
@@ -99,17 +110,27 @@ enum BellowsBias {
 
 /// The only seam SessionScreen needs: always declared (so it compiles in
 /// both projects), body gated on `AthanorCoreFFI` availability. Returns nil
-/// whenever the real path isn't available — no model yet, FFI not linked,
-/// or the handle failed to open (bad model file, etc).
+/// whenever the real path isn't available — FFI not linked (demo build), a
+/// whisper model that can't be provisioned, or a handle that failed to open.
 enum BellowsFactory {
     @MainActor
-    static func makeRealController(modelPath: String, tier: ModelTier, biasTerms: [String]) -> (any BellowsController)? {
+    static func make(engine: BellowsEngine, downloader: ModelDownloader, biasTerms: [String]) async -> (any BellowsController)? {
         #if canImport(AthanorCoreFFI)
-        do {
-            return try RealBellowsController(modelPath: modelPath, tier: tier, biasTerms: biasTerms)
-        } catch {
-            NSLog("[Athanor] BellowsHandle.open failed: \(error)")
-            return nil
+        switch engine.whisperTier {
+        case nil:
+            return nil   // Task 7 replaces this with AppleBellowsController(biasTerms:)
+        case let tier?:
+            await downloader.ensureModel(tier: tier)             // lazy: only when whisper is chosen
+            guard let path = downloader.readyPath else { return nil }
+            let latch = RealBellowsController.defaultSilenceLatchMs
+            let ffiTier: AthanorCoreFFI.BellowsTier = tier == .small ? .smallEn : .baseEn
+            do {
+                let handle = try await Task.detached(priority: .userInitiated) {
+                    try AthanorCoreFFI.BellowsHandle.open(modelPath: path, biasTerms: biasTerms,
+                                                          tier: ffiTier, silenceLatchMs: latch)
+                }.value                                          // model load OFF the main actor
+                return RealBellowsController(handle: handle, tier: tier)
+            } catch { NSLog("[Athanor] whisper open failed: \(error)"); return nil }
         }
         #else
         return nil

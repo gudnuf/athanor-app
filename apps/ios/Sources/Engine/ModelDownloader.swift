@@ -57,7 +57,7 @@ final class ModelDownloader: NSObject {
             return
         }
         if FileManager.default.fileExists(atPath: destination.path),
-           verify(fileAt: destination, tier: tier) {
+           await verifyOffMain(fileAt: destination, tier: tier) {
             state = .ready(path: destination.path)
             return
         }
@@ -133,7 +133,7 @@ final class ModelDownloader: NSObject {
             return
         }
         state = .verifying
-        if verify(fileAt: destination, tier: tier) {
+        if await verifyOffMain(fileAt: destination, tier: tier) {
             state = .ready(path: destination.path)
             if let resumeURL { try? FileManager.default.removeItem(at: resumeURL) }
         } else {
@@ -152,7 +152,20 @@ final class ModelDownloader: NSObject {
     // it; if it's ever unavailable (rate limit, host change, or the QA
     // fixture, which isn't LFS-tracked), verification falls back to a
     // size + magic-bytes sanity read rather than failing outright.
-    private func verify(fileAt url: URL, tier: ModelTier) -> Bool {
+    /// Reads the main-actor inputs, then runs the (possibly 182 MB SHA-256)
+    /// verification on a detached utility task so it never blocks the UI.
+    private func verifyOffMain(fileAt url: URL, tier: ModelTier) async -> Bool {
+        let approx = tier.approxByteCount
+        let expected = cachedSHA256[tier]
+        let fixture = usingFixture
+        return await Task.detached(priority: .utility) {
+            Self.verify(fileAt: url, approxBytes: approx, expectedSHA: expected, usingFixture: fixture)
+        }.value
+    }
+
+    nonisolated private static func verify(
+        fileAt url: URL, approxBytes: Int64, expectedSHA: String?, usingFixture: Bool
+    ) -> Bool {
         guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
               let size = attrs[.size] as? Int, size > 0 else { return false }
 
@@ -160,13 +173,13 @@ final class ModelDownloader: NSObject {
             return sanityCheckMagicBytes(url: url)
         }
 
-        if let expected = cachedSHA256[tier] {
+        if let expected = expectedSHA {
             return sha256(of: url) == expected
         }
         // No SHA available (offline HEAD, or host doesn't publish one) —
         // fall back to a coarse size band + magic-bytes sanity so a
         // truncated or HTML-error download can't pass as "ready".
-        let withinBand = abs(Int64(size) - tier.approxByteCount) < tier.approxByteCount / 4
+        let withinBand = abs(Int64(size) - approxBytes) < approxBytes / 4
         return withinBand && sanityCheckMagicBytes(url: url)
     }
 
@@ -174,7 +187,7 @@ final class ModelDownloader: NSObject {
     /// little-endian u32) or, for newer gguf-style exports, the ASCII bytes
     /// "GGUF" — reject anything that looks like an HTML error page or an
     /// empty/truncated file instead.
-    private func sanityCheckMagicBytes(url: URL) -> Bool {
+    nonisolated private static func sanityCheckMagicBytes(url: URL) -> Bool {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
         defer { try? handle.close() }
         guard let head = try? handle.read(upToCount: 4), head.count == 4 else { return false }
@@ -185,7 +198,7 @@ final class ModelDownloader: NSObject {
         return isGGML || isGGUF
     }
 
-    private func sha256(of url: URL) -> String? {
+    nonisolated private static func sha256(of url: URL) -> String? {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
         var hasher = SHA256()

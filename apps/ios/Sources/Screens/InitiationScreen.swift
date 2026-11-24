@@ -216,23 +216,15 @@ struct InitiationScreen: View {
         }
     }
 
-    /// Opens the Bellows against the model F1 already downloaded — mirrors
-    /// SessionScreen's `beginRealBellows()` exactly (same bounded wait, same
-    /// bias-term assembly, same event handling). Deliberately NOT gated on
-    /// `model.engine.isReal` for the same reason as SessionScreen: the
-    /// Bellows needs no Anthropic key, only the FFI build + a ready model.
+    /// Opens the Bellows for the chosen engine — mirrors SessionScreen's
+    /// `openBellows(engine:)` (same bias-term assembly, same event handling).
+    /// Deliberately NOT gated on `model.engine.isReal` for the same reason as
+    /// SessionScreen: the Bellows needs no Anthropic key. A whisper engine
+    /// lazily downloads inside the factory; Apple needs nothing.
     private func beginRealBellows() async {
-        var modelPath = model.modelDownloader.readyPath
-        var attempts = 0
-        while modelPath == nil, attempts < 40 {
-            try? await Task.sleep(nanoseconds: 250_000_000)
-            modelPath = model.modelDownloader.readyPath
-            attempts += 1
-        }
-        guard let modelPath else { return }
         let bias = BellowsBias.terms(engine: model.engine)
-        guard let controller = BellowsFactory.makeRealController(
-            modelPath: modelPath, tier: model.modelTier, biasTerms: bias
+        guard let controller = await BellowsFactory.make(
+            engine: model.bellowsEngine, downloader: model.modelDownloader, biasTerms: bias
         ) else { return }
         realBellows = controller
         controller.start()

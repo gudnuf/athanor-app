@@ -34,6 +34,7 @@ final class RealBellowsController: BellowsController {
     // corrupted transcript) — deliberately `nonisolated(unsafe)` rather than
     // adding lock overhead to the realtime path for a single flag.
     nonisolated private let handle: AthanorCoreFFI.BellowsHandle
+    nonisolated let tier: ModelTier
     private let engine = AVAudioEngine()
     private var converter: AVAudioConverter?
     private var pollTask: Task<Void, Never>?
@@ -65,14 +66,11 @@ final class RealBellowsController: BellowsController {
     // runs CPU whisper end-to-end — real AVAudioEngine capture, real decode,
     // real finalized segments, and a real turn reaching the live Anthropic
     // engine, all exercised together with no crash (E4 sim-unblock report).
-    init(modelPath: String, tier: ModelTier, biasTerms: [String]) throws {
-        let ffiTier: AthanorCoreFFI.BellowsTier = tier == .small ? .smallEn : .baseEn
-        self.handle = try AthanorCoreFFI.BellowsHandle.open(
-            modelPath: modelPath,
-            biasTerms: biasTerms,
-            tier: ffiTier,
-            silenceLatchMs: Self.defaultSilenceLatchMs
-        )
+    init(handle: AthanorCoreFFI.BellowsHandle, tier: ModelTier) {
+        // The (slow) `BellowsHandle.open` happens in `BellowsFactory.make`,
+        // off the main actor; this init only wraps the opened handle.
+        self.handle = handle
+        self.tier = tier
         (self.events, self.continuation) = AsyncStream<BellowsEvent>.makeStream()
         Self.log.info("Bellows opened: tier=\(tier.rawValue, privacy: .public) latchMs=\(Self.defaultSilenceLatchMs)")
     }
@@ -81,6 +79,10 @@ final class RealBellowsController: BellowsController {
     nonisolated func currentMetrics() -> SttMetricsSnapshot? {
         let m = handle.metrics()
         return SttMetricsSnapshot(
+            engine: "whisper-\(tier.rawValue)",
+            pickupMs: 0,
+            latchMs: m.utteranceEndLatencyMs,
+            timeouts: 0,
             lastDecodeMs: m.lastDecodeMs,
             lastWindowMs: m.lastWindowMs,
             realtimeFactor: m.realtimeFactor,
