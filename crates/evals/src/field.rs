@@ -809,6 +809,68 @@ pub fn grade_room_speech(trace: &SessionTrace, room: &[&str]) -> CheckResult {
     )
 }
 
+// ---- 9. no learning style from silence ----------------------------------
+
+/// Words that make a `how_i_learn` claim out of quiet, brevity or absence.
+const SILENCE_CLAIMS: &[&str] = &[
+    "silence",
+    "silent",
+    "quiet",
+    "pause",
+    "terse",
+    "short repl",
+    "short answer",
+    "near-empty",
+    "few words",
+    "one-word",
+    "gap",
+    "goes dark",
+    "went dark",
+];
+
+/// The close-pass profile refine never infers learning style from silence,
+/// short turns or gaps (pack v1 rule 9). `condense_output` is the close
+/// pass's raw text, parsed by the real `parse_condensation`. Violations:
+/// - any `how_i_learn` addition when the session gave nothing to learn from
+///   (every learner turn empty or at most three tokens);
+/// - any `how_i_learn` addition whose claim rests on silence, brevity or
+///   gaps, whatever the session held.
+///
+/// Gated judge question: does each `how_i_learn` line rest on something the
+/// learner said or did with words, seen more than once, or on one session's
+/// quiet?
+pub fn grade_profile_from_silence(trace: &SessionTrace, condense_output: &str) -> CheckResult {
+    let parsed = athanor_core::prompt::parse_condensation(condense_output);
+    let thin = trace
+        .turns
+        .iter()
+        .filter_map(|t| match t {
+            Turn::LearnerText(s) => Some(s),
+            _ => None,
+        })
+        .all(|s| is_empty_turn(s) || tokens(s).len() <= 3);
+    let mut violations = Vec::new();
+    for (section, text) in &parsed.profile_updates {
+        if section != "how_i_learn" {
+            continue;
+        }
+        if thin {
+            violations.push(format!(
+                "how_i_learn written from a session with no substantive learner turn: \"{text}\""
+            ));
+        }
+        let lower = text.to_lowercase();
+        if let Some(w) = SILENCE_CLAIMS.iter().find(|w| lower.contains(*w)) {
+            violations.push(format!("how_i_learn claim rests on \"{w}\": \"{text}\""));
+        }
+    }
+    result(
+        "profile_from_silence",
+        violations,
+        "no how_i_learn claim built on silence, short turns or gaps",
+    )
+}
+
 // ---- dispatch -----------------------------------------------------------
 
 /// A field grader a persona opts into (each needs at most one fixed
@@ -1256,5 +1318,48 @@ mod tests {
             "{:?}",
             grade_room_speech(&ok, ROOM)
         );
+    }
+
+    // --- 9. no learning style from silence -------------------------------
+
+    fn silent_session() -> SessionTrace {
+        trace(&[
+            assistant("What's alive in it?"),
+            learner("."),
+            assistant("Anything there, even one word?"),
+            learner(". . ."),
+            assistant("Nothing has to come. The door stays open."),
+            learner("ok"),
+        ])
+    }
+
+    #[test]
+    fn a_silent_session_must_not_refine_how_i_learn() {
+        let bad = "NOTE: Opened on the tide question; nothing came back.\n\
+                   PROFILE how_i_learn: Long silences are the norm; small concrete questions work better than open ones.";
+        let r = grade_profile_from_silence(&silent_session(), bad);
+        assert!(!r.passed);
+        assert!(
+            r.detail.contains("no substantive learner turn"),
+            "{}",
+            r.detail
+        );
+        assert!(r.detail.contains("silence"), "{}", r.detail);
+
+        let ok = "NOTE: Opened on the tide question; the mic sent empty turns and nothing condensed. The question stays open.";
+        assert!(grade_profile_from_silence(&silent_session(), ok).passed);
+    }
+
+    #[test]
+    fn a_silence_claim_fails_even_in_a_full_session() {
+        let full = trace(&[
+            assistant("What's alive in it?"),
+            learner("the moon pulls a sheet and the water slides toward the corner it lifts"),
+        ]);
+        let bad = "NOTE: Built the sheet picture.\nPROFILE how_i_learn: Goes quiet when pressed, then answers in short replies.";
+        assert!(!grade_profile_from_silence(&full, bad).passed);
+
+        let ok = "NOTE: Built the sheet picture.\nPROFILE how_i_learn: Reaches for a physical picture before a definition.";
+        assert!(grade_profile_from_silence(&full, ok).passed);
     }
 }

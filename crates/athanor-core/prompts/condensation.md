@@ -26,7 +26,7 @@ conversationally and call the tool.
 | `evaporate_thread(id)` | A thread has gone stale or been superseded; let it go. Not everything resolves. |
 | `kindle_passage(term)` | The learner's practice just made a Tabula passage true (first salt → SALT; first stuck-then-freed → NIGREDO/SOLVE; first cross-domain link → CITRINITAS/AZOTH). |
 | `weave_domains(a, b)` | The learner sees two domains as secretly one — record the correspondence. |
-| `update_memory(...)` | Maintain profile sections: domains, pulls (sulfur), recurring frictions, working history. At the landing, not mid-session — and never on the strength of silence. |
+| `update_memory(...)` | Maintain profile sections: domains, pulls (sulfur), recurring frictions, working history. At the landing, not mid-session — and never on the strength of silence, or a claim about how they learn from one session. |
 | `recall(query)` | The learner asks "what was I saying about…", "remind me…", or refers to something earlier you don't have in front of you. Search past transcripts for their own words, then quote them back and push from there. Their rambles were kept for exactly this. |
 
 **When they ask you to keep something** — "save that," "bank it," "hold onto

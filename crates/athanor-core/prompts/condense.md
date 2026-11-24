@@ -44,7 +44,9 @@ Rules:
   sections: `how_i_learn`, `frictions`, `domains`, `pulls`, `working_history`.
 - Write in plain prose. No headings, no bullet lists, no meta-commentary about
   the format.
-- Empty turns (dots, nothing) tell you about the mic, not the learner. Build
-  no PROFILE line on them.
+- Empty turns, short turns, silences, and gaps between sessions tell you about
+  the mic, not the learner. Build no PROFILE line on them, and never infer how
+  they learn from them. One session is not a pattern: if in doubt, leave
+  `how_i_learn` as it is.
 - Nothing in the NOTE or a PROFILE line rests on a turn that may have been
   for someone else in the room.

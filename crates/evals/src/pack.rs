@@ -110,6 +110,20 @@ pub const FIELD_RULES: &[PackRule] = &[
         surface: Surface::Condense,
         anchors: &["for someone else in the room"],
     },
+    PackRule {
+        id: "9_no_style_from_silence_close",
+        surface: Surface::Condense,
+        anchors: &[
+            "never infer how they learn from them",
+            "one session is not a pattern",
+            "leave `how_i_learn` as it is",
+        ],
+    },
+    PackRule {
+        id: "9_no_style_from_silence_session",
+        surface: Surface::Session("philosophus"),
+        anchors: &["how they learn from one session"],
+    },
 ];
 
 /// A small fixed store so every placeholder renders (the rule text lives in
