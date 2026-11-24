@@ -195,11 +195,13 @@ pub fn grade_elapsed_time(trace: &SessionTrace, known: Option<&str>) -> CheckRes
 
 // ---- 2. empty turns ------------------------------------------------------
 
-/// An empty voice turn: nothing but dots, ellipses and whitespace. The speech
-/// path can send one when it heard nothing; it is not the learner speaking.
+/// An empty voice turn: no letter or digit at all (dots, ellipses, a lone
+/// "?", whitespace). The speech path can send one when it heard nothing; it
+/// is not the learner speaking.
 pub fn is_empty_turn(text: &str) -> bool {
-    text.chars()
-        .all(|c| c == '.' || c == '\u{2026}' || c.is_whitespace())
+    // Mirrors athanor_core's Conductor::is_contentful_turn exactly: a turn
+    // with no letter or digit is not speech.
+    !text.chars().any(char::is_alphanumeric)
 }
 
 /// Phrases that treat an empty turn as a new arrival.
@@ -1143,6 +1145,11 @@ mod tests {
         assert!(is_empty_turn(". . ."));
         assert!(is_empty_turn("  \u{2026} "));
         assert!(!is_empty_turn("no."));
+        // Same line as core's Conductor::is_contentful_turn: any letter or
+        // digit is speech; punctuation alone is not.
+        assert!(is_empty_turn("?"));
+        assert!(is_empty_turn(" — ! "));
+        assert!(!is_empty_turn("1"));
     }
 
     #[test]
