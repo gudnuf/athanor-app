@@ -482,6 +482,21 @@ impl Conductor {
         for (section, addition) in parsed.profile_updates {
             self.store.merge_profile_section(&section, &addition)?;
         }
+        // Threads the model says this session worked: link them (close marks
+        // them worked). An unknown or ambiguous handle is ignored, never a guess.
+        for handle in &parsed.worked {
+            if let Ok(Some(t)) = self.store.thread_by_handle(handle) {
+                self.store
+                    .link_session_thread(&self.session_id, &t.id, "worked")?;
+            }
+        }
+        // A domain only ever fills a thread that has none.
+        for (handle, name) in &parsed.domains {
+            if let Ok(Some(t)) = self.store.thread_by_handle(handle) {
+                let d = self.store.upsert_domain(name)?;
+                self.store.set_thread_domain_if_null(&t.id, &d.id)?;
+            }
+        }
         Ok(())
     }
 
@@ -1565,5 +1580,48 @@ mod tests {
             }
         }
         c.condense(&Boom).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn condense_worked_line_links_thread_before_close_marks_it_worked() {
+        let (store, t) = clock_store(1_800_000_000);
+        let thread = store
+            .open_thread("why does the saw wander?", None, None)
+            .unwrap();
+        let handle = crate::ids::handle_of(&thread.id);
+        let mut c = Conductor::begin(Arc::clone(&store), "philosophus", "explain", None).unwrap();
+        let sid = c.session_id().to_string();
+        t.store(1_800_000_120, Ordering::SeqCst);
+        c.run_turn(
+            &say("Say more."),
+            Some("the saw wanders along the grain"),
+            &mut |_| {},
+        )
+        .await
+        .unwrap();
+        let engine = MockEngine::new(vec![
+            AcpUpdate::text_delta(format!(
+                "NOTE: Worked the wandering saw.\nWORKED: {handle}\nWORKED: #ffffff\nDOMAIN {handle}: woodworking"
+            )),
+            AcpUpdate::TurnComplete,
+        ]);
+        c.condense(&engine).await.unwrap();
+        // Linked as `worked`; the unknown handle was ignored; domain filled in.
+        assert_eq!(
+            store.session_links(&sid).unwrap(),
+            vec![(thread.id.clone(), "worked".to_string())]
+        );
+        assert_eq!(
+            store.get_thread(&thread.id).unwrap().last_worked,
+            None,
+            "not yet"
+        );
+        t.store(1_800_000_180, Ordering::SeqCst);
+        c.close(0).unwrap();
+        let after = store.get_thread(&thread.id).unwrap();
+        assert_eq!(after.last_worked, Some(1_800_000_180));
+        let dom = store.upsert_domain("woodworking").unwrap();
+        assert_eq!(after.domain_id, Some(dom.id));
+        assert_eq!(store.get_session(&sid).unwrap().thread_id, Some(thread.id));
     }
 }

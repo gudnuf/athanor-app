@@ -21,12 +21,14 @@ than inflating it. Never invent a realization the learner did not reach.
 
 ## Output — plain lines, no markdown, exactly these labels
 
-Emit a `NOTE:` line, then any `PROFILE <section>:` lines that are genuinely
-warranted. Nothing else.
+Emit a `NOTE:` line, then any `WORKED:` and `DOMAIN` lines and any
+`PROFILE <section>:` lines that are genuinely warranted. Nothing else.
 
 ```
 NOTE: two to four sentences — what moved, what opened, and what the learner kept
 circling back to. Concrete. Their thread, in your words.
+WORKED: #a3f9c2
+DOMAIN #a3f9c2: (the learner's own word for the field)
 PROFILE how_i_learn: (only if you learned something new about HOW this learner
 thinks or works — a refinement, not a repeat of what's already known)
 PROFILE frictions: (only if a real recurring friction surfaced this session)
@@ -35,6 +37,11 @@ PROFILE frictions: (only if a real recurring friction surfaced this session)
 Rules:
 
 - The `NOTE:` line is required; keep it to a short paragraph.
+- `WORKED: #handle` names a thread from `ripe_mercury` that this session really
+  worked on, one handle per line, copied exactly. Zero lines is fine; never
+  guess a handle.
+- `DOMAIN #handle: name` only for a thread that shows `no domain`, and only in
+  the learner's own word for the field. Otherwise omit it.
 - If a question met silence or a sidestep twice, say which one in the NOTE and
   call it stalled, so the next opening steps around it.
 - A `pulls` line quotes them. If you can't quote what pulls them, leave

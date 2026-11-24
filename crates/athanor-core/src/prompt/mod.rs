@@ -505,6 +505,20 @@ pub fn assemble_condensation(store: &Store, thread_id: Option<&str>) -> String {
 pub struct Condensation {
     pub note: Option<String>,
     pub profile_updates: Vec<(String, String)>,
+    /// `#handle`s from `WORKED:` lines — threads the session worked. Only
+    /// well-formed handles (`#` + six lowercase hex) are kept.
+    pub worked: Vec<String>,
+    /// `(#handle, name)` from `DOMAIN #handle: name` lines.
+    pub domains: Vec<(String, String)>,
+}
+
+/// `#` + exactly six lowercase hex digits, else `None`.
+fn well_formed_handle(tok: &str) -> Option<String> {
+    let h = tok.strip_prefix('#')?;
+    (h.len() == 6
+        && h.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
+    .then(|| tok.to_string())
 }
 
 /// The profile sections a condensation is allowed to refine (the ones the
@@ -548,7 +562,35 @@ pub fn parse_condensation(text: &str) -> Condensation {
         }
     };
 
+    let mut worked: Vec<String> = Vec::new();
+    let mut domains: Vec<(String, String)> = Vec::new();
+
     for line in text.lines() {
+        // `WORKED: #handle[, #handle…]` and `DOMAIN #handle: name` end whatever
+        // block was open (they are labels, not note continuation).
+        if let Some(rest) = strip_label(line, "worked:") {
+            target = Target::None;
+            for tok in rest.split(|c: char| c.is_whitespace() || c == ',') {
+                if let Some(h) = well_formed_handle(tok) {
+                    if !worked.contains(&h) {
+                        worked.push(h);
+                    }
+                }
+            }
+            continue;
+        }
+        if let Some(rest) = strip_label(line, "domain ") {
+            if let Some((h, name)) = rest.split_once(':') {
+                target = Target::None;
+                if let Some(h) = well_formed_handle(h.trim()) {
+                    let name = name.trim();
+                    if !name.is_empty() {
+                        domains.push((h, name.to_string()));
+                    }
+                }
+                continue;
+            }
+        }
         if let Some(rest) = strip_label(line, "note:") {
             saw_note_label = true;
             target = Target::Note;
@@ -629,6 +671,8 @@ pub fn parse_condensation(text: &str) -> Condensation {
     Condensation {
         note,
         profile_updates,
+        worked,
+        domains,
     }
 }
 
@@ -938,5 +982,32 @@ mod tests {
             )),
             "{p}"
         );
+    }
+
+    #[test]
+    fn parse_condensation_reads_worked_and_domain_lines() {
+        let c = parse_condensation(
+            "NOTE: Circled the grain question.\nstill the note\nWORKED: #a3f9c2\nWORKED: #0b1c2d, #ffffff\nDOMAIN #a3f9c2: woodworking\nPROFILE frictions: loses the thread when rushed",
+        );
+        assert_eq!(
+            c.note.as_deref(),
+            Some("Circled the grain question.\nstill the note")
+        );
+        assert_eq!(c.worked, vec!["#a3f9c2", "#0b1c2d", "#ffffff"]);
+        assert_eq!(
+            c.domains,
+            vec![("#a3f9c2".to_string(), "woodworking".to_string())]
+        );
+        assert_eq!(c.profile_updates.len(), 1);
+    }
+
+    #[test]
+    fn parse_condensation_ignores_malformed_handles() {
+        let c = parse_condensation(
+            "NOTE: n\nWORKED: #abc\nWORKED: a3f9c2\nWORKED: #A3F9C2\nWORKED: #a3f9c2zz\nWORKED: #g3f9c2\nDOMAIN #xyz: nope\nDOMAIN #a3f9c2:\nDOMAIN a3f9c2: bare",
+        );
+        assert!(c.worked.is_empty(), "{:?}", c.worked);
+        assert!(c.domains.is_empty(), "{:?}", c.domains);
+        assert_eq!(c.note.as_deref(), Some("n"));
     }
 }
