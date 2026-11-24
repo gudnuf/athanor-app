@@ -201,8 +201,8 @@ pub fn gated_llm_judge_enabled() -> bool {
 mod tests {
     use super::*;
     use crate::personas::{
-        all_personas, dead_air, eager_parroter, fork_picker, leaver, returner, silent_one,
-        stuck_one, tangent_chaser,
+        all_personas, dead_air, eager_parroter, explainer, fork_picker, leaver, returner,
+        silent_one, stuck_one, tangent_chaser,
     };
     use athanor_core::engine::AcpToolCall;
     use serde_json::json;
@@ -498,5 +498,24 @@ mod tests {
         )
         .await;
         assert!(!check(&reask, "no_reask").passed);
+    }
+
+    #[tokio::test]
+    async fn explainer_gets_an_offer_and_a_weave_and_the_v0_unrecorded_rhyme_fails() {
+        let report = run_persona(&explainer()).await;
+        assert!(check(&report, "offer_after_mechanism").passed);
+        assert!(check(&report, "weave_on_rhyme").passed);
+        assert!(check(&report, "spiral").passed);
+        assert!(report.passed, "{report:?}");
+
+        // v0 shape: the rhyme is said aloud, the learner takes it up, and
+        // nothing records it.
+        let unwoven = run_with_step(
+            explainer(),
+            6,
+            vec![AcpUpdate::text_delta("Good."), AcpUpdate::TurnComplete],
+        )
+        .await;
+        assert!(!check(&unwoven, "weave_on_rhyme").passed);
     }
 }

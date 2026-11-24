@@ -298,11 +298,57 @@
         }
       ],
       "passed": true
+    },
+    {
+      "id": "explainer",
+      "checks": [
+        {
+          "name": "spiral",
+          "passed": true,
+          "detail": "every fix_salt is followed by open_thread before the next fix_salt (or trace end)"
+        },
+        {
+          "name": "salt_refusal",
+          "passed": true,
+          "detail": "no fix_salt committed off a parroted (dice >= 0.7) learner echo"
+        },
+        {
+          "name": "mask_fidelity",
+          "passed": true,
+          "detail": "not a philosophus-mask trace; this proxy is scoped to philosophus only"
+        },
+        {
+          "name": "mask_selected",
+          "passed": true,
+          "detail": "session opened under the intended mask (adamas)"
+        },
+        {
+          "name": "session_lands",
+          "passed": true,
+          "detail": "session closed cleanly"
+        },
+        {
+          "name": "offer_after_mechanism",
+          "passed": true,
+          "detail": "own-words mechanism met with an offer within two replies"
+        },
+        {
+          "name": "weave_on_rhyme",
+          "passed": true,
+          "detail": "every spoken rhyme is recorded with weave_domains"
+        },
+        {
+          "name": "one_question",
+          "passed": true,
+          "detail": "no reply asks more than one question"
+        }
+      ],
+      "passed": true
     }
   ],
   "aggregate": {
-    "scenarios": 8,
-    "passed": 7,
+    "scenarios": 9,
+    "passed": 8,
     "failed": 1
   }
 }

@@ -528,6 +528,105 @@ pub fn grade_no_reask(trace: &SessionTrace, stalled: &[&str]) -> CheckResult {
     )
 }
 
+// ---- 6. offer on a mechanism; record a spoken rhyme ----------------------
+
+/// Phrases that invite the learner to say the grain (condensation §2).
+const OFFER_PHRASES: &[&str] = &[
+    "say it",
+    "say that",
+    "in your own words",
+    "your own words",
+    "now know",
+    "something just set",
+    "want to keep",
+];
+
+/// Phrases that claim a cross-domain rhyme. Deliberately narrow:
+/// "you keep coming back to that word" is a within-session reflection, not
+/// a rhyme, and is not listed.
+const RHYME_PHRASES: &[&str] = &[
+    "keep reaching for",
+    "rhymes with",
+    "same shape as",
+    "same shape you",
+    "the same move you made",
+];
+
+/// Offer condensation when the learner explains a mechanism in their own
+/// words (pack v1 rule 6, first half). `mechanism` is the learner turn the
+/// scenario knows is one (by construction); within the next two replies the
+/// Mystagogue must offer (an invitation phrase) or fix salt.
+///
+/// Gated judge question: when the learner explained how something works in
+/// their own words, even inside a tangent, did the Mystagogue notice and
+/// offer condensation, or steer back to its own thread?
+pub fn grade_offer_after(trace: &SessionTrace, mechanism: &str) -> CheckResult {
+    let all = replies(trace);
+    let Some(li) = trace
+        .turns
+        .iter()
+        .position(|t| matches!(t, Turn::LearnerText(s) if s == mechanism))
+    else {
+        return result(
+            "offer_after_mechanism",
+            vec!["scenario's mechanism turn not found in trace".into()],
+            "",
+        );
+    };
+    let window: Vec<&Reply> = all
+        .iter()
+        .filter(|r| r.after_learner.is_some_and(|i| i >= li))
+        .take(2)
+        .collect();
+    let offered = window.iter().any(|r| {
+        let l = r.text.to_lowercase();
+        OFFER_PHRASES.iter().any(|p| l.contains(p)) || r.tools.iter().any(|(n, _)| n == "fix_salt")
+    });
+    result(
+        "offer_after_mechanism",
+        if offered {
+            vec![]
+        } else {
+            vec![format!(
+                "no offer within two replies of the learner's own-words mechanism at turn {li}"
+            )]
+        },
+        "own-words mechanism met with an offer within two replies",
+    )
+}
+
+/// Record a spoken rhyme (pack v1 rule 6, second half): a reply that claims
+/// a cross-domain rhyme must be followed by `weave_domains` in that reply or
+/// the next (once the learner takes it up).
+///
+/// Gated judge question: did the Mystagogue name a link between two of the
+/// learner's domains without recording it, or record one the learner never
+/// took up?
+pub fn grade_weave_on_rhyme(trace: &SessionTrace) -> CheckResult {
+    let all = replies(trace);
+    let mut violations = Vec::new();
+    for (n, r) in all.iter().enumerate() {
+        let l = r.text.to_lowercase();
+        let Some(p) = RHYME_PHRASES.iter().find(|p| l.contains(*p)) else {
+            continue;
+        };
+        let woven = all[n..]
+            .iter()
+            .take(2)
+            .any(|r| r.tools.iter().any(|(name, _)| name == "weave_domains"));
+        if !woven {
+            violations.push(format!(
+                "reply {n}: names a rhyme (\"{p}\") but no weave_domains follows"
+            ));
+        }
+    }
+    result(
+        "weave_on_rhyme",
+        violations,
+        "every spoken rhyme is recorded with weave_domains",
+    )
+}
+
 // ---- dispatch -----------------------------------------------------------
 
 /// A field grader a persona opts into (each needs at most one fixed
@@ -546,6 +645,10 @@ pub enum FieldCheck {
     Forks,
     /// v1 rule 5; the questions the prior note marked stalled.
     NoReask(&'static [&'static str]),
+    /// v1 rule 6; the learner turn that explains a mechanism.
+    OfferAfter(&'static str),
+    /// v1 rule 6.
+    WeaveOnRhyme,
 }
 
 pub fn run_check(check: FieldCheck, trace: &SessionTrace) -> CheckResult {
@@ -556,6 +659,8 @@ pub fn run_check(check: FieldCheck, trace: &SessionTrace) -> CheckResult {
         FieldCheck::Landing => grade_landing(trace),
         FieldCheck::Forks => grade_forks(trace),
         FieldCheck::NoReask(stalled) => grade_no_reask(trace, stalled),
+        FieldCheck::OfferAfter(mechanism) => grade_offer_after(trace, mechanism),
+        FieldCheck::WeaveOnRhyme => grade_weave_on_rhyme(trace),
     }
 }
 
@@ -818,5 +923,56 @@ mod tests {
         let r = grade_no_reask(&bad, &[]);
         assert!(!r.passed);
         assert!(r.detail.contains("third time"), "{}", r.detail);
+    }
+
+    // --- 6. offer; weave ---------------------------------------------------
+
+    const MECH: &str = "it rises hours later because the yeast has to eat through the flour first";
+
+    #[test]
+    fn steering_past_a_mechanism_fails_and_an_offer_passes() {
+        let bad = trace(&[
+            assistant("Why does the tide wait?"),
+            learner(MECH),
+            assistant("Interesting. Back to the tide: why does it wait?"),
+            learner("no idea"),
+            assistant("Think about the moon."),
+        ]);
+        assert!(!grade_offer_after(&bad, MECH).passed);
+
+        let ok = trace(&[
+            assistant("Why does the tide wait?"),
+            learner(MECH),
+            assistant("The feeding and the rise aren't the same moment. Say that as the thing you now know."),
+        ]);
+        assert!(grade_offer_after(&ok, MECH).passed);
+    }
+
+    #[test]
+    fn a_spoken_rhyme_needs_a_weave() {
+        let bad = trace(&[
+            assistant("You keep reaching for delay — the tide, the starter. One thing?"),
+            learner("yeah, same thing"),
+            assistant("Good."),
+        ]);
+        assert!(!grade_weave_on_rhyme(&bad).passed);
+
+        let ok = trace(&[
+            assistant("You keep reaching for delay — the tide, the starter. One thing?"),
+            learner("yeah, same thing"),
+            tool(
+                "weave_domains",
+                r#"{"a":"tides","b":"baking","note":"delay is the point"}"#,
+            ),
+        ]);
+        assert!(grade_weave_on_rhyme(&ok).passed);
+
+        let reflection = trace(&[assistant(
+            "You keep coming back to that word. What is it doing?",
+        )]);
+        assert!(
+            grade_weave_on_rhyme(&reflection).passed,
+            "not a rhyme claim"
+        );
     }
 }

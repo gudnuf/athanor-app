@@ -345,6 +345,70 @@ pub fn returner() -> Persona {
     }
 }
 
+/// The explainer's own-words mechanism, offered inside a tangent.
+pub const EXPLAINER_MECHANISM: &str = "ok sidetrack, but it's like my sourdough starter. it doesn't rise when I feed it, it rises hours later, because the yeast has to eat through the flour first and only then does the gas build. the feeding and the rise aren't the same moment";
+
+/// The explainer: wanders into a tangent and, inside it, explains a
+/// mechanism in their own words. v1 rule 6: offer condensation on it, and
+/// when a rhyme across domains is named and taken up, weave it.
+pub fn explainer() -> Persona {
+    Persona {
+        name: "explainer",
+        mask: "adamas",
+        mode: "explain",
+        field: &[
+            FieldCheck::OfferAfter(EXPLAINER_MECHANISM),
+            FieldCheck::WeaveOnRhyme,
+            FieldCheck::OneQuestion,
+        ],
+        build: |_thread_id| {
+            vec![
+                Step::Engine(vec![
+                    AcpUpdate::text_delta("Last time you said the tide waits for the moon. Show me why it waits."),
+                    AcpUpdate::TurnComplete,
+                ]),
+                Step::Learner(EXPLAINER_MECHANISM.into()),
+                Step::Engine(vec![
+                    AcpUpdate::text_delta(
+                        "The feeding and the rise aren't the same moment. Say that as the thing you now know.",
+                    ),
+                    AcpUpdate::TurnComplete,
+                ]),
+                Step::Learner(
+                    "the push and what it causes are never the same moment. there's always a chewing-through in between."
+                        .into(),
+                ),
+                Step::Engine(vec![
+                    tool_call(
+                        "1",
+                        "fix_salt",
+                        json!({ "realization": "the push and what it causes are never the same moment; there's always a chewing-through in between" }),
+                    ),
+                    tool_call(
+                        "2",
+                        "open_thread",
+                        json!({ "question": "what does the chewing-through cost?" }),
+                    ),
+                    AcpUpdate::text_delta(
+                        "Fixed. The tide waiting on the moon has the same shape as your starter. One thing, or two?",
+                    ),
+                    AcpUpdate::TurnComplete,
+                ]),
+                Step::Learner("one thing. the delay is the point.".into()),
+                Step::Engine(vec![
+                    tool_call(
+                        "3",
+                        "weave_domains",
+                        json!({ "a": "tides", "b": "baking", "note": "the delay is the point" }),
+                    ),
+                    AcpUpdate::text_delta("Woven, in your words."),
+                    AcpUpdate::TurnComplete,
+                ]),
+            ]
+        },
+    }
+}
+
 /// The four README personas, then the v1 field personas.
 pub fn all_personas() -> Vec<Persona> {
     vec![
@@ -356,5 +420,6 @@ pub fn all_personas() -> Vec<Persona> {
         leaver(),
         fork_picker(),
         returner(),
+        explainer(),
     ]
 }
