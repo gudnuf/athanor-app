@@ -20,7 +20,9 @@
 //! speaks first, as in the app. Each persona seeds its own topic.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use athanor_core::engine::{AcpPrompt, AcpUpdate, EngineError, MystagogueEngine, ToolDispatch};
@@ -139,6 +141,15 @@ impl TurnRecorder {
         self.turns.push(Turn::LearnerText(text.to_string()));
     }
 
+    /// Drops a trailing learner turn the engine never answered (its turn
+    /// failed), so an errored turn is not graded.
+    pub fn drop_unanswered_learner(&mut self) {
+        self.buffer.clear();
+        if matches!(self.turns.last(), Some(Turn::LearnerText(_))) {
+            self.turns.pop();
+        }
+    }
+
     pub fn push(&mut self, update: AcpUpdate) {
         match update {
             AcpUpdate::TextDelta { text, .. } => self.buffer.push_str(&text),
@@ -164,6 +175,80 @@ impl TurnRecorder {
     pub fn finish(mut self) -> Vec<Turn> {
         self.flush();
         self.turns
+    }
+}
+
+// ---- engine errors ----
+
+/// Whether `text` is the engine/provider's own failure notice, which goose
+/// surfaces in-band as an assistant message rather than as an `Err`: a network
+/// error ("<error>\n\nPlease resend your message to try again."), any other
+/// provider error ("Ran into this error: ... transient or recoverable error."),
+/// or a refusal ("The provider refused this request."). Never Mystagogue words.
+pub fn is_engine_error_reply(text: &str) -> bool {
+    let t = text.trim();
+    t.ends_with("Please resend your message to try again.")
+        || t.starts_with("Network error:")
+        || (t.starts_with("Ran into this error:") && t.contains("transient or recoverable error"))
+        || t.starts_with("The provider refused this request.")
+}
+
+fn retry_backoff() -> Duration {
+    if cfg!(test) {
+        Duration::ZERO
+    } else {
+        Duration::from_secs(3)
+    }
+}
+
+/// Wraps an engine: buffers each turn, and if the whole reply is an in-band
+/// error notice, retries the turn once after a short backoff. A second error
+/// becomes an `Err` with nothing forwarded to the sink, so the notice never
+/// reaches the Conductor's history or the transcript. A turn that called a
+/// tool is forwarded as-is (a retry would repeat its side effects).
+struct ErrorGuard<'a> {
+    inner: &'a dyn MystagogueEngine,
+    retries: AtomicUsize,
+}
+
+#[async_trait]
+impl MystagogueEngine for ErrorGuard<'_> {
+    async fn run_turn(
+        &self,
+        prompt: AcpPrompt,
+        tools: &dyn ToolDispatch,
+        sink: &mut (dyn FnMut(AcpUpdate) + Send),
+    ) -> Result<(), EngineError> {
+        let mut attempt = 0;
+        loop {
+            let mut buf: Vec<AcpUpdate> = Vec::new();
+            self.inner
+                .run_turn(prompt.clone(), tools, &mut |u| buf.push(u))
+                .await?;
+            let used_tool = buf.iter().any(|u| matches!(u, AcpUpdate::ToolCall(_)));
+            let text: String = buf
+                .iter()
+                .filter_map(|u| match u {
+                    AcpUpdate::TextDelta { text, .. } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect();
+            if used_tool || !is_engine_error_reply(&text) {
+                for u in buf {
+                    sink(u);
+                }
+                return Ok(());
+            }
+            if attempt == 1 {
+                let shown: String = text.trim().chars().take(160).collect();
+                return Err(EngineError::Other(format!(
+                    "engine error reply after one retry: {shown}"
+                )));
+            }
+            attempt += 1;
+            self.retries.fetch_add(1, Ordering::Relaxed);
+            tokio::time::sleep(retry_backoff()).await;
+        }
     }
 }
 
@@ -238,10 +323,15 @@ pub struct RealRun {
 /// Runs one persona's learner lines through `engine` via a real `Conductor`
 /// over a fresh in-memory store, then grades the transcript.
 pub async fn run_persona_real(
-    engine: &dyn MystagogueEngine,
+    raw_engine: &dyn MystagogueEngine,
     persona: &Persona,
     max_turns: usize,
 ) -> RealRun {
+    let guard = ErrorGuard {
+        inner: raw_engine,
+        retries: AtomicUsize::new(0),
+    };
+    let engine: &dyn MystagogueEngine = &guard;
     let store = Arc::new(Store::open_in_memory(persona.name).expect("open in-memory store"));
     let (question, domain_name) = persona.topic.unwrap_or(("what is entropy?", "entropy"));
     let domain = store.upsert_domain(domain_name).expect("seed domain");
@@ -269,6 +359,7 @@ pub async fn run_persona_real(
         let mut sink = |u: AcpUpdate| rec.push(u);
         if let Err(e) = conductor.open_turn(engine, &mut sink).await {
             engine_error = Some(e.to_string());
+            rec.drop_unanswered_learner();
         }
     }
     for line in &lines {
@@ -279,6 +370,7 @@ pub async fn run_persona_real(
         let mut sink = |u: AcpUpdate| rec.push(u);
         if let Err(e) = conductor.run_turn(engine, Some(line), &mut sink).await {
             engine_error = Some(e.to_string());
+            rec.drop_unanswered_learner();
             break;
         }
     }
@@ -314,7 +406,14 @@ pub async fn run_persona_real(
         CheckResult {
             name: "engine_ok".into(),
             passed: engine_error.is_none(),
-            detail: engine_error.unwrap_or_else(|| format!("{} turn(s) completed", lines.len())),
+            detail: engine_error.unwrap_or_else(|| {
+                let retried = guard.retries.load(Ordering::Relaxed);
+                if retried == 0 {
+                    format!("{} turn(s) completed", lines.len())
+                } else {
+                    format!("{} turn(s) completed ({retried} retried)", lines.len())
+                }
+            }),
         },
         CheckResult {
             name: "session_lands".into(),
@@ -798,6 +897,76 @@ mod tests {
             sys.contains("Stalled: come at it sideways"),
             "seeded note reaches the prompt"
         );
+    }
+
+    fn net_err() -> Vec<AcpUpdate> {
+        say("Network error: Stream decode error: bad chunk\n\nPlease resend your message to try again.")
+    }
+
+    #[test]
+    fn engine_error_replies_are_recognised_and_ordinary_ones_are_not() {
+        assert!(is_engine_error_reply(
+            "Network error: Stream decode error\n\nPlease resend your message to try again."
+        ));
+        assert!(is_engine_error_reply(
+            "Ran into this error: boom.\n\nPlease retry if you think this is a transient or recoverable error."
+        ));
+        assert!(is_engine_error_reply(
+            "The provider refused this request.\n\nx"
+        ));
+        assert!(!is_engine_error_reply("What does the tide wait for?"));
+    }
+
+    #[tokio::test]
+    async fn an_engine_error_reply_is_retried_once_and_never_graded_as_a_reply() {
+        let p = returner(); // starts with the learner: "hey.", then the kite line
+        let engine = PerTurn::new(vec![
+            net_err(),
+            say("Hm — where did you last see that?"),
+            say("What makes it go taut?"),
+            say("NOTE: ok"),
+        ]);
+        let run = run_persona_real(&engine, &p, 6).await;
+        let all: String = run
+            .turns
+            .iter()
+            .filter_map(|t| match t {
+                Turn::Assistant(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(!all.contains("Network error"), "{all}");
+        assert!(all.contains("where did you last see that"));
+        let ok = run
+            .report
+            .checks
+            .iter()
+            .find(|c| c.name == "engine_ok")
+            .unwrap();
+        assert!(ok.passed && ok.detail.contains("1 retried"), "{ok:?}");
+    }
+
+    #[tokio::test]
+    async fn two_errors_in_a_row_fail_the_persona_and_drop_the_turn() {
+        let p = returner();
+        let engine = PerTurn::new(vec![net_err(), net_err()]);
+        let run = run_persona_real(&engine, &p, 6).await;
+        let ok = run
+            .report
+            .checks
+            .iter()
+            .find(|c| c.name == "engine_ok")
+            .unwrap();
+        assert!(
+            !ok.passed && ok.detail.contains("after one retry"),
+            "{ok:?}"
+        );
+        assert!(
+            run.turns.is_empty(),
+            "neither the error text nor the unanswered learner line is graded: {:?}",
+            run.turns
+        );
+        assert!(!run.report.passed);
     }
 
     #[tokio::test]
