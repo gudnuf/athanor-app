@@ -14,8 +14,8 @@ this repo. Violating one of these is a bug even if the tests pass.
    lives in `crates/ffi`. Engine/binding upgrades never touch the domain
    crate.
 3. **Workspace tests stay hermetic by default.** `cargo test --workspace`
-   requires no network, no API key, no native model file. The `whisper`
-   feature (crates/stt) and any real-API tier are feature/env-gated and
+   requires no network, no API key, no native model file. Any real-API tier
+   is feature/env-gated and
    excluded from the default CI run.
 
 ## Athanor-specific (from the product + build design specs)

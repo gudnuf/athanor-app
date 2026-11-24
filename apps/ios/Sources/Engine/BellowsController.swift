@@ -1,7 +1,4 @@
 import Foundation
-#if canImport(AthanorCoreFFI)
-import AthanorCoreFFI
-#endif
 
 // The Swift-side seam for real voice capture (plan Task E4 real half /
 // C3). Deliberately FFI-free in its OWN declarations (no AthanorCoreFFI
@@ -39,38 +36,33 @@ protocol BellowsController: AnyObject {
 
     /// A snapshot of responsiveness metrics for the dev overlay, or nil if the
     /// controller has no metrics source (the demo path). FFI-free by design:
-    /// `RealBellowsController` maps `BellowsHandle.metrics()` into this plain
+    /// `AppleBellowsController` maps `TextBellowsHandle.metrics()` into this plain
     /// struct so `SessionScreen` never imports AthanorCoreFFI.
     func currentMetrics() -> SttMetricsSnapshot?
 }
 
 extension BellowsController {
-    // Default: no metrics (demo controller, or any future stub). Only the real
-    // whisper-backed controller overrides this.
+    // Default: no metrics (demo controller, or any future stub). Only the Apple
+    // controller overrides this.
     func currentMetrics() -> SttMetricsSnapshot? { nil }
 }
 
-/// Plain, FFI-free projection of `stt::SttMetrics` (via `FfiSttMetrics`) for the
-/// responsiveness overlay. See the Rust `SttMetrics` docs for field semantics:
-/// decode wall-time, decoded-window length, realtime factor (< 1.0 = faster
-/// than realtime on-device), decode-pass count, whether Metal/GPU was requested
-/// (true on device, false on the Simulator), and the last utterance-end latency
-/// (the felt "time to send").
+/// Plain, FFI-free projection of `FfiTextBellowsMetrics` for the dev overlay
+/// (see the Rust `TextBellowsMetrics` docs for field semantics): the felt cost
+/// of a turn is `latchMs + finalizeMs`.
 struct SttMetricsSnapshot: Equatable {
-    /// "apple" or "whisper-base" / "whisper-small".
-    var engine: String
-    /// Apple path: wall ms from utterance onset to the first non-empty partial.
+    /// Wall ms from utterance onset to the first non-empty partial.
     var pickupMs: UInt64
     /// Audio ms of the silence latch at the last turn end (0 for send-now).
     var latchMs: UInt64
-    /// Apple path: closes forced by the final timeout.
+    /// Wall ms from the turn-ending cycle to the final being committed.
+    var finalizeMs: UInt64
+    /// Recognition requests begun (rises on rotation / self-close).
+    var requests: UInt64
+    /// Closes forced by the final timeout.
     var timeouts: UInt64
-    var lastDecodeMs: UInt64
-    var lastWindowMs: UInt64
-    var realtimeFactor: Double
-    var decodePasses: UInt64
-    var gpuRequested: Bool
-    var utteranceEndLatencyMs: UInt64
+    /// Turns dropped because no words were committed.
+    var emptyTurns: UInt64
 }
 
 enum BellowsEvent: Equatable {
@@ -110,28 +102,13 @@ enum BellowsBias {
 
 /// The only seam SessionScreen needs: always declared (so it compiles in
 /// both projects), body gated on `AthanorCoreFFI` availability. Returns nil
-/// whenever the real path isn't available — FFI not linked (demo build), a
-/// whisper model that can't be provisioned, or a handle that failed to open.
+/// whenever the real path isn't available — FFI not linked (demo build) —
+/// and the screens fall back to the typed input.
 enum BellowsFactory {
     @MainActor
-    static func make(engine: BellowsEngine, downloader: ModelDownloader, biasTerms: [String]) async -> (any BellowsController)? {
+    static func make(biasTerms: [String]) async -> (any BellowsController)? {
         #if canImport(AthanorCoreFFI)
-        switch engine.whisperTier {
-        case nil:
-            return AppleBellowsController(biasTerms: biasTerms)
-        case let tier?:
-            await downloader.ensureModel(tier: tier)             // lazy: only when whisper is chosen
-            guard let path = downloader.readyPath else { return nil }
-            let latch = RealBellowsController.defaultSilenceLatchMs
-            let ffiTier: AthanorCoreFFI.BellowsTier = tier == .small ? .smallEn : .baseEn
-            do {
-                let handle = try await Task.detached(priority: .userInitiated) {
-                    try AthanorCoreFFI.BellowsHandle.open(modelPath: path, biasTerms: biasTerms,
-                                                          tier: ffiTier, silenceLatchMs: latch)
-                }.value                                          // model load OFF the main actor
-                return RealBellowsController(handle: handle, tier: tier)
-            } catch { NSLog("[Athanor] whisper open failed: \(error)"); return nil }
-        }
+        return AppleBellowsController(biasTerms: biasTerms)
         #else
         return nil
         #endif

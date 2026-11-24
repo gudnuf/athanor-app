@@ -9,7 +9,6 @@
 
 uniffi::setup_scaffolding!();
 
-mod bellows;
 pub mod engine;
 pub mod events;
 pub mod export;

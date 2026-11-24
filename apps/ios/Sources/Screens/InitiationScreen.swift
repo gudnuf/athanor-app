@@ -58,9 +58,6 @@ struct InitiationScreen: View {
             }
             .padding(.horizontal, Ember.S.screenPad)
             Spacer()
-            WarmingLine(state: model.modelDownloader.state)
-                .padding(.horizontal, Ember.S.screenPad)
-                .padding(.bottom, 4)
 
             if canFinish {
                 enterFurnaceButton
@@ -216,15 +213,14 @@ struct InitiationScreen: View {
         }
     }
 
-    /// Opens the Bellows for the chosen engine — mirrors SessionScreen's
-    /// `openBellows(engine:)` (same bias-term assembly, same event handling).
+    /// Opens the Apple-speech Bellows — mirrors SessionScreen's
+    /// `openBellows()` (same bias-term assembly, same event handling).
     /// Deliberately NOT gated on `model.engine.isReal` for the same reason as
-    /// SessionScreen: the Bellows needs no Anthropic key. A whisper engine
-    /// lazily downloads inside the factory; Apple needs nothing.
+    /// SessionScreen: the Bellows needs no Anthropic key. Needs no model download.
     private func beginRealBellows() async {
         let bias = BellowsBias.terms(engine: model.engine)
         guard let controller = await BellowsFactory.make(
-            engine: model.bellowsEngine, downloader: model.modelDownloader, biasTerms: bias
+            biasTerms: bias
         ) else { return }
         realBellows = controller
         controller.start()
@@ -252,53 +248,5 @@ struct InitiationScreen: View {
         livePreview = ""
         guard !text.isEmpty else { return }
         model.engine.sendTurn(text)
-    }
-}
-
-/// A quiet presence, not a loading screen (F1 brief: "it should feel
-/// incidental"). No spinner, no motion-budget animation — the bar's width
-/// just steps to the current fraction (`Ember.Motion.none`); the only
-/// screen-level motion here stays E3's (none) plus whatever Initiation
-/// itself already spends. Invisible once ready, and quietly honest on
-/// failure rather than stuck mid-progress forever.
-///
-/// Internal (not private): SessionScreen's real-path input fallback reuses
-/// this so a "Tend the fire" session opened before the whisper model finished
-/// downloading shows the same quiet warming presence instead of nothing.
-struct WarmingLine: View {
-    var state: ModelDownloader.State
-
-    var body: some View {
-        switch state {
-        case .idle, .ready:
-            EmptyView()
-        case .downloading(let progress):
-            bar(label: "warming the ear", progress: progress)
-        case .verifying:
-            bar(label: "settling in", progress: 1)
-        case .failed:
-            Text("the ear stays cold for now — offline")
-                .font(Ember.F.sans(11))
-                .foregroundStyle(Ember.C.mutedDim)
-        }
-    }
-
-    private func bar(label: String, progress: Double) -> some View {
-        VStack(spacing: 6) {
-            Capsule()
-                .fill(Ember.C.raised2)
-                .frame(height: 2)
-                .overlay(alignment: .leading) {
-                    GeometryReader { geo in
-                        Capsule()
-                            .fill(Ember.C.heat.opacity(0.55))
-                            .frame(width: geo.size.width * progress)
-                    }
-                }
-                .animation(Ember.Motion.none, value: progress)
-            Text(label)
-                .font(Ember.F.sans(11))
-                .foregroundStyle(Ember.C.mutedDim)
-        }
     }
 }

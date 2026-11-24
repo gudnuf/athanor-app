@@ -65,8 +65,9 @@ xcrun devicectl device process launch --device 'Damians-iPhone.coredevice.local'
 - **No seed on device**: the lived-in seed fixture is a local dev-only
   file; a device install starts cold with initiation. That's the
   intended first-device-run experience (and gate G4: first live turn).
-- **Whisper model**: the app downloads the model tier on first session;
-  give it a minute on Wi-Fi. RTF check runbook:
-  `~/athanor/forge/athanor-app/spike-whisper-report.md` (gate G3).
+- **Speech**: the Bellows uses Apple's on-device recognizer, so there is no
+  model download. The first Bellows open asks for the microphone, then speech
+  recognition; refusing either gives the typed input. Latency check: triple-tap
+  the mask name for the dev overlay (`docs/gestures.md`).
 - Free-tier provisioning profiles expire after 7 days; re-run steps
   3–4 to refresh.

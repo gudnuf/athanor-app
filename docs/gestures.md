@@ -9,6 +9,6 @@ surface, never from him.
 | Where | Gesture | What it opens |
 |-------|---------|---------------|
 | Session header — mask name | tap | Mask picker (escape hatch: pin a mask for the session) |
-| Session header — mask name | triple-tap | STT dev overlay (engine picker Apple / Whisper Base / Whisper Small; latency numbers; Apple: pickup / latch / finalize / felt-send) |
+| Session header — mask name | triple-tap | STT dev overlay (Apple speech latency numbers: pickup / latch / finalize / felt-send / requests / timeouts / empty turns) |
 | Bellows bed | tap | Bank: mute the Bellows (tap again to resume) |
 | Furnace — "N days tended" line | long-press (1.2 s) | Vault export: share sheet with athanor-vault-<date>.md (core-rendered, everything the store holds) + athanor-<date>.sqlite (consistent raw copy). Store-only: works without a key. AirDrop to the Mac. QA: launch arg export-vault=1. |

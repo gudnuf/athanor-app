@@ -70,8 +70,11 @@ A Rust core owns everything that matters; the Swift layer only renders it.
   straight into the store. No round-trip to a backend. A field report on getting
   goose to embed cleanly on iOS lives in
   [`docs/research/goose-embedding-feedback.md`](docs/research/goose-embedding-feedback.md).
-- **Embedded whisper** (`crates/stt`) — the *Bellows*: streaming on-device
-  speech-to-text, feature-gated so the default test tier stays hermetic.
+- **Apple speech** (`crates/stt` + `apps/ios`) — the *Bellows*: on-device
+  `SFSpeechRecognizer` in the Swift shell, with Rust owning endpointing and
+  the append-only transcript (`stt::TextBellows`), so the whole turn machine is
+  tested hermetically. If on-device recognition is unavailable, the typed input
+  is the fallback.
 - **`crates/ffi`** — a UniFFI 0.31 bridge, the one crate that knows about
   bindings, into an **Ember**-styled SwiftUI shell (`apps/ios`) that renders
   state and owns no logic.

@@ -218,9 +218,8 @@ jobs:
         run: |
           # build-ffi.sh drives its own `nix develop -c` blocks. Run from this
           # plain login shell — NOT `nix develop -c bash build-ffi.sh` (guard).
-          # It builds BOTH the sim and device slices (--features goose,whisper);
-          # it takes no flags. Device-only would halve the whisper compile but
-          # requires editing the script — tracked as an open item, not done here.
+          # It builds BOTH the sim and device slices (--features goose);
+          # it takes no flags.
           bash apps/ios/build-ffi.sh
 
       - name: Generate Xcode project (real-core spec)

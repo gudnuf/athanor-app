@@ -70,8 +70,6 @@ struct SessionScreen: View {
     // the only way to surface numbers on a signed build with no cable.
     @State private var showDevOverlay = ProcessInfo.processInfo.arguments.contains("stt-overlay=1")
     @State private var sttMetrics: SttMetricsSnapshot?
-    /// True while an engine switch (incl. a lazy whisper download) is in flight (overlay disables the row).
-    @State private var switchingEngine = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -125,10 +123,6 @@ struct SessionScreen: View {
             if showDevOverlay {
                 SttOverlay(
                     metrics: sttMetrics,
-                    engine: model.bellowsEngine,
-                    switching: switchingEngine,
-                    downloadState: model.modelDownloader.state,
-                    onSwitchEngine: { switchEngine(to: $0) },
                     onClose: { showDevOverlay = false }
                 )
             }
@@ -156,7 +150,6 @@ struct SessionScreen: View {
                 // legitimate real-path affordance — the typed field, always
                 // available — with the quiet warming presence covering the wait.
                 RealFallbackInput(
-                    downloadState: model.modelDownloader.state,
                     typedText: $typedText,
                     fieldFocused: $typedFieldFocused,
                     onSubmitTyped: submitTyped
@@ -491,38 +484,20 @@ struct SessionScreen: View {
     /// grimoire()/mercury(), never a second Store access).
     ///
     /// Deliberately NOT gated on `model.engine.isReal`: the Bellows (mic +
-    /// on-device whisper STT) needs no Anthropic key at all — only the FFI
-    /// build + a ready model file. Gating on `isReal` would make it
+    /// on-device Apple speech) needs no Anthropic key at all — only the FFI
+    /// build. Gating on `isReal` would make it
     /// impossible to exercise real audio capture without a live key. The
     /// actual "real build vs demo build" gate lives in `BellowsFactory`
     /// (compiles to `nil` under `#if canImport(AthanorCoreFFI)` absence) —
     /// that's the one seam this screen needs; a no-key real build still
     /// gets real ears even while `sendTurn` reaches DemoEngine's fallback.
     private func beginRealBellows() async {
-        await openBellows(engine: model.bellowsEngine)
+        await openBellows()
     }
 
-    /// Dev overlay: switch the Bellows engine live (Apple / Whisper Base /
-    /// Whisper Small). A whisper engine lazily downloads its model (small.en
-    /// is ~182 MB) inside the factory, then the Bellows reopens against it.
-    /// The previous controller is stopped (which finishes its event stream,
-    /// unblocking the old `for await` in `openBellows`).
-    private func switchEngine(to engine: BellowsEngine) {
-        guard engine != model.bellowsEngine || realBellows == nil, !switchingEngine else { return }
-        switchingEngine = true
-        realBellows?.stop()
-        realBellows = nil
-        amplitude = 0
-        model.bellowsEngine = engine // persisted by AppModel
-        Task {
-            await openBellows(engine: engine)
-            switchingEngine = false
-        }
-    }
-
-    /// Opens (or reopens) the real Bellows for `engine` and consumes its
+    /// Opens the Apple-speech Bellows and consumes its
     /// event stream until the controller finishes (stop() / screen teardown).
-    private func openBellows(engine: BellowsEngine) async {
+    private func openBellows() async {
         // The `debug-send-turn=1` QA hook is explicitly the AUDIO-FREE path (it
         // stands in for a learner turn where there's no mic/acoustic loopback),
         // so opening the mic here is contradictory — it only pops the system
@@ -532,7 +507,7 @@ struct SessionScreen: View {
 
         let bias = BellowsBias.terms(engine: model.engine)
         guard let controller = await BellowsFactory.make(
-            engine: engine, downloader: model.modelDownloader, biasTerms: bias
+            biasTerms: bias
         ) else { return }
         realBellows = controller
         controller.start()
@@ -631,21 +606,17 @@ private struct SessionErrorLine: View {
     }
 }
 
-/// Real-build input when the real Bellows isn't up yet (whisper model still
-/// downloading, or no mic path this launch). The typed field is the always-
-/// available legitimate real-path affordance; the quiet `WarmingLine` covers
-/// the model wait without a spinner. Deliberately NOT the demo sine bed — that
+/// Real-build input when the real Bellows isn't up (permission refused,
+/// on-device recognition unavailable, or no mic path this launch). The typed field is the always-
+/// available legitimate real-path affordance. Deliberately NOT the demo sine bed — that
 /// path's tap injects a canned string into the LIVE engine.
 private struct RealFallbackInput: View {
-    var downloadState: ModelDownloader.State
     @Binding var typedText: String
     var fieldFocused: FocusState<Bool>.Binding
     var onSubmitTyped: () -> Void
 
     var body: some View {
         VStack(spacing: 10) {
-            WarmingLine(state: downloadState)
-
             HStack(spacing: 10) {
                 TextField("Say it your way…", text: $typedText, axis: .vertical)
                     .focused(fieldFocused)
@@ -671,21 +642,10 @@ private struct RealFallbackInput: View {
 /// A tiny, in-palette readout of on-device STT responsiveness — the numbers the
 /// operator can't otherwise see on a signed TestFlight build (no cable). Small
 /// mono text, no design ceremony. Surfaced by `stt-overlay=1` or a triple-tap on
-/// the header. Also lets the operator switch the whisper tier live and read the
-/// realtime factor (RTF) their phone actually achieves before deciding on the
-/// accuracy/speed trade — headroom lever, no default change ships from here.
+/// the header. Apple-speech rows only: pickup / latch / finalize / felt send.
 private struct SttOverlay: View {
     var metrics: SttMetricsSnapshot?
-    var engine: BellowsEngine
-    var switching: Bool
-    var downloadState: ModelDownloader.State
-    var onSwitchEngine: (BellowsEngine) -> Void
     var onClose: () -> Void
-
-    private var rtf: String {
-        guard let m = metrics, m.lastWindowMs > 0 else { return "—" }
-        return String(format: "%.2f", m.realtimeFactor)
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -702,59 +662,17 @@ private struct SttOverlay: View {
             }
 
             if let m = metrics {
-                row("engine", m.engine)
-                if m.engine == "apple" {
-                    row("pickup", dash(m.pickupMs))
-                    row("latch", dash(m.latchMs))
-                    row("finalize", dash(m.utteranceEndLatencyMs))
-                    row("felt send", dash(m.latchMs + m.utteranceEndLatencyMs))
-                    row("requests", m.decodePasses == 0 ? "—" : "\(m.decodePasses)")
-                    row("timeouts", m.timeouts == 0 ? "—" : "\(m.timeouts)")
-                } else {
-                row("decode", "\(m.lastDecodeMs) ms")
-                row("window", String(format: "%.1f s", Double(m.lastWindowMs) / 1000))
-                row("rtf", rtf + (m.realtimeFactor > 0 && m.realtimeFactor < 1 ? " ⚡︎" : ""))
-                row("passes", "\(m.decodePasses)")
-                row("metal", m.gpuRequested ? "on (device)" : "off (sim/cpu)")
-                }
-                if m.engine != "apple" {
-                    row("send latch", m.utteranceEndLatencyMs == 0 ? "— (no turn yet)" : "\(m.utteranceEndLatencyMs) ms")
-                }
+                row("pickup", dash(m.pickupMs))
+                row("latch", dash(m.latchMs))
+                row("finalize", dash(m.finalizeMs))
+                row("felt send", dash(m.latchMs + m.finalizeMs))
+                row("requests", m.requests == 0 ? "—" : "\(m.requests)")
+                row("timeouts", m.timeouts == 0 ? "—" : "\(m.timeouts)")
+                row("empty turns", m.emptyTurns == 0 ? "—" : "\(m.emptyTurns)")
             } else {
-                Text("no live decode yet")
+                Text("no live recognition yet")
                     .font(.system(.caption2, design: .monospaced))
                     .foregroundStyle(Ember.C.mutedDim)
-            }
-
-            Divider().overlay(Ember.C.hairline)
-
-            HStack(spacing: 8) {
-                Text("engine")
-                    .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(Ember.C.mutedDim)
-                ForEach(BellowsEngine.allCases) { t in
-                    Button {
-                        onSwitchEngine(t)
-                    } label: {
-                        Text(t.displayName)
-                            .font(Ember.F.sans(11, weight: .semibold))
-                            .foregroundStyle(t == engine ? Ember.C.heat : Ember.C.muted)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(
-                                t == engine ? Ember.C.raised2 : Color.clear,
-                                in: RoundedRectangle(cornerRadius: 7)
-                            )
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(switching)
-                }
-                if switching {
-                    Text(switchingLabel)
-                        .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(Ember.C.mutedDim)
-                }
-                Spacer()
             }
         }
         .foregroundStyle(Ember.C.ink)
@@ -764,14 +682,6 @@ private struct SttOverlay: View {
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Ember.C.hairline, lineWidth: 1))
         .padding(.horizontal, Ember.S.screenPad)
         .padding(.bottom, 4)
-    }
-
-    private var switchingLabel: String {
-        switch downloadState {
-        case .downloading(let p): return String(format: "dl %.0f%%", p * 100)
-        case .verifying: return "verifying…"
-        default: return "switching…"
-        }
     }
 
     /// Milliseconds, or an em dash for zero.

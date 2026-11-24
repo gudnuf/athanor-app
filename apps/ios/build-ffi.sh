@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Regenerates apps/ios/Packages/AthanorCoreFFI's binary artifacts:
-#   - crates/ffi built --release --features goose,whisper for
+#   - crates/ffi built --release --features goose for
 #     aarch64-apple-ios-sim AND aarch64-apple-ios
 #   - Swift bindings generated via the uniffi-bindgen dev binary
 #   - Frameworks/ffiFFI.xcframework (device + sim slices)
@@ -34,20 +34,12 @@
 # NIX_* vars left intact. Do NOT "restore murmur parity" by re-adding the unsets.
 #
 # --- athanor-specific amendment (meta-verified 2026-07-06) ---
-# cc-rs (ring / aws-lc-sys under goose, and whisper-rs-sys's cmake) invokes a
+# cc-rs (ring / aws-lc-sys under goose) invokes a
 # bare `xcrun`. A nix `xcbuild` xcrun stub on PATH shadows /usr/bin/xcrun and
 # kills those builds (exit 255). Fix: prepend /usr/bin to PATH in the cross
 # blocks so the real xcrun wins. DEVELOPER_DIR is parameterized off
 # `xcode-select -p` (override via env).
 #
-# --- whisper native link stack ---
-# `--features whisper` pulls whisper-rs-sys, whose cmake build emits static libs
-# (libwhisper.a, libggml*.a) into target/<t>/release/build/whisper-rs-sys-*/out/lib
-# and asks cargo to link the Accelerate/Foundation/Metal/MetalKit frameworks +
-# libc++. `cargo build` records those directives in libffi's metadata but does
-# NOT fold the ggml/whisper archives into libffi.a. So we merge libffi.a with all
-# the ggml/whisper archives per-slice via `libtool -static`, and the framework/
-# libc++ link flags are declared in Package.swift's AthanorCoreFFI linkerSettings.
 set -euo pipefail
 
 # --- Run this from a LOGIN shell, NOT inside `nix develop` ---
@@ -69,8 +61,7 @@ fi
 cd "$(dirname "$0")/../.."   # repo root
 FFI_DIR="apps/ios/Packages/AthanorCoreFFI"
 BINDINGS_DIR="$(mktemp -d)"
-MERGE_DIR="$(mktemp -d)"
-trap 'rm -rf "$BINDINGS_DIR" "$MERGE_DIR"' EXIT
+trap 'rm -rf "$BINDINGS_DIR"' EXIT
 
 # Default DEVELOPER_DIR to Xcode when unset (still overridable via env), but
 # split the assignment from `export` so `set -e` aborts if xcode-select fails.
@@ -82,31 +73,6 @@ if [ -z "${DEVELOPER_DIR:-}" ]; then
 fi
 export DEVELOPER_DIR
 
-# Merge libffi.a + the whisper/ggml static archives for one target into a single
-# fat static lib. Args: <target-triple> <sdk> <out.a>
-merge_slice() {
-  local triple="$1" out="$3"
-  local base="target/$triple/release"
-  local ffi_a="$base/libffi.a"
-  [ -f "$ffi_a" ] || { echo "!! missing $ffi_a" >&2; exit 1; }
-  # Locate the whisper-rs-sys out/lib holding the ggml/whisper archives for this
-  # target. There may be several build-dir hashes; pick the one that actually has
-  # libwhisper.a (newest wins).
-  local libdir
-  libdir="$(find "$base/build" -type f -path '*whisper-rs-sys-*/out/lib/libwhisper.a' \
-              -exec dirname {} \; 2>/dev/null | xargs -I{} stat -f '%m %N' {} 2>/dev/null \
-              | sort -rn | head -1 | cut -d' ' -f2-)"
-  [ -n "$libdir" ] && [ -d "$libdir" ] || { echo "!! no whisper-rs-sys out/lib under $base/build" >&2; exit 1; }
-  echo "    whisper libs: $libdir"
-  local archives=("$ffi_a")
-  local a
-  for a in whisper ggml ggml-base ggml-blas ggml-cpu ggml-metal; do
-    [ -f "$libdir/lib$a.a" ] && archives+=("$libdir/lib$a.a")
-  done
-  echo "    merging ${#archives[@]} archives -> $out"
-  /usr/bin/libtool -static -o "$out" "${archives[@]}"
-}
-
 # Build the STATICLIB slice only (--crate-type staticlib), not the manifest's
 # full {cdylib,staticlib,lib} set. The xcframework needs only libffi.a, and a
 # staticlib is archived — no final link — so we sidestep the bare-cargo cdylib
@@ -114,11 +80,10 @@ merge_slice() {
 # compiler-rt builtin `___chkstk_darwin`, which a standalone cargo cdylib link
 # doesn't pull in (Xcode's real app-bundle link DOES link clang_rt — that device
 # app-link is G2/operator-gated, not this script's bar). This also drops the
-# iOS-deployment-target ld warnings from the cdylib link (whisper.cpp cmake
-# targets the SDK's 26.2 while cargo's cdylib link defaulted to 10.0).
+# iOS-deployment-target ld warnings from the cdylib link.
 build_target() {
   local triple="$1" sdk="$2" envprefix="$3"
-  echo "==> building crates/ffi staticlib for $triple (--features goose,whisper)"
+  echo "==> building crates/ffi staticlib for $triple (--features goose)"
   nix develop -c bash -c '
     set -euo pipefail
     export PATH="/usr/bin:$PATH"
@@ -131,16 +96,12 @@ build_target() {
     export CXX_'"$envprefix"'=/usr/bin/clang++
     export AR_'"$envprefix"'=/usr/bin/ar
     export CARGO_TARGET_'"$(echo "$envprefix" | tr '[:lower:]' '[:upper:]')"'_LINKER=/usr/bin/clang
-    cargo rustc -p ffi --release --features goose,whisper --target '"$triple"' --lib --crate-type staticlib
+    cargo rustc -p ffi --release --features goose --target '"$triple"' --lib --crate-type staticlib
   '
 }
 
 build_target aarch64-apple-ios-sim iphonesimulator aarch64_apple_ios_sim
 build_target aarch64-apple-ios     iphoneos         aarch64_apple_ios
-
-echo "==> merging whisper/ggml archives into per-slice static libs"
-merge_slice aarch64-apple-ios-sim iphonesimulator "$MERGE_DIR/libathanorffi-sim.a"
-merge_slice aarch64-apple-ios     iphoneos         "$MERGE_DIR/libathanorffi-device.a"
 
 echo "==> generating Swift bindings (uniffi-bindgen, host build)"
 nix develop -c cargo run -p ffi --features uniffi-bindgen-cli --bin uniffi-bindgen -- \
@@ -161,8 +122,8 @@ for slice in sim device; do
 done
 
 /usr/bin/xcodebuild -create-xcframework \
-  -library "$MERGE_DIR/libathanorffi-sim.a"    -headers "$BINDINGS_DIR/headers-sim" \
-  -library "$MERGE_DIR/libathanorffi-device.a" -headers "$BINDINGS_DIR/headers-device" \
+  -library "target/aarch64-apple-ios-sim/release/libffi.a" -headers "$BINDINGS_DIR/headers-sim" \
+  -library "target/aarch64-apple-ios/release/libffi.a" -headers "$BINDINGS_DIR/headers-device" \
   -output "$FFI_DIR/Frameworks/ffiFFI.xcframework"
 
 echo "==> done. Run 'cd apps/ios && ./generate.sh' next."

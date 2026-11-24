@@ -5,7 +5,7 @@ repo cold.
 
 ## What this is
 
-The Athanor iOS app: an embedded-Goose Mystagogue, an on-device Bellows (Apple speech by default, whisper selectable in the dev overlay), a
+The Athanor iOS app: an embedded-Goose Mystagogue, an Apple-speech Bellows (on-device `SFSpeechRecognizer`; typed-input fallback), a
 tria prima (salt/mercury/sulfur) learning-journal store, rendered with an
 Ember aesthetic. Product spec and machine architecture live in the meta repo,
 `~/athanor` (`docs/superpowers/specs/2026-07-04-athanor-app-design.md` +
@@ -22,9 +22,11 @@ Ember aesthetic. Product spec and machine architecture live in the meta repo,
 - `crates/ffi` — the UniFFI 0.31 bridge. The only crate with a
   binding-generator dependency. Proc-macro mode; no build.rs, no UDL.
 - `crates/stt` — copied (not path-depended) from `~/murmur-rmp/crates/stt`:
-  whisper-rs-backed streaming STT, `whisper` feature-gated so default
-  workspace tests stay hermetic. The diff between this copy and its origin is
-  itself factory evidence — see the meta repo's FACTORY.md.
+  pure, hermetic STT pieces: the energy `Endpointer`, the text-driven
+  `TextBellows` turn machine behind the Apple-speech Bellows, and the older
+  chunk/finalize pipeline over a scripted `Decoder`. The whisper backend was
+  removed (2026-11-23). The diff between this copy and its origin is itself
+  factory evidence — see the meta repo's FACTORY.md.
 - `apps/ios` — SwiftUI shell (xcodegen-managed `project.yml`). Renders state,
   dispatches actions, owns no logic.
 - `docs/plans/` — implementation plans, one per numbered increment.

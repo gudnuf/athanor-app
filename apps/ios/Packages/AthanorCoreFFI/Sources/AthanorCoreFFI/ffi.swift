@@ -473,22 +473,6 @@ fileprivate struct FfiConverterFloat: FfiConverterPrimitive {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-fileprivate struct FfiConverterDouble: FfiConverterPrimitive {
-    typealias FfiType = Double
-    typealias SwiftType = Double
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Double {
-        return try lift(readDouble(&buf))
-    }
-
-    public static func write(_ value: Double, into buf: inout [UInt8]) {
-        writeDouble(&buf, lower(value))
-    }
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
 fileprivate struct FfiConverterBool : FfiConverter {
     typealias FfiType = Int8
     typealias SwiftType = Bool
@@ -898,280 +882,6 @@ public func FfiConverterTypeAthanorEngine_lift(_ handle: UInt64) throws -> Athan
 #endif
 public func FfiConverterTypeAthanorEngine_lower(_ value: AthanorEngine) -> UInt64 {
     return FfiConverterTypeAthanorEngine.lower(value)
-}
-
-
-
-
-
-
-/**
- * The streaming STT handle held by the Swift session layer. Wraps one
- * `SttStream`. Endpointing is enabled (default `EndpointConfig`) so the shell
- * can poll `utterance_ended()` for silence auto-send without an explicit DONE.
- *
- * Bias terms: `open` seeds the whisper `initial_prompt` from the `bias_terms`
- * the caller passes (active-domain vocab + recent salt). The bridge stays thin
- * and does NOT read the Store itself — C2's session layer is responsible for
- * assembling `bias_terms` and handing them in (see report).
- */
-public protocol BellowsHandleProtocol: AnyObject, Sendable {
-    
-    /**
-     * DONE: flush remaining buffered audio and finalize everything pending.
-     * Idempotent. Returns the tail segments finalized by the flush.
-     */
-    func end() throws  -> [FfiSegment]
-    
-    /**
-     * A snapshot of responsiveness metrics (decode ms, window ms, realtime
-     * factor, decode passes, GPU/Metal requested, last utterance-end latency)
-     * for the dev overlay. Cheap; safe from the poll thread.
-     */
-    func metrics()  -> FfiSttMetrics
-    
-    /**
-     * Drain buffered PCM, decode every ready window, and return the segments
-     * finalized this call (append-only). Runs the decode on the caller's
-     * (background) thread. Decode failure surfaces as `BellowsError`.
-     */
-    func poll() throws  -> [FfiSegment]
-    
-    /**
-     * Volatile preview tail for the shimmer UI. Never persisted.
-     */
-    func previewTail()  -> String
-    
-    /**
-     * Buffer PCM (16 kHz mono f32). Owns the `Vec` handed across FFI and
-     * passes a slice to the core — the core signature stays `&[f32]` (Plan
-     * review edit #7). Cheap; call off the realtime thread.
-     */
-    func pushPcm(pcm: [Float]) 
-    
-    /**
-     * Reset endpointing state only (fresh turn / manual tap-to-send). Leaves
-     * buffered PCM and finalized/pending transcript state untouched.
-     */
-    func resetEndpoint() 
-    
-    /**
-     * True once since the last read if endpointing has latched sustained
-     * trailing silence after a real utterance. Latched, auto-cleared on read
-     * (the shell polls this and calls `end()` when it flips true).
-     */
-    func utteranceEnded()  -> Bool
-    
-}
-/**
- * The streaming STT handle held by the Swift session layer. Wraps one
- * `SttStream`. Endpointing is enabled (default `EndpointConfig`) so the shell
- * can poll `utterance_ended()` for silence auto-send without an explicit DONE.
- *
- * Bias terms: `open` seeds the whisper `initial_prompt` from the `bias_terms`
- * the caller passes (active-domain vocab + recent salt). The bridge stays thin
- * and does NOT read the Store itself — C2's session layer is responsible for
- * assembling `bias_terms` and handing them in (see report).
- */
-open class BellowsHandle: BellowsHandleProtocol, @unchecked Sendable {
-    fileprivate let handle: UInt64
-
-    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
-#if swift(>=5.8)
-    @_documentation(visibility: private)
-#endif
-    public struct NoHandle {
-        public init() {}
-    }
-
-    // TODO: We'd like this to be `private` but for Swifty reasons,
-    // we can't implement `FfiConverter` without making this `required` and we can't
-    // make it `required` without making it `public`.
-#if swift(>=5.8)
-    @_documentation(visibility: private)
-#endif
-    required public init(unsafeFromHandle handle: UInt64) {
-        self.handle = handle
-    }
-
-    // This constructor can be used to instantiate a fake object.
-    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
-    //
-    // - Warning:
-    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
-#if swift(>=5.8)
-    @_documentation(visibility: private)
-#endif
-    public init(noHandle: NoHandle) {
-        self.handle = 0
-    }
-
-#if swift(>=5.8)
-    @_documentation(visibility: private)
-#endif
-    public func uniffiCloneHandle() -> UInt64 {
-        return try! rustCall { uniffi_ffi_fn_clone_bellowshandle(self.handle, $0) }
-    }
-    // No primary constructor declared for this class.
-
-    deinit {
-        if handle == 0 {
-            // Mock objects have handle=0 don't try to free them
-            return
-        }
-
-        try! rustCall { uniffi_ffi_fn_free_bellowshandle(handle, $0) }
-    }
-
-    
-    /**
-     * `silence_latch_ms` is the trailing-silence gap before auto-send fires;
-     * pass `DEFAULT_SILENCE_LATCH_MS` unless tuning. It is configurable here
-     * (not hardcoded in the endpoint) so the shell/overlay can trade felt
-     * responsiveness against end-of-thought pauses without a core rebuild.
-     */
-public static func `open`(modelPath: String, biasTerms: [String], tier: BellowsTier, silenceLatchMs: UInt64)throws  -> BellowsHandle  {
-    return try  FfiConverterTypeBellowsHandle_lift(try rustCallWithError(FfiConverterTypeBellowsError_lift) {
-    uniffi_ffi_fn_constructor_bellowshandle_open(
-        FfiConverterString.lower(modelPath),
-        FfiConverterSequenceString.lower(biasTerms),
-        FfiConverterTypeBellowsTier_lower(tier),
-        FfiConverterUInt64.lower(silenceLatchMs),$0
-    )
-})
-}
-    
-
-    
-    /**
-     * DONE: flush remaining buffered audio and finalize everything pending.
-     * Idempotent. Returns the tail segments finalized by the flush.
-     */
-open func end()throws  -> [FfiSegment]  {
-    return try  FfiConverterSequenceTypeFfiSegment.lift(try rustCallWithError(FfiConverterTypeBellowsError_lift) {
-    uniffi_ffi_fn_method_bellowshandle_end(
-            self.uniffiCloneHandle(),$0
-    )
-})
-}
-    
-    /**
-     * A snapshot of responsiveness metrics (decode ms, window ms, realtime
-     * factor, decode passes, GPU/Metal requested, last utterance-end latency)
-     * for the dev overlay. Cheap; safe from the poll thread.
-     */
-open func metrics() -> FfiSttMetrics  {
-    return try!  FfiConverterTypeFfiSttMetrics_lift(try! rustCall() {
-    uniffi_ffi_fn_method_bellowshandle_metrics(
-            self.uniffiCloneHandle(),$0
-    )
-})
-}
-    
-    /**
-     * Drain buffered PCM, decode every ready window, and return the segments
-     * finalized this call (append-only). Runs the decode on the caller's
-     * (background) thread. Decode failure surfaces as `BellowsError`.
-     */
-open func poll()throws  -> [FfiSegment]  {
-    return try  FfiConverterSequenceTypeFfiSegment.lift(try rustCallWithError(FfiConverterTypeBellowsError_lift) {
-    uniffi_ffi_fn_method_bellowshandle_poll(
-            self.uniffiCloneHandle(),$0
-    )
-})
-}
-    
-    /**
-     * Volatile preview tail for the shimmer UI. Never persisted.
-     */
-open func previewTail() -> String  {
-    return try!  FfiConverterString.lift(try! rustCall() {
-    uniffi_ffi_fn_method_bellowshandle_preview_tail(
-            self.uniffiCloneHandle(),$0
-    )
-})
-}
-    
-    /**
-     * Buffer PCM (16 kHz mono f32). Owns the `Vec` handed across FFI and
-     * passes a slice to the core — the core signature stays `&[f32]` (Plan
-     * review edit #7). Cheap; call off the realtime thread.
-     */
-open func pushPcm(pcm: [Float])  {try! rustCall() {
-    uniffi_ffi_fn_method_bellowshandle_push_pcm(
-            self.uniffiCloneHandle(),
-        FfiConverterSequenceFloat.lower(pcm),$0
-    )
-}
-}
-    
-    /**
-     * Reset endpointing state only (fresh turn / manual tap-to-send). Leaves
-     * buffered PCM and finalized/pending transcript state untouched.
-     */
-open func resetEndpoint()  {try! rustCall() {
-    uniffi_ffi_fn_method_bellowshandle_reset_endpoint(
-            self.uniffiCloneHandle(),$0
-    )
-}
-}
-    
-    /**
-     * True once since the last read if endpointing has latched sustained
-     * trailing silence after a real utterance. Latched, auto-cleared on read
-     * (the shell polls this and calls `end()` when it flips true).
-     */
-open func utteranceEnded() -> Bool  {
-    return try!  FfiConverterBool.lift(try! rustCall() {
-    uniffi_ffi_fn_method_bellowshandle_utterance_ended(
-            self.uniffiCloneHandle(),$0
-    )
-})
-}
-    
-
-    
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeBellowsHandle: FfiConverter {
-    typealias FfiType = UInt64
-    typealias SwiftType = BellowsHandle
-
-    public static func lift(_ handle: UInt64) throws -> BellowsHandle {
-        return BellowsHandle(unsafeFromHandle: handle)
-    }
-
-    public static func lower(_ value: BellowsHandle) -> UInt64 {
-        return value.uniffiCloneHandle()
-    }
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BellowsHandle {
-        let handle: UInt64 = try readInt(&buf)
-        return try lift(handle)
-    }
-
-    public static func write(_ value: BellowsHandle, into buf: inout [UInt8]) {
-        writeInt(&buf, lower(value))
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeBellowsHandle_lift(_ handle: UInt64) throws -> BellowsHandle {
-    return try FfiConverterTypeBellowsHandle.lift(handle)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeBellowsHandle_lower(_ value: BellowsHandle) -> UInt64 {
-    return FfiConverterTypeBellowsHandle.lower(value)
 }
 
 
@@ -1953,147 +1663,6 @@ public func FfiConverterTypeTextBellowsHandle_lower(_ value: TextBellowsHandle) 
 
 
 
-/**
- * A finalized, never-to-be-revised transcript segment crossing FFI. A thin
- * `uniffi::Record` projection of `stt::FinalizedSegment` — we never send the
- * core type across the boundary (Plan §1: "Events as thin projections … never
- * across FFI"). Timestamps are absolute audio milliseconds from stream start.
- */
-public struct FfiSegment: Equatable, Hashable {
-    public var startMs: UInt64
-    public var endMs: UInt64
-    public var text: String
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(startMs: UInt64, endMs: UInt64, text: String) {
-        self.startMs = startMs
-        self.endMs = endMs
-        self.text = text
-    }
-
-    
-
-    
-}
-
-#if compiler(>=6)
-extension FfiSegment: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeFfiSegment: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiSegment {
-        return
-            try FfiSegment(
-                startMs: FfiConverterUInt64.read(from: &buf), 
-                endMs: FfiConverterUInt64.read(from: &buf), 
-                text: FfiConverterString.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: FfiSegment, into buf: inout [UInt8]) {
-        FfiConverterUInt64.write(value.startMs, into: &buf)
-        FfiConverterUInt64.write(value.endMs, into: &buf)
-        FfiConverterString.write(value.text, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeFfiSegment_lift(_ buf: RustBuffer) throws -> FfiSegment {
-    return try FfiConverterTypeFfiSegment.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeFfiSegment_lower(_ value: FfiSegment) -> RustBuffer {
-    return FfiConverterTypeFfiSegment.lower(value)
-}
-
-
-/**
- * Responsiveness metrics for the dev overlay (operator's first-device
- * feedback). A thin `uniffi::Record` projection of `stt::SttMetrics` — the
- * core type never crosses FFI. All fields are read-only observability; see
- * `stt::SttMetrics` for semantics. `realtime_factor` is an `f64` (< 1.0 =
- * faster than realtime on-device).
- */
-public struct FfiSttMetrics: Equatable, Hashable {
-    public var lastDecodeMs: UInt64
-    public var lastWindowMs: UInt64
-    public var realtimeFactor: Double
-    public var decodePasses: UInt64
-    public var gpuRequested: Bool
-    public var utteranceEndLatencyMs: UInt64
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(lastDecodeMs: UInt64, lastWindowMs: UInt64, realtimeFactor: Double, decodePasses: UInt64, gpuRequested: Bool, utteranceEndLatencyMs: UInt64) {
-        self.lastDecodeMs = lastDecodeMs
-        self.lastWindowMs = lastWindowMs
-        self.realtimeFactor = realtimeFactor
-        self.decodePasses = decodePasses
-        self.gpuRequested = gpuRequested
-        self.utteranceEndLatencyMs = utteranceEndLatencyMs
-    }
-
-    
-
-    
-}
-
-#if compiler(>=6)
-extension FfiSttMetrics: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeFfiSttMetrics: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiSttMetrics {
-        return
-            try FfiSttMetrics(
-                lastDecodeMs: FfiConverterUInt64.read(from: &buf), 
-                lastWindowMs: FfiConverterUInt64.read(from: &buf), 
-                realtimeFactor: FfiConverterDouble.read(from: &buf), 
-                decodePasses: FfiConverterUInt64.read(from: &buf), 
-                gpuRequested: FfiConverterBool.read(from: &buf), 
-                utteranceEndLatencyMs: FfiConverterUInt64.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: FfiSttMetrics, into buf: inout [UInt8]) {
-        FfiConverterUInt64.write(value.lastDecodeMs, into: &buf)
-        FfiConverterUInt64.write(value.lastWindowMs, into: &buf)
-        FfiConverterDouble.write(value.realtimeFactor, into: &buf)
-        FfiConverterUInt64.write(value.decodePasses, into: &buf)
-        FfiConverterBool.write(value.gpuRequested, into: &buf)
-        FfiConverterUInt64.write(value.utteranceEndLatencyMs, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeFfiSttMetrics_lift(_ buf: RustBuffer) throws -> FfiSttMetrics {
-    return try FfiConverterTypeFfiSttMetrics.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeFfiSttMetrics_lower(_ value: FfiSttMetrics) -> RustBuffer {
-    return FfiConverterTypeFfiSttMetrics.lower(value)
-}
-
-
 public struct FfiTextBellowsMetrics: Equatable, Hashable {
     public var pickupMs: UInt64
     public var latchMs: UInt64
@@ -2103,10 +1672,11 @@ public struct FfiTextBellowsMetrics: Equatable, Hashable {
     public var selfCloses: UInt64
     public var revisionsDropped: UInt64
     public var resets: UInt64
+    public var emptyTurns: UInt64
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(pickupMs: UInt64, latchMs: UInt64, finalizeMs: UInt64, requests: UInt64, timeouts: UInt64, selfCloses: UInt64, revisionsDropped: UInt64, resets: UInt64) {
+    public init(pickupMs: UInt64, latchMs: UInt64, finalizeMs: UInt64, requests: UInt64, timeouts: UInt64, selfCloses: UInt64, revisionsDropped: UInt64, resets: UInt64, emptyTurns: UInt64) {
         self.pickupMs = pickupMs
         self.latchMs = latchMs
         self.finalizeMs = finalizeMs
@@ -2115,6 +1685,7 @@ public struct FfiTextBellowsMetrics: Equatable, Hashable {
         self.selfCloses = selfCloses
         self.revisionsDropped = revisionsDropped
         self.resets = resets
+        self.emptyTurns = emptyTurns
     }
 
     
@@ -2140,7 +1711,8 @@ public struct FfiConverterTypeFfiTextBellowsMetrics: FfiConverterRustBuffer {
                 timeouts: FfiConverterUInt64.read(from: &buf), 
                 selfCloses: FfiConverterUInt64.read(from: &buf), 
                 revisionsDropped: FfiConverterUInt64.read(from: &buf), 
-                resets: FfiConverterUInt64.read(from: &buf)
+                resets: FfiConverterUInt64.read(from: &buf), 
+                emptyTurns: FfiConverterUInt64.read(from: &buf)
         )
     }
 
@@ -2153,6 +1725,7 @@ public struct FfiConverterTypeFfiTextBellowsMetrics: FfiConverterRustBuffer {
         FfiConverterUInt64.write(value.selfCloses, into: &buf)
         FfiConverterUInt64.write(value.revisionsDropped, into: &buf)
         FfiConverterUInt64.write(value.resets, into: &buf)
+        FfiConverterUInt64.write(value.emptyTurns, into: &buf)
     }
 }
 
@@ -2985,186 +2558,6 @@ public func FfiConverterTypeTranscriptTurn_lower(_ value: TranscriptTurn) -> Rus
 
 
 /**
- * Errors surfaced by the Bellows bridge. A `uniffi::Error` projection of
- * `stt::SttError`. Field is `reason` (not `message`) to avoid the Android
- * `Throwable.message` clash uniffi warns about; harmless on Swift too.
- */
-public enum BellowsError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
-
-    
-    
-    case ModelLoad(reason: String
-    )
-    case Decode(reason: String
-    )
-    case Config(reason: String
-    )
-
-    
-
-    
-
-    
-    public var errorDescription: String? {
-        String(reflecting: self)
-    }
-    
-}
-
-#if compiler(>=6)
-extension BellowsError: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeBellowsError: FfiConverterRustBuffer {
-    typealias SwiftType = BellowsError
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BellowsError {
-        let variant: Int32 = try readInt(&buf)
-        switch variant {
-
-        
-
-        
-        case 1: return .ModelLoad(
-            reason: try FfiConverterString.read(from: &buf)
-            )
-        case 2: return .Decode(
-            reason: try FfiConverterString.read(from: &buf)
-            )
-        case 3: return .Config(
-            reason: try FfiConverterString.read(from: &buf)
-            )
-
-         default: throw UniffiInternalError.unexpectedEnumCase
-        }
-    }
-
-    public static func write(_ value: BellowsError, into buf: inout [UInt8]) {
-        switch value {
-
-        
-
-        
-        
-        case let .ModelLoad(reason):
-            writeInt(&buf, Int32(1))
-            FfiConverterString.write(reason, into: &buf)
-            
-        
-        case let .Decode(reason):
-            writeInt(&buf, Int32(2))
-            FfiConverterString.write(reason, into: &buf)
-            
-        
-        case let .Config(reason):
-            writeInt(&buf, Int32(3))
-            FfiConverterString.write(reason, into: &buf)
-            
-        }
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeBellowsError_lift(_ buf: RustBuffer) throws -> BellowsError {
-    return try FfiConverterTypeBellowsError.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeBellowsError_lower(_ value: BellowsError) -> RustBuffer {
-    return FfiConverterTypeBellowsError.lower(value)
-}
-
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
-/**
- * Model tier the Bellows opens with (Plan §2 "Model", F1 tier knob). The Swift
- * shell resolves the concrete model file (base.en default / small.en) and
- * passes both the resolved `model_path` and the tier it chose; the tier is
- * carried here as the stable public shape the app targets. The path already
- * encodes the tier for `SttStream`, so the bridge treats this as advisory —
- * it does not second-guess the caller's resolved path.
- */
-
-public enum BellowsTier: Equatable, Hashable {
-    
-    /**
-     * `ggml-base.en-q5_1` (~57 MB) — the day-1 default.
-     */
-    case baseEn
-    /**
-     * `ggml-small.en-q5_1` (~182 MB) — higher accuracy, larger download.
-     */
-    case smallEn
-
-
-
-
-
-}
-
-#if compiler(>=6)
-extension BellowsTier: Sendable {}
-#endif
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeBellowsTier: FfiConverterRustBuffer {
-    typealias SwiftType = BellowsTier
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BellowsTier {
-        let variant: Int32 = try readInt(&buf)
-        switch variant {
-        
-        case 1: return .baseEn
-        
-        case 2: return .smallEn
-        
-        default: throw UniffiInternalError.unexpectedEnumCase
-        }
-    }
-
-    public static func write(_ value: BellowsTier, into buf: inout [UInt8]) {
-        switch value {
-        
-        
-        case .baseEn:
-            writeInt(&buf, Int32(1))
-        
-        
-        case .smallEn:
-            writeInt(&buf, Int32(2))
-        
-        }
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeBellowsTier_lift(_ buf: RustBuffer) throws -> BellowsTier {
-    return try FfiConverterTypeBellowsTier.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeBellowsTier_lower(_ value: BellowsTier) -> RustBuffer {
-    return FfiConverterTypeBellowsTier.lower(value)
-}
-
-
-
-/**
  * Errors that cross the FFI boundary as a thrown error rather than a panic
  * (no panics across FFI). `flat_error`: Swift receives the variant plus its
  * `Display` message. The Anthropic key never appears in any of these strings.
@@ -3728,31 +3121,6 @@ fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-fileprivate struct FfiConverterSequenceTypeFfiSegment: FfiConverterRustBuffer {
-    typealias SwiftType = [FfiSegment]
-
-    public static func write(_ value: [FfiSegment], into buf: inout [UInt8]) {
-        let len = Int32(value.count)
-        writeInt(&buf, len)
-        for item in value {
-            FfiConverterTypeFfiSegment.write(item, into: &buf)
-        }
-    }
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiSegment] {
-        let len: Int32 = try readInt(&buf)
-        var seq = [FfiSegment]()
-        seq.reserveCapacity(Int(len))
-        for _ in 0 ..< len {
-            seq.append(try FfiConverterTypeFfiSegment.read(from: &buf))
-        }
-        return seq
-    }
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
 fileprivate struct FfiConverterSequenceTypeGrimoireGrain: FfiConverterRustBuffer {
     typealias SwiftType = [GrimoireGrain]
 
@@ -4023,27 +3391,6 @@ private let initializationResult: InitializationResult = {
     if (uniffi_ffi_checksum_func_export_vault_at() != 41621) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_ffi_checksum_method_bellowshandle_end() != 35761) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_ffi_checksum_method_bellowshandle_metrics() != 44203) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_ffi_checksum_method_bellowshandle_poll() != 64825) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_ffi_checksum_method_bellowshandle_preview_tail() != 8117) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_ffi_checksum_method_bellowshandle_push_pcm() != 21939) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_ffi_checksum_method_bellowshandle_reset_endpoint() != 32498) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_ffi_checksum_method_bellowshandle_utterance_ended() != 53749) {
-        return InitializationResult.apiChecksumMismatch
-    }
     if (uniffi_ffi_checksum_method_athanorengine_furnace_state() != 25304) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -4135,9 +3482,6 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_ffi_checksum_method_textbellowshandle_send_now() != 13004) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_ffi_checksum_constructor_bellowshandle_open() != 58462) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_ffi_checksum_constructor_athanorengine_new() != 57070) {

@@ -1,7 +1,8 @@
-//! On-device streaming STT over whisper.cpp (spec Rev 2 §2). PCM in → append-only
+//! Pure, hermetic STT building blocks: the energy `Endpointer`, the text-driven
+//! `TextBellows` turn machine (Apple speech path), and the chunk/finalize pipeline
+//! over a `Decoder` seam (scripted in tests; no native backend ships). PCM in → append-only
 //! finalized transcript segments out, biased by the user's ≤100-term vocabulary.
-//! The whisper backend is behind the `whisper` feature; the pure chunk/finalize/
-//! bias logic compiles and tests everywhere with no native toolchain or model file.
+//! Everything here compiles and tests with no native toolchain or model file.
 
 mod bias;
 mod chunk;
@@ -9,14 +10,10 @@ mod decoder;
 mod endpoint;
 mod finalize;
 pub mod text_bellows;
-#[cfg(feature = "whisper")]
-mod whisper;
 
 pub use decoder::{Decoder, RawSegment, ScriptedDecoder};
 pub use endpoint::{EndpointConfig, Endpointer};
 pub use text_bellows::{TextBellows, TextBellowsConfig, TextBellowsEvent, TextBellowsMetrics};
-#[cfg(feature = "whisper")]
-pub use whisper::WhisperDecoder;
 
 /// A finalized, never-to-be-revised transcript segment (append-only contract).
 /// Timestamps are ABSOLUTE audio milliseconds from stream start. The shell
@@ -174,26 +171,6 @@ impl SttStream {
     /// Cheap: a short lock and a clone. Safe to call from any thread.
     pub fn metrics(&self) -> SttMetrics {
         self.metrics.lock().unwrap().clone()
-    }
-
-    /// Record whether the underlying decoder requested GPU/Metal. Called once
-    /// by `with_model` (whisper backend); the pure test decoder leaves it false.
-    #[cfg(feature = "whisper")]
-    fn set_gpu_requested(&self, gpu: bool) {
-        self.metrics.lock().unwrap().gpu_requested = gpu;
-    }
-
-    #[cfg(feature = "whisper")]
-    pub fn with_model(
-        model: &std::path::Path,
-        cfg: SttConfig,
-        vocab: &[String],
-    ) -> Result<Self, SttError> {
-        cfg.validate()?; // reject overlap ≥ chunk before opening the model
-        let decoder = whisper::WhisperDecoder::open(model, &cfg.language)?;
-        let stream = Self::with_decoder(Box::new(decoder), cfg, vocab);
-        stream.set_gpu_requested(whisper::gpu_requested());
-        Ok(stream)
     }
 
     /// Buffer PCM. Cheap: a short lock, no decode. Call OFF the real-time audio

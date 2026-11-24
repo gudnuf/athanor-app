@@ -14,10 +14,8 @@ crate-type = ["cdylib", "staticlib", "lib"]
 [dependencies]
 uniffi = { version = "0.31", features = ["tokio"] }
 athanor-core = { path = "../athanor-core" }
-# The Bellows bridge wraps stt::SttStream. The dep is unconditional with default
-# (hermetic) features so `cargo test --workspace` exercises the bridge against
-# stt's ScriptedDecoder seam with no native toolchain or model file. Only the
-# native whisper backend is feature-gated below (ffi/whisper -> stt/whisper).
+# The Bellows bridge wraps stt::TextBellows (Apple speech path). Pure and hermetic:
+# `cargo test --workspace` needs no native toolchain, model or key.
 stt = { path = "../stt" }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync"] }
@@ -46,12 +44,6 @@ uniffi-bindgen-cli = ["uniffi/cli"]
 # sessions). OFF by default so `cargo test --workspace` and host builds stay
 # hermetic. See Phase 4 plan D1.
 goose = ["athanor-core/goose"]
-# Passthrough to stt's native whisper backend (whisper-rs + vendored whisper.cpp,
-# Metal). The stt dep itself is unconditional (default/hermetic features) so the
-# bridge's ScriptedDecoder tests always run; only the native backend is gated.
-# Gates `BellowsHandle::open`, which needs `SttStream::with_model`.
-whisper = ["stt/whisper"]
-
 [[bin]]
 name = "uniffi-bindgen"
 path = "uniffi-bindgen.rs"

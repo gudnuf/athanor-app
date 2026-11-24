@@ -1,9 +1,9 @@
 //! The text-Bellows bridge: a thin UniFFI projection of `stt::TextBellows`
 //! (Apple speech path). Rust owns endpointing and finalization; Swift only
-//! forwards PCM and recognizer text and obeys `CycleRequest`. NOT gated on the
-//! `whisper` feature: hermetic by default (invariant #3).
+//! forwards PCM and recognizer text and obeys `CycleRequest`. Hermetic: no feature gate,
+//! no model, no network (invariant #3).
 //!
-//! Same discipline as `bellows.rs`: zero logic here, only projection plus a
+//! Zero logic here, only projection plus a
 //! monotonic clock so the core's `now_ms` parameters are supplied for Swift.
 
 use std::sync::{Arc, Mutex};

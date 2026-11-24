@@ -32,13 +32,16 @@ final class AppleBellowsController: BellowsController {
     nonisolated(unsafe) private var converter: AVAudioConverter?   // built from the incoming buffer format
     private var pollTask: Task<Void, Never>?
     private var capturing = false
+    /// Trailing-silence latch before auto-send (ms); the endpoint lives in Rust.
+    static let defaultSilenceLatchMs: UInt64 = 800
+
     nonisolated private static let log = Logger(subsystem: "com.damsac.athanor", category: "bellows")
 
     let events: AsyncStream<BellowsEvent>
     nonisolated private let continuation: AsyncStream<BellowsEvent>.Continuation
 
     init(biasTerms: [String]) {
-        handle = TextBellowsHandle(biasTerms: biasTerms, silenceLatchMs: RealBellowsController.defaultSilenceLatchMs)
+        handle = TextBellowsHandle(biasTerms: biasTerms, silenceLatchMs: Self.defaultSilenceLatchMs)
         contextual = handle.contextualStrings()          // the cap and dedupe are decided in Rust
         (events, continuation) = AsyncStream<BellowsEvent>.makeStream()
     }
@@ -48,16 +51,12 @@ final class AppleBellowsController: BellowsController {
     nonisolated func currentMetrics() -> SttMetricsSnapshot? {
         let m = handle.metrics()
         return SttMetricsSnapshot(
-            engine: "apple",
             pickupMs: m.pickupMs,
             latchMs: m.latchMs,
+            finalizeMs: m.finalizeMs,
+            requests: m.requests,
             timeouts: m.timeouts,
-            lastDecodeMs: 0,
-            lastWindowMs: 0,
-            realtimeFactor: 0,
-            decodePasses: m.requests,
-            gpuRequested: false,
-            utteranceEndLatencyMs: m.finalizeMs
+            emptyTurns: m.emptyTurns
         )
     }
 
@@ -245,7 +244,7 @@ final class AppleBellowsController: BellowsController {
                         self.continuation.yield(.finalizedAppend(text))
                     case .utteranceEnded:
                         let m = self.handle.metrics()
-                        Self.log.info("utterance ended finalize_ms=\(m.finalizeMs) latch_ms=\(m.latchMs) timeouts=\(m.timeouts) pickup_ms=\(m.pickupMs) requests=\(m.requests) self_closes=\(m.selfCloses) resets=\(m.resets) revisions_dropped=\(m.revisionsDropped)")
+                        Self.log.info("utterance ended finalize_ms=\(m.finalizeMs) latch_ms=\(m.latchMs) timeouts=\(m.timeouts) pickup_ms=\(m.pickupMs) requests=\(m.requests) self_closes=\(m.selfCloses) resets=\(m.resets) revisions_dropped=\(m.revisionsDropped) empty_turns=\(m.emptyTurns)")
                         self.continuation.yield(.utteranceEnded)
                     case .cycleRequest(let id):
                         await self.rotate(from: id)
