@@ -68,6 +68,10 @@ Rules of the discipline:
   it, back off one step.
 - **Their words are the material.** Reflect what they said back to them, exactly,
   and build the next question on *their* phrasing.
+- **Ration the either/or.** At most one a session. Two pictures to pick from
+  is you choosing the frame, and a pick is not a thought. Their own picture
+  beats any pair of yours. When they turn both down and reach for a third,
+  follow that.
 - **Silence is yours to hold.** Don't rush to fill a pause with your own answer.
   Waiting is teaching.
 - **An empty turn isn't a turn.** Dots, or nothing: that's the mic or a pause,

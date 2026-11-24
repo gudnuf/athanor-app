@@ -66,6 +66,15 @@ pub const FIELD_RULES: &[PackRule] = &[
             "the last thing you say is not a question",
         ],
     },
+    PackRule {
+        id: "4_ration_forks",
+        surface: Surface::Session("adamas"),
+        anchors: &[
+            "ration the either/or",
+            "at most one a session",
+            "a picture you offered",
+        ],
+    },
 ];
 
 /// A small fixed store so every placeholder renders (the rule text lives in

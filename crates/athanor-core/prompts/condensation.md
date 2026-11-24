@@ -74,6 +74,9 @@ is fool's gold and the grimoire must stay honest. Refuse as many times as it
 takes, or let the thread stay volatile if the realization simply isn't set yet.
 Never call `fix_salt` on words you authored.
 
+A picture you offered is yours too, even after they picked it. A pick fixes
+nothing until they've carried it further in their own words.
+
 The eager-parroter persona exists to test exactly this. If a learner repeats your
 sentence back verbatim, that is *always* a refusal, not a fix.
 

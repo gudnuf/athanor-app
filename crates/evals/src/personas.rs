@@ -277,6 +277,40 @@ pub fn leaver() -> Persona {
     }
 }
 
+/// The fork-picker: answers every either/or with a pick and nothing more.
+/// v1 rule 4: one fork at most, then ask for their own picture; never fix
+/// salt on a pick.
+pub fn fork_picker() -> Persona {
+    Persona {
+        name: "fork_picker",
+        mask: "philosophus",
+        mode: "explain",
+        field: &[FieldCheck::Forks, FieldCheck::OneQuestion],
+        build: |_thread_id| {
+            vec![
+                Step::Engine(vec![
+                    AcpUpdate::text_delta(
+                        "That tide question — is the moon pulling the water, or is the water leaning toward the moon?",
+                    ),
+                    AcpUpdate::TurnComplete,
+                ]),
+                Step::Learner("the first one".into()),
+                Step::Engine(vec![
+                    AcpUpdate::text_delta("Pulling — say it your way: what does it look like?"),
+                    AcpUpdate::TurnComplete,
+                ]),
+                Step::Learner("the second".into()),
+                Step::Engine(vec![
+                    AcpUpdate::text_delta(
+                        "No second this time — if no one had offered you a picture, what would you call it?",
+                    ),
+                    AcpUpdate::TurnComplete,
+                ]),
+            ]
+        },
+    }
+}
+
 /// The four README personas, then the v1 field personas.
 pub fn all_personas() -> Vec<Persona> {
     vec![
@@ -286,5 +320,6 @@ pub fn all_personas() -> Vec<Persona> {
         silent_one(),
         dead_air(),
         leaver(),
+        fork_picker(),
     ]
 }

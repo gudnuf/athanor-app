@@ -399,6 +399,81 @@ pub fn grade_landing(trace: &SessionTrace) -> CheckResult {
     )
 }
 
+// ---- 4. forks ------------------------------------------------------------
+
+/// "or" uses that aren't a choice between two pictures.
+const NOT_A_FORK: &[&str] = &[
+    " or not",
+    " or so",
+    " or something",
+    " or anything",
+    " or what",
+    " or whatever",
+];
+
+/// Either/or questions in `text`: question sentences offering two options.
+pub fn forks(text: &str) -> Vec<String> {
+    crate::grade::terminated_sentences(text)
+        .into_iter()
+        .filter(|(_, t)| *t == '?')
+        .map(|(s, _)| s.trim().to_string())
+        .filter(|s| {
+            let mut l = format!(" {} ", s.to_lowercase());
+            for x in NOT_A_FORK {
+                l = l.replace(x, " ");
+            }
+            l.contains(" or ") || l.contains(", or")
+        })
+        .collect()
+}
+
+/// A learner turn that only picks ("the first one", "the latter", one word).
+pub fn is_pick(text: &str) -> bool {
+    tokens(text).len() <= 4
+}
+
+/// Ration forks (pack v1 rule 4): at most one either/or question per
+/// session, and no `fix_salt` whose nearest learner turn is only a pick
+/// answering a fork (the picked option is the Mystagogue's picture, not the
+/// learner's grain).
+///
+/// Gated judge question: did the learner's best images come from their own
+/// words or from options the Mystagogue offered, and did any fixed salt
+/// rest on an offered option the learner only picked?
+pub fn grade_forks(trace: &SessionTrace) -> CheckResult {
+    let all = replies(trace);
+    let mut violations = Vec::new();
+    let mut total = 0;
+    for (n, r) in all.iter().enumerate() {
+        let f = forks(&r.text);
+        total += f.len();
+        if total > 1 && !f.is_empty() {
+            violations.push(format!(
+                "reply {n}: fork #{total} this session: \"{}\"",
+                f[0]
+            ));
+        }
+        if r.tools.iter().any(|(name, _)| name == "fix_salt") {
+            if let Some(li) = r.after_learner {
+                let Turn::LearnerText(pick) = &trace.turns[li] else {
+                    continue;
+                };
+                let forked_before = n > 0 && !forks(&all[n - 1].text).is_empty();
+                if forked_before && is_pick(pick) {
+                    violations.push(format!(
+                        "reply {n}: fix_salt on a picked option (\"{pick}\"), not the learner's own words"
+                    ));
+                }
+            }
+        }
+    }
+    result(
+        "forks",
+        violations,
+        "at most one either/or, and no salt fixed on a pick",
+    )
+}
+
 // ---- dispatch -----------------------------------------------------------
 
 /// A field grader a persona opts into (each needs at most one fixed
@@ -413,6 +488,8 @@ pub enum FieldCheck {
     OneQuestion,
     /// v1 rule 3.
     Landing,
+    /// v1 rule 4.
+    Forks,
 }
 
 pub fn run_check(check: FieldCheck, trace: &SessionTrace) -> CheckResult {
@@ -421,6 +498,7 @@ pub fn run_check(check: FieldCheck, trace: &SessionTrace) -> CheckResult {
         FieldCheck::EmptyTurns => grade_empty_turns(trace),
         FieldCheck::OneQuestion => grade_one_question(trace),
         FieldCheck::Landing => grade_landing(trace),
+        FieldCheck::Forks => grade_forks(trace),
     }
 }
 
@@ -603,5 +681,56 @@ mod tests {
         ]);
         assert!(grade_landing(&ok).passed);
         assert!(is_landing_context(&ok, 2));
+    }
+
+    // --- 4. forks --------------------------------------------------------
+
+    #[test]
+    fn fork_detection() {
+        assert_eq!(forks("Is it a ladder, or a river?").len(), 1);
+        assert_eq!(forks("Rested or restless?").len(), 1);
+        assert!(forks("Does it hold or not?").is_empty());
+        assert!(forks("What else is there?").is_empty());
+        assert!(
+            forks("It's a ladder or a river.").is_empty(),
+            "not a question"
+        );
+    }
+
+    #[test]
+    fn fork_every_turn_and_salt_on_a_pick_fail() {
+        let bad = trace(&[
+            assistant("Is the moon pulling, or is the water leaning?"),
+            learner("the first one"),
+            assistant("A rope or a sheet?"),
+            learner("the second"),
+            tool(
+                "fix_salt",
+                r#"{"realization":"the moon pulls a sheet of water"}"#,
+            ),
+            tool("open_thread", r#"{"question":"what holds the other end?"}"#),
+        ]);
+        let r = grade_forks(&bad);
+        assert!(!r.passed);
+        assert!(r.detail.contains("fork #2"), "{}", r.detail);
+        assert!(r.detail.contains("picked option"), "{}", r.detail);
+    }
+
+    #[test]
+    fn one_fork_then_their_own_picture_passes() {
+        let ok = trace(&[
+            assistant("Is the moon pulling, or is the water leaning?"),
+            learner("the first one"),
+            assistant("Pulling — say it your way: what does it look like?"),
+            learner(
+                "like someone lifting a corner of a bedsheet and everything slides toward them",
+            ),
+            tool(
+                "fix_salt",
+                r#"{"realization":"lifting a corner of a bedsheet and everything slides toward them"}"#,
+            ),
+            tool("open_thread", r#"{"question":"who lifts the corner?"}"#),
+        ]);
+        assert!(grade_forks(&ok).passed, "{:?}", grade_forks(&ok));
     }
 }

@@ -201,7 +201,8 @@ pub fn gated_llm_judge_enabled() -> bool {
 mod tests {
     use super::*;
     use crate::personas::{
-        all_personas, dead_air, eager_parroter, leaver, silent_one, stuck_one, tangent_chaser,
+        all_personas, dead_air, eager_parroter, fork_picker, leaver, silent_one, stuck_one,
+        tangent_chaser,
     };
     use athanor_core::engine::AcpToolCall;
     use serde_json::json;
@@ -422,5 +423,36 @@ mod tests {
         .await;
         assert!(!check(&parting, "landing").passed);
         assert!(!check(&parting, "one_question").passed);
+    }
+
+    #[tokio::test]
+    async fn fork_picker_gets_one_fork_and_the_v0_fork_salt_fails() {
+        let report = run_persona(&fork_picker()).await;
+        assert!(check(&report, "forks").passed);
+        assert!(report.passed);
+
+        // v0 shape: another fork, then salt fixed on the learner's pick.
+        let forked = run_with_step(
+            fork_picker(),
+            2,
+            vec![
+                AcpUpdate::text_delta("A rope, or a sheet?"),
+                AcpUpdate::ToolCall(AcpToolCall {
+                    id: "1".into(),
+                    name: "fix_salt".into(),
+                    args: json!({ "realization": "the moon pulls the water" }),
+                }),
+                AcpUpdate::ToolCall(AcpToolCall {
+                    id: "2".into(),
+                    name: "open_thread".into(),
+                    args: json!({ "question": "what holds the other end?" }),
+                }),
+                AcpUpdate::TurnComplete,
+            ],
+        )
+        .await;
+        let forks = check(&forked, "forks");
+        assert!(!forks.passed);
+        assert!(forks.detail.contains("picked option"), "{}", forks.detail);
     }
 }
