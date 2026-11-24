@@ -27,7 +27,7 @@ use athanor_core::store::Store;
 use athanor_core::Conductor;
 use serde::{Deserialize, Serialize};
 
-use crate::field::{grade_profile_from_silence, FieldCheck};
+use crate::field::{grade_profile_from_silence, is_empty_turn, FieldCheck};
 use crate::grade::{grade_mask_fidelity, grade_salt_refusal, grade_spiral, SessionTrace, Turn};
 use crate::personas::{Persona, Step};
 use crate::report::{CheckResult, ScenarioReport, SuiteReport};
@@ -265,7 +265,10 @@ pub async fn run_persona_real(
         inner: engine,
         close_text: Mutex::new(None),
     };
-    let condense_err = if engine_error.is_none() {
+    // A learner who never said anything with content leaves nothing to distill
+    // (the core's honest close); the runner doesn't ask for one either.
+    let silent = lines.iter().all(|l| is_empty_turn(l));
+    let condense_err = if engine_error.is_none() && !silent {
         conductor.condense(&tap).await.err().map(|e| e.to_string())
     } else {
         None
@@ -307,11 +310,14 @@ pub async fn run_persona_real(
     );
     checks.push(CheckResult {
         name: "close_pass".into(),
-        passed: close_record.is_some() || engine_failed,
+        passed: close_record.is_some() || engine_failed || silent,
         detail: match (&close_record, &condense_err) {
             (Some(_), None) => "close pass produced output".into(),
             (Some(_), Some(e)) => format!("close pass errored after output: {e}"),
             (None, Some(e)) => format!("close pass failed: {e}"),
+            (None, None) if silent => {
+                "not applicable: the learner never spoke, so no close pass".into()
+            }
             (None, None) if engine_failed => "skipped: a session turn failed".into(),
             (None, None) => "close pass produced no output".into(),
         },
@@ -505,7 +511,7 @@ pub async fn run_real_suite(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::personas::{all_personas, dead_air, returner};
+    use crate::personas::{all_personas, dead_air, explainer, returner};
     use async_trait::async_trait;
     use athanor_core::engine::{AcpPrompt, EngineError, ToolDispatch};
     use std::collections::VecDeque;
@@ -611,14 +617,14 @@ mod tests {
 
     #[tokio::test]
     async fn a_persona_runs_through_the_conductor_and_is_graded() {
-        let p = dead_air();
+        let p = explainer();
         let n = learner_lines(&p, "t", 6).len();
         let mut replies: Vec<_> = (0..n).map(|_| say("I'm here.")).collect();
-        replies.push(say("NOTE: Mostly dots. Left the door open.\nPROFILE how_i_learn: goes quiet, so likely a slow processor"));
+        replies.push(say("NOTE: Sourdough rise, learner's own words.\nPROFILE how_i_learn: goes quiet, so likely a slow processor"));
         let engine = PerTurn::new(replies);
         let run = run_persona_real(&engine, &p, 6).await;
         assert!(run.report.checks.iter().any(|c| c.name == "spiral"));
-        assert!(run.report.checks.iter().any(|c| c.name == "empty_turns"));
+        assert!(run.report.checks.iter().any(|c| c.name == "one_question"));
         assert!(
             run.report
                 .checks
@@ -644,7 +650,7 @@ mod tests {
         assert!(close.raw.contains("slow processor"));
         assert_eq!(
             close.note.as_deref(),
-            Some("Mostly dots. Left the door open.")
+            Some("Sourdough rise, learner's own words.")
         );
         assert_eq!(close.profile.len(), 1);
         let g = run
@@ -661,10 +667,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_clean_close_passes_rule_9() {
-        let p = dead_air();
+        let p = explainer();
         let n = learner_lines(&p, "t", 6).len();
         let mut replies: Vec<_> = (0..n).map(|_| say("Here.")).collect();
-        replies.push(say("NOTE: Mostly dots. Left the door open."));
+        replies.push(say("NOTE: Sourdough rise, learner's own words."));
         let engine = PerTurn::new(replies);
         let run = run_persona_real(&engine, &p, 6).await;
         let g = run
@@ -674,6 +680,40 @@ mod tests {
             .find(|c| c.name == "profile_from_silence")
             .unwrap();
         assert!(g.passed, "{g:?}");
+    }
+
+    #[tokio::test]
+    async fn a_silent_session_gets_no_close_pass_and_that_is_not_a_failure() {
+        let p = dead_air();
+        let n = learner_lines(&p, "t", 6).len();
+        // Only session replies are scripted: a close-pass call would exhaust it.
+        let engine = PerTurn::new(
+            (0..n)
+                .map(|_| say("Nothing has to come — what's there?"))
+                .collect(),
+        );
+        let run = run_persona_real(&engine, &p, 6).await;
+        assert_eq!(
+            engine.systems.lock().unwrap().len(),
+            n,
+            "no close pass call"
+        );
+        assert!(run.close.is_none());
+        let c = run
+            .report
+            .checks
+            .iter()
+            .find(|c| c.name == "close_pass")
+            .unwrap();
+        assert!(c.passed && c.detail.starts_with("not applicable"), "{c:?}");
+        assert!(
+            !run.report
+                .checks
+                .iter()
+                .any(|c| c.name == "profile_from_silence"),
+            "rule 9 has nothing to grade without a close pass"
+        );
+        assert!(run.report.passed, "{:?}", run.report);
     }
 
     #[tokio::test]
