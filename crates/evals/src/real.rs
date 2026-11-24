@@ -19,14 +19,15 @@
 //! on a learner turn — so the real model answers the first learner line cold.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use athanor_core::engine::{AcpUpdate, MystagogueEngine};
+use async_trait::async_trait;
+use athanor_core::engine::{AcpPrompt, AcpUpdate, EngineError, MystagogueEngine, ToolDispatch};
 use athanor_core::store::Store;
 use athanor_core::Conductor;
 use serde::{Deserialize, Serialize};
 
-use crate::field::FieldCheck;
+use crate::field::{grade_profile_from_silence, FieldCheck};
 use crate::grade::{grade_mask_fidelity, grade_salt_refusal, grade_spiral, SessionTrace, Turn};
 use crate::personas::{Persona, Step};
 use crate::report::{CheckResult, ScenarioReport, SuiteReport};
@@ -146,11 +147,72 @@ impl TurnRecorder {
     }
 }
 
+// ---- the close pass ----
+
+/// What the close (condensation) pass produced: the raw model text and what
+/// `parse_condensation` made of it (the NOTE and PROFILE the app would store).
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct CloseRecord {
+    pub persona: String,
+    pub raw: String,
+    pub note: Option<String>,
+    pub profile: Vec<(String, String)>,
+}
+
+impl CloseRecord {
+    pub fn parse(persona: &str, raw: &str) -> Self {
+        let parsed = athanor_core::prompt::parse_condensation(raw);
+        CloseRecord {
+            persona: persona.to_string(),
+            raw: raw.to_string(),
+            note: parsed.note,
+            profile: parsed.profile_updates,
+        }
+    }
+}
+
+/// Forwards to `inner` and keeps the text of the tool-less call: that is the
+/// condensation pass (`Conductor::condense` sends no tools; session turns
+/// always carry the tool specs). Lets the runner use the app's own close path
+/// and still see the raw output it discards.
+struct CloseTap<'a> {
+    inner: &'a dyn MystagogueEngine,
+    close_text: Mutex<Option<String>>,
+}
+
+#[async_trait]
+impl MystagogueEngine for CloseTap<'_> {
+    async fn run_turn(
+        &self,
+        prompt: AcpPrompt,
+        tools: &dyn ToolDispatch,
+        sink: &mut (dyn FnMut(AcpUpdate) + Send),
+    ) -> Result<(), EngineError> {
+        if !prompt.tools.is_empty() {
+            return self.inner.run_turn(prompt, tools, sink).await;
+        }
+        let mut text = String::new();
+        let res = self
+            .inner
+            .run_turn(prompt, tools, &mut |u| {
+                if let AcpUpdate::TextDelta { text: t, .. } = &u {
+                    text.push_str(t);
+                }
+                sink(u);
+            })
+            .await;
+        *self.close_text.lock().unwrap() = Some(text);
+        res
+    }
+}
+
 // ---- running one persona ----
 
 pub struct RealRun {
     pub report: ScenarioReport,
     pub turns: Vec<Turn>,
+    /// `None` when the session never ran a turn (nothing to condense).
+    pub close: Option<CloseRecord>,
 }
 
 /// Runs one persona's learner lines through `engine` via a real `Conductor`
@@ -186,9 +248,24 @@ pub async fn run_persona_real(
             break;
         }
     }
+    // The app's own close path: condense (best-effort, tapped for its raw
+    // text), then land the session.
+    let tap = CloseTap { inner: engine, close_text: Mutex::new(None) };
+    let condense_err = if engine_error.is_none() {
+        conductor.condense(&tap).await.err().map(|e| e.to_string())
+    } else {
+        None
+    };
+    let close_record = tap
+        .close_text
+        .lock()
+        .unwrap()
+        .take()
+        .map(|raw| CloseRecord::parse(persona.name, &raw));
     let close = conductor.close(1);
     let turns = rec.finish();
 
+    let engine_failed = engine_error.is_some();
     let trace = SessionTrace::with_mask(persona.mask, turns.clone());
     let mut checks = vec![
         grade_spiral(&trace),
@@ -209,10 +286,25 @@ pub async fn run_persona_real(
         },
     ];
     checks.extend(persona.field.iter().map(|c| crate::field::run_check(*c, &trace)));
+    checks.push(CheckResult {
+        name: "close_pass".into(),
+        passed: close_record.is_some() || engine_failed,
+        detail: match (&close_record, &condense_err) {
+            (Some(_), None) => "close pass produced output".into(),
+            (Some(_), Some(e)) => format!("close pass errored after output: {e}"),
+            (None, Some(e)) => format!("close pass failed: {e}"),
+            (None, None) if engine_failed => "skipped: a session turn failed".into(),
+            (None, None) => "close pass produced no output".into(),
+        },
+    });
+    if let Some(rec) = &close_record {
+        checks.push(grade_profile_from_silence(&trace, &rec.raw));
+    }
 
     RealRun {
         report: ScenarioReport::new(persona.name, checks),
         turns,
+        close: close_record,
     }
 }
 
@@ -242,6 +334,8 @@ pub struct RealReport {
     pub model: String,
     pub max_turns: usize,
     pub suite: SuiteReport,
+    /// Raw close-pass output and its parsed NOTE/PROFILE, per persona.
+    pub closes: Vec<CloseRecord>,
 }
 
 /// `<dir>/<pack_version>-<model>.json`, with the model made path-safe.
@@ -280,6 +374,8 @@ fn judge_question(check: &FieldCheck) -> (&'static str, &'static str) {
     }
 }
 
+const RULE_9: (&str, &str) = ("9. No learning style from silence", "Does each `how_i_learn` line rest on something the learner said or did with words, seen more than once, or on one session's quiet?");
+
 fn render_turn(t: &Turn) -> String {
     match t {
         Turn::LearnerText(s) => format!("- **learner:** {s}"),
@@ -308,12 +404,25 @@ pub fn judge_checklist(model: &str, runs: &[(&Persona, &RealRun)]) -> String {
         if seen.is_empty() {
             out.push_str("- [ ] No field rule targets this persona; does the session read as the Mystagogue's voice under this mask?\n");
         }
+        out.push_str(&format!("- [ ] **{}** — {}\n", RULE_9.0, RULE_9.1));
         out.push_str("\n<details><summary>transcript</summary>\n\n");
         for t in &run.turns {
             out.push_str(&render_turn(t));
             out.push('\n');
         }
         out.push_str("\n</details>\n");
+        if let Some(c) = &run.close {
+            out.push_str("\n**Close pass (raw):**\n\n```\n");
+            out.push_str(&c.raw);
+            out.push_str("\n```\n\n");
+            out.push_str(&format!("- parsed NOTE: {}\n", c.note.as_deref().unwrap_or("(none)")));
+            if c.profile.is_empty() {
+                out.push_str("- parsed PROFILE: (none)\n");
+            }
+            for (sec, add) in &c.profile {
+                out.push_str(&format!("- parsed PROFILE `{sec}`: {add}\n"));
+            }
+        }
     }
     out
 }
@@ -347,6 +456,7 @@ pub async fn run_real_suite(
         model: model.to_string(),
         max_turns: cfg.max_turns,
         suite: SuiteReport::assemble(PACK_VERSION, runs.iter().map(|r| r.report.clone()).collect()),
+        closes: runs.iter().filter_map(|r| r.close.clone()).collect(),
     };
     let json_path = write_report(dir, &report)?;
     let pairs: Vec<(&Persona, &RealRun)> = personas.iter().zip(runs.iter()).collect();
@@ -454,13 +564,33 @@ mod tests {
     async fn a_persona_runs_through_the_conductor_and_is_graded() {
         let p = dead_air();
         let n = learner_lines(&p, "t", 6).len();
-        let engine = PerTurn::new((0..n).map(|_| say("I'm here.")).collect());
+        let mut replies: Vec<_> = (0..n).map(|_| say("I'm here.")).collect();
+        replies.push(say("NOTE: Mostly dots. Left the door open.\nPROFILE how_i_learn: goes quiet, so likely a slow processor"));
+        let engine = PerTurn::new(replies);
         let run = run_persona_real(&engine, &p, 6).await;
         assert!(run.report.checks.iter().any(|c| c.name == "spiral"));
         assert!(run.report.checks.iter().any(|c| c.name == "empty_turns"));
         assert!(run.report.checks.iter().find(|c| c.name == "engine_ok").unwrap().passed);
         assert!(run.report.checks.iter().find(|c| c.name == "session_lands").unwrap().passed);
-        assert_eq!(engine.systems.lock().unwrap().len(), n);
+        assert_eq!(engine.systems.lock().unwrap().len(), n + 1, "turns + close pass");
+        let close = run.close.expect("close pass recorded");
+        assert!(close.raw.contains("slow processor"));
+        assert_eq!(close.note.as_deref(), Some("Mostly dots. Left the door open."));
+        assert_eq!(close.profile.len(), 1);
+        let g = run.report.checks.iter().find(|c| c.name == "profile_from_silence").unwrap();
+        assert!(!g.passed, "a silence-based how_i_learn line must fail rule 9: {g:?}");
+    }
+
+    #[tokio::test]
+    async fn a_clean_close_passes_rule_9() {
+        let p = dead_air();
+        let n = learner_lines(&p, "t", 6).len();
+        let mut replies: Vec<_> = (0..n).map(|_| say("Here.")).collect();
+        replies.push(say("NOTE: Mostly dots. Left the door open."));
+        let engine = PerTurn::new(replies);
+        let run = run_persona_real(&engine, &p, 6).await;
+        let g = run.report.checks.iter().find(|c| c.name == "profile_from_silence").unwrap();
+        assert!(g.passed, "{g:?}");
     }
 
     #[tokio::test]
@@ -493,6 +623,7 @@ mod tests {
             model: "claude-opus-5-5".into(),
             max_turns: 6,
             suite: SuiteReport::assemble("v1", vec![ScenarioReport::new("x", vec![])]),
+            closes: vec![CloseRecord::parse("x", "NOTE: n")],
         };
         let path = write_report(&dir, &rep).unwrap();
         let a = std::fs::read_to_string(&path).unwrap();
@@ -509,12 +640,15 @@ mod tests {
         let run = RealRun {
             report: ScenarioReport::new("returner", vec![]),
             turns: vec![Turn::LearnerText("a kite".into()), Turn::Assistant("Taut?".into())],
+            close: Some(CloseRecord::parse("returner", "NOTE: Kite, slack and taut.")),
         };
         let md = judge_checklist("m", &[(&p, &run)]);
         assert!(md.contains("## returner"));
         assert!(md.contains("5. A stalled question rests"));
         assert!(md.contains("1. You have no clock"));
         assert_eq!(md.matches("3. One question per reply").count(), 1);
+        assert!(md.contains("9. No learning style from silence"));
+        assert!(md.contains("parsed NOTE: Kite, slack and taut."));
         assert!(md.contains("**learner:** a kite") && md.contains("**mystagogue:** Taut?"));
     }
 
@@ -523,7 +657,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("evals-real-suite-{}", std::process::id()));
         let p = dead_air();
         let n = learner_lines(&p, "t", 6).len();
-        let engine = PerTurn::new((0..n).map(|_| say("Here.")).collect());
+        let mut replies: Vec<_> = (0..n).map(|_| say("Here.")).collect();
+        replies.push(say("NOTE: ok"));
+        let engine = PerTurn::new(replies);
         let cfg = RealConfig::parse(None, None).unwrap();
         run_real_suite(&engine, "claude-opus-5-5", &cfg, vec![p], &dir).await.unwrap();
         assert!(dir.join("v1-claude-opus-5-5.json").exists());
