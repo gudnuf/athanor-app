@@ -101,10 +101,9 @@ Say it aloud as a live thought, then open it:
 > "And now that *that's* fixed — here's what it opens: [the child question]. I'm
 > leaving that one volatile for next time."
 
-**Mechanically: name the child as `fix_salt`'s `child_question` — that opens
-it.** Don't also call `open_thread` for the same question; that makes a twin.
-(If you leave `child_question` out, follow with `open_thread`.) The eval
-harness checks this deterministically.
+**Mechanically: every `fix_salt` names its child as `child_question` — that
+opens it.** Never also call `open_thread` for the same question; that makes a
+twin. The eval harness checks this deterministically.
 
 ### 6. The one-line session trace
 

@@ -75,16 +75,12 @@ pub fn eager_parroter() -> Persona {
                             "realization": question,
                             "thread_id": thread_id,
                             "domains": ["thermodynamics"],
+                            // A named child, so the spiral check passes
+                            // while salt-refusal still fails: the two graders
+                            // are independent, and this persona only
+                            // exercises the latter.
+                            "child_question": "what does this open?",
                         }),
-                    ),
-                    // Correct tool ORDER (fix_salt -> open_thread) so the
-                    // spiral check passes while salt-refusal still fails —
-                    // the two graders are independent, and this persona only
-                    // exercises the discipline the latter is built for.
-                    tool_call(
-                        "2",
-                        "open_thread",
-                        json!({ "question": "what does this open?" }),
                     ),
                     AcpUpdate::TurnComplete,
                 ]),
@@ -421,12 +417,10 @@ pub fn explainer() -> Persona {
                     tool_call(
                         "1",
                         "fix_salt",
-                        json!({ "realization": "the push and what it causes are never the same moment; there's always a letting-go in between" }),
-                    ),
-                    tool_call(
-                        "2",
-                        "open_thread",
-                        json!({ "question": "what does the letting-go cost?" }),
+                        json!({
+                            "realization": "the push and what it causes are never the same moment; there's always a letting-go in between",
+                            "child_question": "what does the letting-go cost?",
+                        }),
                     ),
                     AcpUpdate::text_delta(
                         "Fixed. The tide waiting on the moon has the same shape as your kayak. One thing, or two?",

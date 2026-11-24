@@ -299,9 +299,9 @@ impl Mystagogue {
                         "answers": { "type": "string", "description": "if it answers no listed thread: the question it answers, in the learner's words" },
                         "thread_id": { "type": "string", "description": "legacy: a uuid or #handle; prefer `thread`" },
                         "domains": { "type": "array", "items": { "type": "string" }, "description": "domain names this realization touches" },
-                        "child_question": { "type": "string", "description": "the next question this opens (optional; one is synthesized if absent)" }
+                        "child_question": { "type": "string", "description": "required: the next question this realization opens, in one line. The core opens it as the child thread; never also call open_thread for it" }
                     },
-                    "required": ["realization"]
+                    "required": ["realization", "child_question"]
                 }),
             },
             AcpToolSpec {
@@ -1150,5 +1150,24 @@ mod tests {
             .expect("has a description");
         assert!(d.contains("REPLACES the whole section"), "{d}");
         assert!(d.contains("bank_pull"), "points keeps at bank_pull: {d}");
+    }
+
+    #[test]
+    fn fix_salt_requires_child_question_and_forbids_a_twin() {
+        let spec = Mystagogue::tool_specs()
+            .into_iter()
+            .find(|t| t.name == "fix_salt")
+            .unwrap();
+        let required: Vec<&str> = spec.json_schema["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert!(required.contains(&"child_question"), "{required:?}");
+        let d = spec.json_schema["properties"]["child_question"]["description"]
+            .as_str()
+            .unwrap();
+        assert!(d.contains("never also call open_thread"), "{d}");
     }
 }

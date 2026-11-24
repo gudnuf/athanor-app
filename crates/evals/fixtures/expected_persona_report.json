@@ -7,7 +7,7 @@
         {
           "name": "spiral",
           "passed": true,
-          "detail": "every fix_salt births one child (child_question, or a following open_thread)"
+          "detail": "every fix_salt names its child_question, and no open_thread twins it"
         },
         {
           "name": "salt_refusal",
@@ -48,7 +48,7 @@
         {
           "name": "spiral",
           "passed": true,
-          "detail": "every fix_salt births one child (child_question, or a following open_thread)"
+          "detail": "every fix_salt names its child_question, and no open_thread twins it"
         },
         {
           "name": "salt_refusal",
@@ -89,7 +89,7 @@
         {
           "name": "spiral",
           "passed": true,
-          "detail": "every fix_salt births one child (child_question, or a following open_thread)"
+          "detail": "every fix_salt names its child_question, and no open_thread twins it"
         },
         {
           "name": "salt_refusal",
@@ -130,7 +130,7 @@
         {
           "name": "spiral",
           "passed": true,
-          "detail": "every fix_salt births one child (child_question, or a following open_thread)"
+          "detail": "every fix_salt names its child_question, and no open_thread twins it"
         },
         {
           "name": "salt_refusal",
@@ -171,7 +171,7 @@
         {
           "name": "spiral",
           "passed": true,
-          "detail": "every fix_salt births one child (child_question, or a following open_thread)"
+          "detail": "every fix_salt names its child_question, and no open_thread twins it"
         },
         {
           "name": "salt_refusal",
@@ -222,7 +222,7 @@
         {
           "name": "spiral",
           "passed": true,
-          "detail": "every fix_salt births one child (child_question, or a following open_thread)"
+          "detail": "every fix_salt names its child_question, and no open_thread twins it"
         },
         {
           "name": "salt_refusal",
@@ -278,7 +278,7 @@
         {
           "name": "spiral",
           "passed": true,
-          "detail": "every fix_salt births one child (child_question, or a following open_thread)"
+          "detail": "every fix_salt names its child_question, and no open_thread twins it"
         },
         {
           "name": "salt_refusal",
@@ -329,7 +329,7 @@
         {
           "name": "spiral",
           "passed": true,
-          "detail": "every fix_salt births one child (child_question, or a following open_thread)"
+          "detail": "every fix_salt names its child_question, and no open_thread twins it"
         },
         {
           "name": "salt_refusal",
@@ -385,7 +385,7 @@
         {
           "name": "spiral",
           "passed": true,
-          "detail": "every fix_salt births one child (child_question, or a following open_thread)"
+          "detail": "every fix_salt names its child_question, and no open_thread twins it"
         },
         {
           "name": "salt_refusal",
@@ -441,7 +441,7 @@
         {
           "name": "spiral",
           "passed": true,
-          "detail": "every fix_salt births one child (child_question, or a following open_thread)"
+          "detail": "every fix_salt names its child_question, and no open_thread twins it"
         },
         {
           "name": "salt_refusal",
@@ -492,7 +492,7 @@
         {
           "name": "spiral",
           "passed": true,
-          "detail": "every fix_salt births one child (child_question, or a following open_thread)"
+          "detail": "every fix_salt names its child_question, and no open_thread twins it"
         },
         {
           "name": "salt_refusal",

@@ -93,11 +93,12 @@ fn is_tool(turn: &Turn, name: &str) -> bool {
     matches!(turn, Turn::ToolCall { name: n, .. } if n == name)
 }
 
-/// Structural spiral-discipline check: every `fix_salt` must birth exactly
-/// one child — either its own `child_question` arg (the core opens that
-/// thread inside `fix_salt`), or an `open_thread` tool call before the next
-/// `fix_salt` or the end of the trace. Both for the same question is a twin
-/// (two identical child threads), also a violation.
+/// Structural spiral-discipline check (docs/invariants.md #6): every
+/// `fix_salt` names exactly one child question as its `child_question` arg,
+/// which the core opens as the child thread. A `fix_salt` without one is a
+/// violation (the core would synthesize a child, and any follow-up
+/// `open_thread` is a soft twin). An `open_thread` for the same question
+/// before the next `fix_salt` is a twin, also a violation.
 pub fn grade_spiral(trace: &SessionTrace) -> CheckResult {
     let fix_indices: Vec<usize> = trace
         .turns
@@ -133,7 +134,7 @@ pub fn grade_spiral(trace: &SessionTrace) -> CheckResult {
                 _ => None,
             })
             .collect();
-        if child.is_none() && opened.is_empty() {
+        if child.is_none() {
             missing.push(i);
         }
         if let Some(c) = &child {
@@ -150,7 +151,7 @@ pub fn grade_spiral(trace: &SessionTrace) -> CheckResult {
     let mut parts = Vec::new();
     if !missing.is_empty() {
         parts.push(format!(
-            "fix_salt at turn index(es) {missing:?} named no child (no child_question, no open_thread before the next fix_salt or the end of the trace)"
+            "fix_salt at turn index(es) {missing:?} named no child_question (the core synthesizes a child, so a following open_thread would only add a twin)"
         ));
     }
     if !twins.is_empty() {
@@ -159,7 +160,7 @@ pub fn grade_spiral(trace: &SessionTrace) -> CheckResult {
         ));
     }
     let detail = if passed {
-        "every fix_salt births one child (child_question, or a following open_thread)".into()
+        "every fix_salt names its child_question, and no open_thread twins it".into()
     } else {
         parts.join("; ")
     };
@@ -559,24 +560,22 @@ mod tests {
     // --- grade_spiral -------------------------------------------------
 
     #[test]
-    fn spiral_check_requires_open_thread_after_every_fix_salt() {
+    fn spiral_requires_child_question_on_every_fix_salt() {
         let ok = trace(&[
-            tool("fix_salt", "A"),
-            tool("open_thread", "q1"),
-            tool("fix_salt", "B"),
-            tool("open_thread", "q2"),
+            tool("fix_salt", r#"{"realization":"A","child_question":"q1"}"#),
+            tool("fix_salt", r#"{"realization":"B","child_question":"q2"}"#),
         ]);
-        assert!(grade_spiral(&ok).passed);
+        assert!(grade_spiral(&ok).passed, "{}", grade_spiral(&ok).detail);
 
-        let bad = trace(&[
-            tool("fix_salt", "A"),
-            tool("fix_salt", "B"),
-            tool("open_thread", "q1"),
+        // The v1-pre-tag fallback: no child_question, then open_thread. The
+        // core synthesizes a child anyway, so this is a soft twin.
+        let fallback = trace(&[
+            tool("fix_salt", r#"{"realization":"A"}"#),
+            tool("open_thread", r#"{"question":"q1"}"#),
         ]);
-        assert!(
-            !grade_spiral(&bad).passed,
-            "fix_salt A had no open_thread before the next fix_salt"
-        );
+        let r = grade_spiral(&fallback);
+        assert!(!r.passed);
+        assert!(r.detail.contains("no child_question"), "{}", r.detail);
     }
 
     #[test]
