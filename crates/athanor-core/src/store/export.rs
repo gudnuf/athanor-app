@@ -320,6 +320,21 @@ impl Store {
                 };
                 let _ = write!(body, "##### {who}\n\n{}\n\n", t.text.trim());
             }
+            let links = match self.session_links(&s.id) {
+                Ok(l) => l,
+                Err(e) => {
+                    session_err.get_or_insert(e);
+                    Vec::new()
+                }
+            };
+            let links_fm = format!(
+                "[{}]",
+                links
+                    .iter()
+                    .map(|(t, role)| format!("{}:{role}", crate::ids::handle_of(t)))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
             let tp = s
                 .thread_id
                 .as_deref()
@@ -345,6 +360,14 @@ impl Store {
                     ("ended_at", ts_opt(s.ended_at)),
                     ("created_at", ts(s.created_at)),
                     ("updated_at", ts(s.updated_at)),
+                    (
+                        "minutes",
+                        s.minutes
+                            .map(|m| m.to_string())
+                            .unwrap_or_else(|| "null".to_string()),
+                    ),
+                    ("tended_day", q_opt(s.tended_day.as_deref())),
+                    ("threads", links_fm),
                     ("turns", turns.len().to_string()),
                 ],
                 Some(&body),
@@ -450,9 +473,15 @@ mod tests {
             )
         );
         c.execute(
-            "INSERT INTO sessions (id, thread_id, mask, mode, state, transcript, started_at, ended_at, created_at, updated_at, device_id)
-             VALUES ('ses-1', 'thr-entropy', 'philosophus', 'explain', 'closed', ?1, 1784019600, 1784020800, 1784019600, 1784020800, 'device')",
+            "INSERT INTO sessions (id, thread_id, mask, mode, state, transcript, started_at, ended_at, created_at, updated_at, device_id, minutes, tended_day)
+             VALUES ('ses-1', 'thr-entropy', 'philosophus', 'explain', 'closed', ?1, 1784019600, 1784020800, 1784019600, 1784020800, 'device', 20, '2026-07-14')",
             params![transcript],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO session_threads (session_id, thread_id, role, created_at)
+             VALUES ('ses-1', 'thr-entropy', 'focal', 1784019600)",
+            [],
         )
         .unwrap();
         c.execute(

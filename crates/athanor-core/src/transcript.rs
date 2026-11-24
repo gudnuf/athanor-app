@@ -39,7 +39,7 @@ impl TranscriptRole {
     /// The full-line marker sentinel that introduces this role's block in the
     /// persisted transcript. A line equal to one of these (after trimming the
     /// trailing newline) starts a new block.
-    fn marker(self) -> &'static str {
+    pub(crate) fn marker(self) -> &'static str {
         match self {
             TranscriptRole::Learner => "◇ LEARNER",
             TranscriptRole::Mystagogue => "☿ MYSTAGOGUE",

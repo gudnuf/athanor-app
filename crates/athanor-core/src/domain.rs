@@ -178,4 +178,9 @@ pub struct Session {
     pub created_at: u64,
     pub updated_at: u64,
     pub device_id: String,
+    /// Measured minutes (set on close; NULL on rows from before schema v3
+    /// that were never backfilled, and on sessions that never closed).
+    pub minutes: Option<u32>,
+    /// The UTC day this session tended (set on close), if it did.
+    pub tended_day: Option<String>,
 }

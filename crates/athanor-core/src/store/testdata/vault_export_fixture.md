@@ -1,7 +1,7 @@
 ---
 athanor_vault: 1
 exported_at: "2026-11-22T21:00:00Z"
-schema_version: 2
+schema_version: 3
 device_id: "device"
 counts: {profile_sections: 1, domains: 1, pull_notes: 0, threads: 2, realizations: 1, correspondences: 0, sessions: 1, tending_days: 1, kindled: 1}
 ---
@@ -116,6 +116,9 @@ started_at: "2026-07-14T09:00:00Z"
 ended_at: "2026-07-14T09:20:00Z"
 created_at: "2026-07-14T09:00:00Z"
 updated_at: "2026-07-14T09:20:00Z"
+minutes: 20
+tended_day: "2026-07-14"
+threads: [#ntropy:focal]
 turns: 2
 ---
 

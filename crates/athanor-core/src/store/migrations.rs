@@ -75,6 +75,61 @@ pub(crate) const MIGRATIONS: &[&str] = &[
       note TEXT NOT NULL,
       created_at INTEGER NOT NULL, device_id TEXT NOT NULL);
     "#,
+    // v3: session <-> thread links, measured minutes, tended day. The links are
+    // what the cold room reads (which domains a session touched). The backfill
+    // corrects placeholders only: it sets `tending.minutes` where it is 0 and
+    // `tending.thread_ids` where it is '[]'; it never inserts or deletes a
+    // tending day and never touches created_at (invariant #5: fire is
+    // append-only). `minutes`/`tended_day` are filtered on the learner marker
+    // (transcript.rs `◇ LEARNER`) so ghost sessions are not credited.
+    r#"
+    ALTER TABLE sessions ADD COLUMN minutes INTEGER;
+    ALTER TABLE sessions ADD COLUMN tended_day TEXT;
+    CREATE TABLE session_threads (
+      session_id TEXT NOT NULL REFERENCES sessions(id),
+      thread_id  TEXT NOT NULL REFERENCES threads(id),
+      role TEXT NOT NULL,          -- focal|worked|opened|fixed|born|evaporated
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (session_id, thread_id, role));
+    UPDATE sessions SET minutes = MAX(1, MIN(60, (ended_at - started_at + 59) / 60))
+      WHERE state = 'closed' AND ended_at IS NOT NULL AND transcript LIKE '%◇ LEARNER%';
+    UPDATE sessions SET tended_day = strftime('%Y-%m-%d', ended_at, 'unixepoch')
+      WHERE state = 'closed' AND ended_at IS NOT NULL AND transcript LIKE '%◇ LEARNER%'
+        AND strftime('%Y-%m-%d', ended_at, 'unixepoch') IN (SELECT day FROM tending);
+    INSERT OR IGNORE INTO session_threads (session_id, thread_id, role, created_at)
+      SELECT id, thread_id, 'focal', started_at FROM sessions WHERE thread_id IS NOT NULL;
+    INSERT OR IGNORE INTO session_threads (session_id, thread_id, role, created_at)
+      SELECT sid, child_thread_id, 'born', created_at FROM (
+        SELECT r.child_thread_id, r.created_at,
+          (SELECT s.id FROM sessions s WHERE s.state = 'closed'
+             AND r.created_at BETWEEN s.started_at AND s.ended_at
+             ORDER BY s.started_at DESC LIMIT 1) AS sid
+        FROM realizations r WHERE r.child_thread_id IS NOT NULL) WHERE sid IS NOT NULL;
+    INSERT OR IGNORE INTO session_threads (session_id, thread_id, role, created_at)
+      SELECT sid, id, 'opened', born FROM (
+        SELECT t.id, t.born,
+          (SELECT s.id FROM sessions s WHERE s.state = 'closed'
+             AND t.born BETWEEN s.started_at AND s.ended_at
+             ORDER BY s.started_at DESC LIMIT 1) AS sid
+        FROM threads t WHERE t.parent_realization_id IS NULL) WHERE sid IS NOT NULL;
+    UPDATE tending SET minutes = (SELECT COALESCE(SUM(minutes), 0) FROM sessions WHERE tended_day = tending.day)
+      WHERE minutes = 0;
+    UPDATE tending SET thread_ids = (
+        SELECT json_group_array(DISTINCT st.thread_id) FROM session_threads st
+        JOIN sessions s ON s.id = st.session_id WHERE s.tended_day = tending.day)
+      WHERE thread_ids = '[]'
+        AND EXISTS (SELECT 1 FROM session_threads st JOIN sessions s ON s.id = st.session_id WHERE s.tended_day = tending.day);
+    -- born children are excluded, matching the going-forward rule
+    -- (mark_session_threads_worked skips born/evaporated links).
+    UPDATE threads SET last_worked = (
+        SELECT MAX(s.ended_at) FROM session_threads st JOIN sessions s ON s.id = st.session_id
+        WHERE st.thread_id = threads.id AND s.state = 'closed' AND st.role <> 'born')
+      WHERE last_worked IS NULL;
+    UPDATE threads SET domain_id = (
+        SELECT rd.domain_id FROM realization_domains rd
+        WHERE rd.realization_id = threads.parent_realization_id ORDER BY rd.rowid LIMIT 1)
+      WHERE domain_id IS NULL AND parent_realization_id IS NOT NULL;
+    "#,
 ];
 // NOTE: threads.parent_realization_id and realizations.child_thread_id are a
 // deliberate FK cycle — SQLite does not enforce FK order within a CREATE, and
@@ -129,12 +184,159 @@ mod tests {
                 "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN
                  ('domains','pull_notes','threads','realizations','realization_domains',
                   'tending','profile','traces','kindling','correspondences','sessions',
-                  'session_notes')",
+                  'session_notes','session_threads')",
                 [],
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(count, 12, "all v1 + v2 tables created");
+        assert_eq!(count, 13, "all v1 + v2 + v3 tables created");
+    }
+
+    fn user_version(conn: &Connection) -> i64 {
+        conn.pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn v3_adds_session_threads_and_session_columns() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        assert_eq!(user_version(&conn), 3);
+        let cols = |t: &str| -> i64 {
+            conn.query_row(
+                &format!("SELECT count(*) FROM pragma_table_info('{t}')"),
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(cols("session_threads"), 4);
+        let has = |c: &str| -> i64 {
+            conn.query_row(
+                "SELECT count(*) FROM pragma_table_info('sessions') WHERE name = ?1",
+                [c],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(has("minutes"), 1);
+        assert_eq!(has("tended_day"), 1);
+    }
+
+    #[test]
+    fn v3_learner_marker_matches_transcript_module() {
+        let marker = crate::transcript::TranscriptRole::Learner.marker();
+        assert!(
+            MIGRATIONS[2].contains(&format!("'%{marker}%'")),
+            "the migration's LIKE literal must equal transcript.rs's marker"
+        );
+    }
+
+    #[test]
+    fn v3_backfills_from_v2_data() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate_with(&conn, &MIGRATIONS[..2]).unwrap();
+        let learner =
+            crate::transcript::format_block(crate::transcript::TranscriptRole::Learner, "hi");
+        // The seed has a parent<->child FK cycle; load it with FKs off, then
+        // migrate with them ON (as the real Store does).
+        conn.pragma_update(None, "foreign_keys", false).unwrap();
+        let x = |sql: &str| conn.execute(sql, []).unwrap();
+        x("INSERT INTO domains VALUES ('D1','one',1,1,'d',NULL), ('D2','two',1,1,'d',NULL)");
+        x("INSERT INTO threads (id,prompt,domain_id,state,born,last_worked,parent_realization_id,created_at,updated_at,device_id)
+           VALUES ('T0','parent?',NULL,'fixed',100,NULL,NULL,100,100,'d'),
+                  ('C','child?',NULL,'volatile',1300,NULL,'R',1300,1300,'d'),
+                  ('O','opened in session?',NULL,'volatile',1200,NULL,NULL,1200,1200,'d')");
+        x("INSERT INTO realizations VALUES ('R','a realization',1300,'T0','C',1300,'d')");
+        x("INSERT INTO realization_domains VALUES ('R','D2'), ('R','D1')");
+        conn.execute(
+            "INSERT INTO sessions (id,thread_id,mask,mode,state,transcript,started_at,ended_at,created_at,updated_at,device_id)
+             VALUES ('A',NULL,'m','x','closed',?1,1000,1600,1000,1600,'d')",
+            [&learner],
+        )
+        .unwrap();
+        x("INSERT INTO sessions (id,thread_id,mask,mode,state,transcript,started_at,ended_at,created_at,updated_at,device_id)
+           VALUES ('G',NULL,'m','x','closed','',5000,5010,5000,5010,'d'),
+                  ('X',NULL,'m','x','abandoned','',1500,1700,1500,1700,'d')");
+        x("INSERT INTO tending VALUES ('1970-01-01',0,'[]',1600,'d')");
+
+        conn.pragma_update(None, "foreign_keys", true).unwrap();
+        migrate(&conn).unwrap();
+
+        let q = |sql: &str| -> Option<i64> { conn.query_row(sql, [], |r| r.get(0)).unwrap() };
+        assert_eq!(q("SELECT minutes FROM sessions WHERE id='A'"), Some(10));
+        let day: Option<String> = conn
+            .query_row("SELECT tended_day FROM sessions WHERE id='A'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(day.as_deref(), Some("1970-01-01"));
+        assert_eq!(
+            q("SELECT minutes FROM sessions WHERE id='G'"),
+            None,
+            "ghost uncredited"
+        );
+        let gday: Option<String> = conn
+            .query_row("SELECT tended_day FROM sessions WHERE id='G'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(gday, None);
+        assert_eq!(
+            q("SELECT count(*) FROM session_threads WHERE session_id='X'"),
+            Some(0)
+        );
+        assert_eq!(
+            q("SELECT minutes FROM tending WHERE day='1970-01-01'"),
+            Some(10)
+        );
+        let ids: String = conn
+            .query_row("SELECT thread_ids FROM tending", [], |r| r.get(0))
+            .unwrap();
+        let mut ids: Vec<String> = serde_json::from_str(&ids).unwrap();
+        ids.sort();
+        assert_eq!(ids, vec!["C".to_string(), "O".to_string()]);
+        let mut stmt = conn
+            .prepare("SELECT session_id, thread_id, role FROM session_threads ORDER BY thread_id")
+            .unwrap();
+        let links: Vec<(String, String, String)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            links,
+            vec![
+                ("A".into(), "C".into(), "born".into()),
+                ("A".into(), "O".into(), "opened".into())
+            ]
+        );
+        let dom: Option<String> = conn
+            .query_row("SELECT domain_id FROM threads WHERE id='C'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(dom.as_deref(), Some("D2"), "first-inserted domain wins");
+        let dom0: Option<String> = conn
+            .query_row("SELECT domain_id FROM threads WHERE id='T0'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(dom0, None);
+        assert_eq!(
+            q("SELECT last_worked FROM threads WHERE id='O'"),
+            Some(1600)
+        );
+        assert_eq!(
+            q("SELECT last_worked FROM threads WHERE id='C'"),
+            None,
+            "born children are not 'worked' (same rule as going forward)"
+        );
+        assert_eq!(
+            q("SELECT count(*) FROM tending"),
+            Some(1),
+            "no day added or removed"
+        );
     }
 
     #[test]
@@ -144,7 +346,7 @@ mod tests {
         let version: i64 = conn
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
-        assert_eq!(version as usize, MIGRATIONS.len(), "migrated to v2");
+        assert_eq!(version as usize, MIGRATIONS.len(), "migrated to latest");
         let cols: i64 = conn
             .query_row(
                 "SELECT count(*) FROM pragma_table_info('session_notes')",

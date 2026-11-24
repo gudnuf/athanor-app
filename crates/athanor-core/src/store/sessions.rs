@@ -11,7 +11,7 @@ use crate::ids::new_id;
 
 use super::Store;
 
-const SESSION_COLS: &str = "id, thread_id, mask, mode, state, transcript, started_at, ended_at, created_at, updated_at, device_id";
+const SESSION_COLS: &str = "id, thread_id, mask, mode, state, transcript, started_at, ended_at, created_at, updated_at, device_id, minutes, tended_day";
 
 fn session_from_row(row: &rusqlite::Row) -> rusqlite::Result<Session> {
     Ok(Session {
@@ -26,6 +26,8 @@ fn session_from_row(row: &rusqlite::Row) -> rusqlite::Result<Session> {
         created_at: row.get(8)?,
         updated_at: row.get(9)?,
         device_id: row.get(10)?,
+        minutes: row.get(11)?,
+        tended_day: row.get(12)?,
     })
 }
 

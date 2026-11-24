@@ -14,6 +14,7 @@ mod profile;
 mod realizations;
 mod recall;
 mod session_notes;
+mod session_threads;
 mod sessions;
 mod tending;
 mod threads;
