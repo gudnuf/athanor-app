@@ -41,6 +41,7 @@ pub struct FfiTextBellowsMetrics {
     pub self_closes: u64,
     pub revisions_dropped: u64,
     pub resets: u64,
+    pub empty_turns: u64,
 }
 
 impl From<TextBellowsMetrics> for FfiTextBellowsMetrics {
@@ -54,6 +55,7 @@ impl From<TextBellowsMetrics> for FfiTextBellowsMetrics {
             self_closes: m.self_closes,
             revisions_dropped: m.revisions_dropped,
             resets: m.resets,
+            empty_turns: m.empty_turns,
         }
     }
 }
@@ -239,6 +241,7 @@ mod tests {
             self_closes: 6,
             revisions_dropped: 7,
             resets: 8,
+            empty_turns: 9,
         };
         let f = FfiTextBellowsMetrics::from(m);
         assert_eq!(
@@ -250,9 +253,10 @@ mod tests {
                 f.timeouts,
                 f.self_closes,
                 f.revisions_dropped,
-                f.resets
+                f.resets,
+                f.empty_turns
             ),
-            (1, 2, 3, 4, 5, 6, 7, 8)
+            (1, 2, 3, 4, 5, 6, 7, 8, 9)
         );
     }
 }

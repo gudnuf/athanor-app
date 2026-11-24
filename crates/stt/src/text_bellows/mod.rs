@@ -37,6 +37,7 @@ pub struct TextBellowsMetrics {
     pub self_closes: u64, // final/error arriving on the ACTIVE request (the recognizer ended it itself)
     pub revisions_dropped: u64, // recognizer revised an already-committed word (committed form kept)
     pub resets: u64,            // hypothesis restarted mid-request (see the committer)
+    pub empty_turns: u64, // turns that latched with zero committed words: dropped, no UtteranceEnded
 }
 
 enum Status {
@@ -50,6 +51,8 @@ struct Request {
     committer: Committer,
     /// Only `Finalized` and `UtteranceEnded` live here.
     outbox: Vec<TextBellowsEvent>,
+    /// Words (alphanumeric content) this request has committed.
+    words: usize,
     started_ms: u64,
     status: Status,
 }
@@ -70,6 +73,8 @@ pub struct TextBellows {
     onset_ms: Option<u64>,
     empty_self_closes: u32,
     halted: bool,
+    /// Words committed by already-closed requests of the turn in progress.
+    turn_words: usize,
 }
 
 fn words_of(text: &str) -> Vec<String> {
@@ -109,6 +114,7 @@ impl TextBellows {
             onset_ms: None,
             empty_self_closes: 0,
             halted: false,
+            turn_words: 0,
         }
     }
 
@@ -139,11 +145,40 @@ impl TextBellows {
             id,
             committer: Committer::new(self.cfg.agree_n, self.cfg.holdback_words),
             outbox: Vec::new(),
+            words: 0,
             started_ms: now_ms,
             status: Status::Active,
         });
         self.metrics.requests += 1;
         id
+    }
+
+    /// Push a `Finalized` into request `i`'s outbox, counting its real words.
+    fn commit(&mut self, i: usize, text: String) {
+        let n = text
+            .split_whitespace()
+            .filter(|w| w.chars().any(char::is_alphanumeric))
+            .count();
+        if n == 0 {
+            return; // punctuation-only / blank text never reaches the transcript
+        }
+        self.requests[i].words += n;
+        self.requests[i]
+            .outbox
+            .push(TextBellowsEvent::Finalized(text));
+    }
+
+    /// A turn boundary where the newest request already closed / none exists:
+    /// emit `UtteranceEnded` only if the turn actually had words.
+    fn end_turn_without_request(&mut self, into: Option<usize>) {
+        let had_words = std::mem::take(&mut self.turn_words) > 0;
+        match (had_words, into) {
+            (true, Some(i)) => self.requests[i]
+                .outbox
+                .push(TextBellowsEvent::UtteranceEnded),
+            (true, None) => self.pre_outbox.push(TextBellowsEvent::UtteranceEnded),
+            (false, _) => self.metrics.empty_turns += 1,
+        }
     }
 
     fn index_of(&self, id: u64) -> Option<usize> {
@@ -202,10 +237,13 @@ impl TextBellows {
                         ends_turn: true,
                     }
                 }
-                Status::Closed => r.outbox.push(TextBellowsEvent::UtteranceEnded),
+                Status::Closed => {
+                    let i = self.requests.len() - 1;
+                    self.end_turn_without_request(Some(i));
+                }
                 Status::Active => unreachable!("active handled above"),
             },
-            None => self.pre_outbox.push(TextBellowsEvent::UtteranceEnded),
+            None => self.end_turn_without_request(None),
         }
     }
 
@@ -222,7 +260,7 @@ impl TextBellows {
         let words = words_of(text);
         let (fin, _) = self.requests[i].committer.on_partial(&words);
         if let Some(f) = fin {
-            self.requests[i].outbox.push(TextBellowsEvent::Finalized(f));
+            self.commit(i, f);
         }
         if !words.is_empty() {
             self.empty_self_closes = 0;
@@ -257,9 +295,10 @@ impl TextBellows {
             Status::Active => {
                 let rem = self.requests[i].committer.on_final(&words);
                 if let Some(r) = rem {
-                    self.requests[i].outbox.push(TextBellowsEvent::Finalized(r));
+                    self.commit(i, r);
                 }
                 self.requests[i].status = Status::Closed;
+                self.turn_words += self.requests[i].words;
                 self.metrics.self_closes += 1;
                 if self.requests[i].committer.has_seen_words() {
                     self.empty_self_closes = 0;
@@ -279,7 +318,7 @@ impl TextBellows {
                 ends_turn,
             } => {
                 if let Some(r) = self.requests[i].committer.on_final(&words) {
-                    self.requests[i].outbox.push(TextBellowsEvent::Finalized(r));
+                    self.commit(i, r);
                 }
                 if !words.is_empty() {
                     self.empty_self_closes = 0;
@@ -290,13 +329,20 @@ impl TextBellows {
     }
 
     fn finish_closing(&mut self, i: usize, since_ms: u64, ends_turn: bool, now_ms: u64) {
-        if ends_turn {
+        self.requests[i].status = Status::Closed;
+        if !ends_turn {
+            self.turn_words += self.requests[i].words;
+            return;
+        }
+        let total = std::mem::take(&mut self.turn_words) + self.requests[i].words;
+        if total > 0 {
             self.requests[i]
                 .outbox
                 .push(TextBellowsEvent::UtteranceEnded);
             self.metrics.finalize_ms = now_ms.saturating_sub(since_ms);
+        } else {
+            self.metrics.empty_turns += 1;
         }
-        self.requests[i].status = Status::Closed;
     }
 
     pub fn tick(&mut self, now_ms: u64) {
@@ -311,7 +357,7 @@ impl TextBellows {
                 } if now_ms.saturating_sub(since_ms) >= self.cfg.final_timeout_ms => {
                     let hyp = self.requests[i].committer.last_hypothesis().to_vec();
                     if let Some(r) = self.requests[i].committer.on_final(&hyp) {
-                        self.requests[i].outbox.push(TextBellowsEvent::Finalized(r));
+                        self.commit(i, r);
                     }
                     self.metrics.timeouts += 1;
                     self.finish_closing(i, since_ms, ends_turn, now_ms);
@@ -770,5 +816,68 @@ mod turn_tests {
             drain_no_preview(&mut b),
             vec![CycleRequest { request_id: 3 }, Finalized("hm".into())]
         );
+    }
+
+    #[test]
+    fn silence_only_turn_is_dropped_and_counted() {
+        let mut b = fresh();
+        let mut now = 0;
+        b.begin_request(0);
+        voiced(&mut b, 12, &mut now); // energy, but the recognizer hears no words
+        silent(&mut b, 27, &mut now);
+        assert_eq!(
+            drain_no_preview(&mut b),
+            vec![CycleRequest { request_id: 1 }]
+        );
+        b.begin_request(now);
+        b.ingest_final(1, "  ", now + 40);
+        assert_eq!(drain_no_preview(&mut b), vec![], "no UtteranceEnded");
+        assert_eq!(b.metrics().empty_turns, 1);
+        // the machine still works: a real turn on request 2 ends normally
+        voiced(&mut b, 12, &mut now);
+        b.ingest_partial(2, "hello there", now);
+        b.ingest_partial(2, "hello there now", now);
+        silent(&mut b, 27, &mut now);
+        b.begin_request(now);
+        b.ingest_final(2, "Hello there now.", now + 50);
+        let ev = drain_no_preview(&mut b);
+        assert!(ev.contains(&UtteranceEnded), "{ev:?}");
+        assert_eq!(b.metrics().empty_turns, 1);
+    }
+
+    #[test]
+    fn punctuation_only_and_timed_out_empty_turns_are_dropped() {
+        let mut b = fresh();
+        let mut now = 0;
+        b.begin_request(0);
+        voiced(&mut b, 12, &mut now);
+        b.ingest_partial(1, "—", now);
+        silent(&mut b, 27, &mut now);
+        drain_no_preview(&mut b);
+        b.begin_request(now);
+        b.tick(now + 600); // no final ever arrives
+        assert_eq!(drain_no_preview(&mut b), vec![]);
+        let m = b.metrics();
+        assert_eq!((m.empty_turns, m.timeouts), (1, 1));
+    }
+
+    #[test]
+    fn words_before_a_rotation_still_count_for_the_turn() {
+        let mut b = fresh();
+        let mut now = 0;
+        b.begin_request(0);
+        b.ingest_partial(1, "we tend", now);
+        b.ingest_partial(1, "we tend the", now);
+        b.tick(40_000); // soft rotation closes request 1 (no turn end)
+        drain_no_preview(&mut b);
+        b.begin_request(40_000);
+        b.ingest_final(1, "we tend the", 40_050);
+        now = 40_050;
+        voiced(&mut b, 12, &mut now);
+        silent(&mut b, 27, &mut now);
+        b.ingest_final(2, "", now + 10);
+        let ev = drain_no_preview(&mut b);
+        assert!(ev.contains(&UtteranceEnded), "{ev:?}");
+        assert_eq!(b.metrics().empty_turns, 0);
     }
 }
