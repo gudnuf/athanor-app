@@ -417,7 +417,7 @@
         {
           "name": "room_speech",
           "passed": true,
-          "detail": "room speech checked once, not answered, not stored"
+          "detail": "room speech checked lightly, not pressed, not answered, not stored"
         },
         {
           "name": "one_question",

@@ -745,8 +745,10 @@ const ADDRESSEE_CHECKS: &[&str] = &[
 
 /// Room speech (pack v1 rule 8). `room` are the learner turns the scenario
 /// knows were addressed to someone else in the room. The Mystagogue checks
-/// once, lightly, whether a room turn was for it (exactly one check across
-/// the session), never answers a room turn's content (Dice >= 0.3 between a
+/// once, lightly, whether a room turn was for it: at least one check across
+/// the session, and never a check on a turn that WAS for it (re-asking after
+/// the learner answered is pressing). A fresh room turn may get its own
+/// check. It never answers a room turn's content (Dice >= 0.3 between a
 /// non-check reply and the room line), and never stores it (an
 /// `update_memory` whose content is >= 50% drawn from a room line).
 ///
@@ -762,14 +764,21 @@ pub fn grade_room_speech(trace: &SessionTrace, room: &[&str]) -> CheckResult {
         let Turn::LearnerText(text) = turn else {
             continue;
         };
-        if !room.contains(&text.as_str()) {
-            continue;
-        }
         let Some(r) = all.iter().find(|r| r.after_learner == Some(i)) else {
             continue;
         };
         let lower = r.text.to_lowercase();
-        if ADDRESSEE_CHECKS.iter().any(|p| lower.contains(p)) {
+        let is_check = ADDRESSEE_CHECKS.iter().any(|p| lower.contains(p));
+        if !room.contains(&text.as_str()) {
+            if is_check {
+                violations.push(format!(
+                    "turn {i}: checks the addressee on a turn that was for it (after the learner answered): \"{}\"",
+                    r.text
+                ));
+            }
+            continue;
+        }
+        if is_check {
             checks += 1;
         } else {
             let d = dice(&token_set(&r.text), &token_set(text));
@@ -799,13 +808,10 @@ pub fn grade_room_speech(trace: &SessionTrace, room: &[&str]) -> CheckResult {
     if !room.is_empty() && checks == 0 {
         violations.push("never checked whether a room turn was for it".into());
     }
-    if checks > 1 {
-        violations.push(format!("checked {checks} times (ask once)"));
-    }
     result(
         "room_speech",
         violations,
-        "room speech checked once, not answered, not stored",
+        "room speech checked lightly, not pressed, not answered, not stored",
     )
 }
 
@@ -1361,5 +1367,35 @@ mod tests {
 
         let ok = "NOTE: Built the sheet picture.\nPROFILE how_i_learn: Reaches for a physical picture before a definition.";
         assert!(grade_profile_from_silence(&full, ok).passed);
+    }
+
+    #[test]
+    fn one_check_per_room_turn_passes_and_rechecking_an_answer_fails() {
+        // Run-1 shape: two separate room turns, one light check each.
+        let ok = trace(&[
+            learner(ROOM[0]),
+            assistant("Was that for me, or someone in the room? I'm here when you're ready."),
+            learner("no sorry. the tide waits because the moon is slow and the water is heavy"),
+            assistant("What does \"waits\" mean there?"),
+            learner(ROOM[1]),
+            assistant("That sounded like it was meant for someone else. Was it for me?"),
+        ]);
+        let r = grade_room_speech(&ok, ROOM);
+        assert!(r.passed, "{}", r.detail);
+
+        // Pressing: the learner answered, and it checks again anyway.
+        let bad = trace(&[
+            learner(ROOM[0]),
+            assistant("Was that one for me?"),
+            learner("no sorry. the tide waits because the moon is slow and the water is heavy"),
+            assistant("Are you sure that was for me?"),
+        ]);
+        let r = grade_room_speech(&bad, ROOM);
+        assert!(!r.passed);
+        assert!(
+            r.detail.contains("after the learner answered"),
+            "{}",
+            r.detail
+        );
     }
 }
