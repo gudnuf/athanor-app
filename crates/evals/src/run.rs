@@ -202,7 +202,7 @@ mod tests {
     use super::*;
     use crate::personas::{
         all_personas, banker, dead_air, eager_parroter, explainer, fork_picker, leaver, returner,
-        silent_one, stuck_one, tangent_chaser,
+        room_noise, silent_one, stuck_one, tangent_chaser,
     };
     use athanor_core::engine::AcpToolCall;
     use serde_json::json;
@@ -540,5 +540,28 @@ mod tests {
         )
         .await;
         assert!(!check(&paraphrased, "bank_verbatim").passed);
+    }
+
+    #[tokio::test]
+    async fn room_noise_is_checked_once_and_the_v0_answer_and_profile_fails() {
+        let report = run_persona(&room_noise()).await;
+        assert!(check(&report, "room_speech").passed);
+        assert!(report.passed, "{report:?}");
+
+        let profiled = run_with_step(
+            room_noise(),
+            6,
+            vec![
+                AcpUpdate::text_delta("A sparring partner, not a meditation app — is that what you want?"),
+                AcpUpdate::ToolCall(AcpToolCall {
+                    id: "1".into(),
+                    name: "update_memory".into(),
+                    args: json!({ "section": "how_i_learn", "content": "sees this as a sparring partner, not a meditation app" }),
+                }),
+                AcpUpdate::TurnComplete,
+            ],
+        )
+        .await;
+        assert!(!check(&profiled, "room_speech").passed);
     }
 }

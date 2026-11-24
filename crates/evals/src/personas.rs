@@ -441,6 +441,52 @@ pub fn banker() -> Persona {
     }
 }
 
+/// The room-noise persona's turns addressed to someone else in the room.
+pub const ROOM_LINES: &[&str] = &[
+    "oh hi, no, go ahead, I'll be five minutes",
+    "they think it's a meditation app but it's more like a sparring partner",
+];
+
+/// Room noise: the mic picks up the learner talking to someone else. v1
+/// rule 8: ask once, lightly, whether it was for the Mystagogue; don't
+/// answer it, don't build memory on it.
+pub fn room_noise() -> Persona {
+    Persona {
+        name: "room_noise",
+        mask: "philosophus",
+        mode: "explain",
+        field: &[FieldCheck::RoomSpeech(ROOM_LINES), FieldCheck::OneQuestion],
+        build: |_thread_id| {
+            vec![
+                Step::Engine(vec![
+                    AcpUpdate::text_delta("That tide question — what's alive in it?"),
+                    AcpUpdate::TurnComplete,
+                ]),
+                Step::Learner(ROOM_LINES[0].into()),
+                Step::Engine(vec![
+                    AcpUpdate::text_delta("Was that one for me?"),
+                    AcpUpdate::TurnComplete,
+                ]),
+                Step::Learner(
+                    "no sorry. the tide waits because the moon is slow and the water is heavy"
+                        .into(),
+                ),
+                Step::Engine(vec![
+                    AcpUpdate::text_delta("Slow moon, heavy water — what does the heaviness do?"),
+                    AcpUpdate::TurnComplete,
+                ]),
+                Step::Learner(ROOM_LINES[1].into()),
+                Step::Engine(vec![
+                    AcpUpdate::text_delta(
+                        "The heavy water, then — what does the weight do to the wait?",
+                    ),
+                    AcpUpdate::TurnComplete,
+                ]),
+            ]
+        },
+    }
+}
+
 /// The four README personas, then the v1 field personas.
 pub fn all_personas() -> Vec<Persona> {
     vec![
@@ -454,5 +500,6 @@ pub fn all_personas() -> Vec<Persona> {
         returner(),
         explainer(),
         banker(),
+        room_noise(),
     ]
 }

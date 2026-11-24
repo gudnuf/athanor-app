@@ -100,6 +100,16 @@ pub const FIELD_RULES: &[PackRule] = &[
         surface: Surface::Condense,
         anchors: &["a `pulls` line quotes them"],
     },
+    PackRule {
+        id: "8_room_speech_session",
+        surface: Surface::Session("philosophus"),
+        anchors: &["not every voice is for you", "ask once, lightly"],
+    },
+    PackRule {
+        id: "8_room_speech_close",
+        surface: Surface::Condense,
+        anchors: &["for someone else in the room"],
+    },
 ];
 
 /// A small fixed store so every placeholder renders (the rule text lives in

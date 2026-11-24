@@ -45,3 +45,5 @@ Rules:
   the format.
 - Empty turns (dots, nothing) tell you about the mic, not the learner. Build
   no PROFILE line on them.
+- Nothing in the NOTE or a PROFILE line rests on a turn that may have been
+  for someone else in the room.

@@ -732,6 +732,83 @@ pub fn grade_bank_verbatim(trace: &SessionTrace) -> CheckResult {
     )
 }
 
+// ---- 8. speech meant for someone else ------------------------------------
+
+/// Phrases that check who a turn was for.
+const ADDRESSEE_CHECKS: &[&str] = &[
+    "for me",
+    "to me?",
+    "talking to me",
+    "someone else",
+    "someone there",
+];
+
+/// Room speech (pack v1 rule 8). `room` are the learner turns the scenario
+/// knows were addressed to someone else in the room. The Mystagogue checks
+/// once, lightly, whether a room turn was for it (exactly one check across
+/// the session), never answers a room turn's content (Dice >= 0.3 between a
+/// non-check reply and the room line), and never stores it (an
+/// `update_memory` whose content is >= 50% drawn from a room line).
+///
+/// Gated judge question (also over the close NOTE/PROFILE, which this trace
+/// doesn't carry): did anything the Mystagogue said, noted or profiled rest
+/// on a turn that was plausibly for someone else?
+pub fn grade_room_speech(trace: &SessionTrace, room: &[&str]) -> CheckResult {
+    use crate::normalize::{dice, token_set};
+    let all = replies(trace);
+    let mut violations = Vec::new();
+    let mut checks = 0;
+    for (i, turn) in trace.turns.iter().enumerate() {
+        let Turn::LearnerText(text) = turn else {
+            continue;
+        };
+        if !room.contains(&text.as_str()) {
+            continue;
+        }
+        let Some(r) = all.iter().find(|r| r.after_learner == Some(i)) else {
+            continue;
+        };
+        let lower = r.text.to_lowercase();
+        if ADDRESSEE_CHECKS.iter().any(|p| lower.contains(p)) {
+            checks += 1;
+        } else {
+            let d = dice(&token_set(&r.text), &token_set(text));
+            if d >= 0.3 {
+                violations.push(format!(
+                    "turn {i}: answers speech meant for someone else (dice {d:.2}): \"{}\"",
+                    r.text
+                ));
+            }
+        }
+    }
+    for (n, r) in all.iter().enumerate() {
+        for (name, args) in &r.tools {
+            if name != "update_memory" {
+                continue;
+            }
+            let content = arg_text(args, "content");
+            for line in room {
+                if containment(&content, line) >= 0.5 {
+                    violations.push(format!(
+                        "reply {n}: update_memory built on room speech \"{line}\""
+                    ));
+                }
+            }
+        }
+    }
+    if !room.is_empty() && checks == 0 {
+        violations.push("never checked whether a room turn was for it".into());
+    }
+    if checks > 1 {
+        violations.push(format!("checked {checks} times (ask once)"));
+    }
+    result(
+        "room_speech",
+        violations,
+        "room speech checked once, not answered, not stored",
+    )
+}
+
 // ---- dispatch -----------------------------------------------------------
 
 /// A field grader a persona opts into (each needs at most one fixed
@@ -756,6 +833,8 @@ pub enum FieldCheck {
     WeaveOnRhyme,
     /// v1 rule 7.
     BankVerbatim,
+    /// v1 rule 8; the learner turns addressed to someone else.
+    RoomSpeech(&'static [&'static str]),
 }
 
 pub fn run_check(check: FieldCheck, trace: &SessionTrace) -> CheckResult {
@@ -769,6 +848,7 @@ pub fn run_check(check: FieldCheck, trace: &SessionTrace) -> CheckResult {
         FieldCheck::OfferAfter(mechanism) => grade_offer_after(trace, mechanism),
         FieldCheck::WeaveOnRhyme => grade_weave_on_rhyme(trace),
         FieldCheck::BankVerbatim => grade_bank_verbatim(trace),
+        FieldCheck::RoomSpeech(room) => grade_room_speech(trace, room),
     }
 }
 
@@ -1130,6 +1210,51 @@ mod tests {
             grade_bank_verbatim(&ok).passed,
             "{:?}",
             grade_bank_verbatim(&ok)
+        );
+    }
+
+    // --- 8. room speech ------------------------------------------------------
+
+    const ROOM: &[&str] = &[
+        "oh hi, no, go ahead, I'll be five minutes",
+        "they think it's a meditation app but it's more like a sparring partner",
+    ];
+
+    #[test]
+    fn answering_and_profiling_room_speech_fails() {
+        let bad = trace(&[
+            assistant("What's alive in it?"),
+            learner(ROOM[0]),
+            assistant("Five minutes is fine. Where were we?"),
+            learner(ROOM[1]),
+            assistant("A sparring partner, not a meditation app. Is that what you want?"),
+            tool(
+                "update_memory",
+                r#"{"section":"how_i_learn","content":"sees this as a sparring partner, not a meditation app"}"#,
+            ),
+        ]);
+        let r = grade_room_speech(&bad, ROOM);
+        assert!(!r.passed);
+        for needle in ["answers speech", "update_memory built", "never checked"] {
+            assert!(r.detail.contains(needle), "missing {needle}: {}", r.detail);
+        }
+    }
+
+    #[test]
+    fn one_light_check_then_carry_on_passes() {
+        let ok = trace(&[
+            assistant("What's alive in it?"),
+            learner(ROOM[0]),
+            assistant("Was that one for me?"),
+            learner("no sorry. the tide waits because the moon is slow and the water is heavy"),
+            assistant("Slow moon, heavy water — what does the heaviness do?"),
+            learner(ROOM[1]),
+            assistant("The heavy water, then — what does the weight do to the wait?"),
+        ]);
+        assert!(
+            grade_room_speech(&ok, ROOM).passed,
+            "{:?}",
+            grade_room_speech(&ok, ROOM)
         );
     }
 }
