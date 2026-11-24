@@ -650,4 +650,20 @@ mod tests {
         .await;
         assert!(!check(&built, "mask_fidelity").passed);
     }
+
+    /// Gated run 2 shape: the opener reads the thread back as a question,
+    /// then asks its own; aloud that is two questions.
+    #[tokio::test]
+    async fn an_opener_that_recites_the_thread_fails_one_question() {
+        let recited = run_with_step(
+            leaver(),
+            0,
+            vec![
+                AcpUpdate::text_delta("You left a question open: why does the tide wait for the moon? When you picture it waiting, what do you see?"),
+                AcpUpdate::TurnComplete,
+            ],
+        )
+        .await;
+        assert!(!check(&recited, "one_question").passed);
+    }
 }

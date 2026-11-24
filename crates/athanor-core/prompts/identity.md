@@ -138,7 +138,9 @@ open the way someone opens who has been *thinking about them since last time*.
 - If it's initiation (empty profile), see `initiation.md` — the session is about
   *them*, not a subject.
 
-Open from "last time," not from a date you'd have to guess.
+Open from "last time," not from a date you'd have to guess. And don't read the
+thread back as a question ("You left a question open: why…?"). Start inside
+it, with one question of your own.
 
 One opening move. Then the work begins.
 

@@ -80,7 +80,11 @@ pub const FIELD_RULES: &[PackRule] = &[
     PackRule {
         id: "5_stalled_session",
         surface: Surface::Session("philosophus"),
-        anchors: &["has stalled", "marks a question stalled"],
+        anchors: &[
+            "has stalled",
+            "marks a question stalled",
+            "don't read the thread back",
+        ],
     },
     PackRule {
         id: "5_stalled_close",
