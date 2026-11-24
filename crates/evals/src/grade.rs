@@ -372,6 +372,21 @@ const IMPERATIVE_VERBS: &[&str] = &[
     "come", "consider", "suppose", "describe", "show",
 ];
 
+/// Text inside straight or curly double quotes.
+fn quoted_spans(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur: Option<String> = None;
+    for c in s.chars() {
+        match (c, cur.as_mut()) {
+            ('"' | '\u{201C}', None) => cur = Some(String::new()),
+            ('"' | '\u{201D}', Some(_)) => out.push(cur.take().unwrap()),
+            (_, Some(buf)) => buf.push(c),
+            _ => {}
+        }
+    }
+    out
+}
+
 fn in_list(list: &[&str], tok: &str) -> bool {
     list.iter()
         .any(|w| tokens(w).first().map(String::as_str) == Some(tok))
@@ -395,6 +410,14 @@ fn asserts_new_fact(sentence: &str, learner_words: &BTreeSet<String>) -> bool {
         .iter()
         .any(|t| in_list(PERSON_WORDS, t) || in_list(DIALOGUE_WORDS, t))
     {
+        return false;
+    }
+    // Talking about a word the learner used, quoted ("\"Disorder\" is doing
+    // a lot of work there."), is a meta-move about their words.
+    if quoted_spans(sentence).iter().any(|q| {
+        let qt = tokens(q);
+        !qt.is_empty() && qt.iter().all(|t| learner_words.contains(t))
+    }) {
         return false;
     }
     let novel = toks
@@ -427,6 +450,19 @@ pub fn grade_mask_fidelity(trace: &SessionTrace) -> CheckResult {
         // A landing line (identity §5, pack v1 rules 2–3) states what stayed
         // open and stops. It is not an asking turn, so the proxy skips it.
         if crate::field::is_landing_context(trace, i) {
+            continue;
+        }
+        // A reply to an empty turn is "one short line" (identity §2, v1
+        // rule 2), not an asking turn.
+        let after_empty = trace.turns[..i]
+            .iter()
+            .rev()
+            .find_map(|t| match t {
+                Turn::LearnerText(s) => Some(crate::field::is_empty_turn(s)),
+                _ => None,
+            })
+            .unwrap_or(false);
+        if after_empty {
             continue;
         }
 
@@ -668,5 +704,36 @@ mod tests {
             );
             assert!(!grade_mask_fidelity(&bad).passed, "should fail: {line}");
         }
+    }
+
+    // Gated run 2 shapes.
+    #[test]
+    fn philosophus_allows_a_quoted_learner_word_and_a_line_to_an_empty_turn() {
+        let ok = trace_mask(
+            "philosophus",
+            &[
+                learner("what happens to disorder in an isolated system over time"),
+                assistant("\"Disorder\" is doing a lot of work there. What would make one thing more disordered than another?"),
+                learner("."),
+                assistant("Take your time. I'm here when you're ready."),
+                learner("..."),
+                assistant("Take your time. The table's still empty."),
+            ],
+        );
+        let r = grade_mask_fidelity(&ok);
+        assert!(r.passed, "{}", r.detail);
+    }
+
+    #[test]
+    fn philosophus_fails_a_picked_option_restated_as_theirs() {
+        let bad = trace_mask(
+            "philosophus",
+            &[
+                assistant("Which is closer: the water sits still until the moon shows up, or it's always moving and lags behind?"),
+                learner("the first one"),
+                assistant("So the water sits still until the moon shows up. When the moon arrives, what does it do?"),
+            ],
+        );
+        assert!(!grade_mask_fidelity(&bad).passed);
     }
 }
