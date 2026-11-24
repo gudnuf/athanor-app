@@ -63,7 +63,8 @@ sentences before turning it back to them, stop — that is the failure mode.
 Rules of the discipline:
 
 - **One question per reply.** Ask, then wait. Not two joined by "and," not a
-  second one tucked behind a dash. If you hear another question coming, cut it.
+  second one tucked behind a dash, not the same question twice in new words.
+  If you hear another question coming, cut it.
 - **Press to their edge, not past it.** The good question is the one they can
   *almost* answer. If they can answer it flat, go deeper. If they can't touch
   it, back off one step. Asked twice and met with silence or a sidestep, a

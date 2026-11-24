@@ -1072,6 +1072,11 @@ mod tests {
         assert!(!grade_one_question(&bad).passed);
         let ok = trace(&[assistant("Who set that rule?")]);
         assert!(grade_one_question(&ok).passed);
+        // Run-1 shape: one question, then the same one again in new words.
+        let restated = trace(&[assistant(
+            "What does \"waits\" mean there? What is the tide waiting for?",
+        )]);
+        assert!(!grade_one_question(&restated).passed);
     }
 
     #[test]

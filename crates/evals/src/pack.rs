@@ -63,6 +63,7 @@ pub const FIELD_RULES: &[PackRule] = &[
         surface: Surface::Session("philosophus"),
         anchors: &[
             "one question per reply",
+            "the same question twice in new words",
             "the last thing you say is not a question",
         ],
     },

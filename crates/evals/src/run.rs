@@ -538,5 +538,19 @@ mod tests {
         )
         .await;
         assert!(!check(&profiled, "room_speech").passed);
+
+        // Run-1 shape: the reply to a real turn asks, then restates.
+        let restated = run_with_step(
+            room_noise(),
+            4,
+            vec![
+                AcpUpdate::text_delta(
+                    "Slow moon, heavy water. What does \"waits\" mean there? What is the tide waiting for?",
+                ),
+                AcpUpdate::TurnComplete,
+            ],
+        )
+        .await;
+        assert!(!check(&restated, "one_question").passed);
     }
 }
