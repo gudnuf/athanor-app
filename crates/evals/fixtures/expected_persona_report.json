@@ -32,7 +32,7 @@
         {
           "name": "talk_ratio",
           "passed": true,
-          "detail": "said less than the learner (or kept each reply short for a quiet one)"
+          "detail": "every reply under the word budget, and less said than the learner"
         },
         {
           "name": "landed_reply",
@@ -73,7 +73,7 @@
         {
           "name": "talk_ratio",
           "passed": true,
-          "detail": "said less than the learner (or kept each reply short for a quiet one)"
+          "detail": "every reply under the word budget, and less said than the learner"
         },
         {
           "name": "landed_reply",
@@ -114,7 +114,7 @@
         {
           "name": "talk_ratio",
           "passed": true,
-          "detail": "said less than the learner (or kept each reply short for a quiet one)"
+          "detail": "every reply under the word budget, and less said than the learner"
         },
         {
           "name": "landed_reply",
@@ -155,7 +155,7 @@
         {
           "name": "talk_ratio",
           "passed": true,
-          "detail": "said less than the learner (or kept each reply short for a quiet one)"
+          "detail": "every reply under the word budget, and less said than the learner"
         },
         {
           "name": "landed_reply",
@@ -206,7 +206,7 @@
         {
           "name": "talk_ratio",
           "passed": true,
-          "detail": "said less than the learner (or kept each reply short for a quiet one)"
+          "detail": "every reply under the word budget, and less said than the learner"
         },
         {
           "name": "landed_reply",
@@ -262,7 +262,7 @@
         {
           "name": "talk_ratio",
           "passed": true,
-          "detail": "said less than the learner (or kept each reply short for a quiet one)"
+          "detail": "every reply under the word budget, and less said than the learner"
         },
         {
           "name": "landed_reply",
@@ -313,7 +313,7 @@
         {
           "name": "talk_ratio",
           "passed": true,
-          "detail": "said less than the learner (or kept each reply short for a quiet one)"
+          "detail": "every reply under the word budget, and less said than the learner"
         },
         {
           "name": "landed_reply",
@@ -369,7 +369,7 @@
         {
           "name": "talk_ratio",
           "passed": true,
-          "detail": "said less than the learner (or kept each reply short for a quiet one)"
+          "detail": "every reply under the word budget, and less said than the learner"
         },
         {
           "name": "landed_reply",
@@ -425,7 +425,7 @@
         {
           "name": "talk_ratio",
           "passed": true,
-          "detail": "said less than the learner (or kept each reply short for a quiet one)"
+          "detail": "every reply under the word budget, and less said than the learner"
         },
         {
           "name": "landed_reply",
@@ -476,7 +476,7 @@
         {
           "name": "talk_ratio",
           "passed": true,
-          "detail": "said less than the learner (or kept each reply short for a quiet one)"
+          "detail": "every reply under the word budget, and less said than the learner"
         },
         {
           "name": "landed_reply",
@@ -527,7 +527,7 @@
         {
           "name": "talk_ratio",
           "passed": true,
-          "detail": "said less than the learner (or kept each reply short for a quiet one)"
+          "detail": "every reply under the word budget, and less said than the learner"
         },
         {
           "name": "landed_reply",

@@ -887,21 +887,25 @@ pub fn word_count(text: &str) -> usize {
 }
 
 /// Below this many learner words in a session, a ratio is noise (one terse
-/// learner makes any reply "too long"), so each reply is capped instead.
+/// learner makes any reply "too long"); only the per-reply cap applies.
 pub const TALK_RATIO_MIN_LEARNER_WORDS: usize = 30;
 /// identity §2: "A session where you talked more than they did is a session
 /// you lost." Taken literally: Mystagogue words <= learner words.
 pub const TALK_RATIO_MAX: f64 = 1.0;
-/// Per-reply cap for a near-silent learner: one reflection and one question,
-/// about one spoken breath (~8–10 seconds aloud).
-pub const QUIET_REPLY_MAX_WORDS: usize = 25;
+/// identity §2's number: under twenty-five words a reply, the opening too.
+/// One reflection and one question, about one spoken breath.
+pub const REPLY_MAX_WORDS: usize = 25;
+/// ...unless the learner's last turn ran longer than this.
+pub const LONG_LEARNER_TURN_WORDS: usize = 60;
 
-/// Say less than they did (pack v1 rule 10). Over the session, Mystagogue
-/// words / learner words (empty turns excluded) must not exceed
-/// [`TALK_RATIO_MAX`]. When the learner said fewer than
-/// [`TALK_RATIO_MIN_LEARNER_WORDS`], each reply is capped at
-/// [`QUIET_REPLY_MAX_WORDS`] instead. The opening move (a reply to no
-/// learner turn) is not counted.
+/// Say less than they did (pack v1 rule 10), as identity §2 states it:
+/// - every reply, the opening move included, stays within
+///   [`REPLY_MAX_WORDS`] unless the learner turn it answers ran over
+///   [`LONG_LEARNER_TURN_WORDS`];
+/// - once the learner has said [`TALK_RATIO_MIN_LEARNER_WORDS`] or more
+///   (empty turns excluded), Mystagogue words in replies / learner words
+///   must not exceed [`TALK_RATIO_MAX`]. The opening move answers no learner
+///   turn, so it is not charged to the ratio.
 ///
 /// Gated judge question: did the Mystagogue talk more than the learner, or
 /// answer a short turn with a paragraph?
@@ -914,36 +918,45 @@ pub fn grade_talk_ratio(trace: &SessionTrace) -> CheckResult {
             _ => None,
         })
         .sum();
-    // The opening move answers no learner turn, so it can't be "talking more
-    // than they did": counting it charged every session with ~30 words the
-    // learner never had a chance to match (gated run 2). Replies only.
-    let all: Vec<Reply> = replies(trace)
-        .into_iter()
-        .filter(|r| r.after_learner.is_some())
-        .collect();
+    let all = replies(trace);
     let mut violations = Vec::new();
+    for (n, r) in all.iter().enumerate() {
+        let answered = r
+            .after_learner
+            .and_then(|i| match &trace.turns[i] {
+                Turn::LearnerText(s) => Some(word_count(s)),
+                _ => None,
+            })
+            .unwrap_or(0);
+        let w = word_count(&r.text);
+        if w > REPLY_MAX_WORDS && answered <= LONG_LEARNER_TURN_WORDS {
+            let what = if r.after_learner.is_none() {
+                "opening"
+            } else {
+                "reply"
+            };
+            violations.push(format!(
+                "{what} {n}: {w} words to a {answered}-word turn (max {REPLY_MAX_WORDS})"
+            ));
+        }
+    }
     if learner_words >= TALK_RATIO_MIN_LEARNER_WORDS {
-        let mine: usize = all.iter().map(|r| word_count(&r.text)).sum();
+        let mine: usize = all
+            .iter()
+            .filter(|r| r.after_learner.is_some())
+            .map(|r| word_count(&r.text))
+            .sum();
         let ratio = mine as f64 / learner_words as f64;
         if ratio > TALK_RATIO_MAX {
             violations.push(format!(
                 "Mystagogue {mine} words vs learner {learner_words} (ratio {ratio:.2} > {TALK_RATIO_MAX})"
             ));
         }
-    } else {
-        for (n, r) in all.iter().enumerate() {
-            let w = word_count(&r.text);
-            if w > QUIET_REPLY_MAX_WORDS {
-                violations.push(format!(
-                    "reply {n}: {w} words to a near-silent learner (max {QUIET_REPLY_MAX_WORDS})"
-                ));
-            }
-        }
     }
     result(
         "talk_ratio",
         violations,
-        "said less than the learner (or kept each reply short for a quiet one)",
+        "every reply under the word budget, and less said than the learner",
     )
 }
 
@@ -1540,7 +1553,7 @@ mod tests {
         ]);
         let r = grade_talk_ratio(&bad);
         assert!(!r.passed);
-        assert!(r.detail.contains("near-silent"), "{}", r.detail);
+        assert!(r.detail.contains("max 25"), "{}", r.detail);
 
         let ok = trace(&[
             learner("actually, what about magnetism instead?"),
@@ -1609,14 +1622,37 @@ mod tests {
     }
 
     #[test]
-    fn the_opening_move_is_not_charged_to_the_ratio() {
-        // Run-2 shape: a 38-word opener, then short replies to a terse learner.
-        let t = trace(&[
+    fn the_opening_move_is_capped_but_not_charged_to_the_ratio() {
+        // Run-2 shape: a 38-word opener fails the per-reply budget...
+        let long_open = trace(&[
             assistant("\"What is entropy?\" You left that one open. Let's not chase the word yet. A cup of hot coffee sits on a desk and nobody touches it. What's the one thing that cup never does on its own?"),
             learner("I don't know."),
             assistant("Good. Skip the \"never.\" What had the coffee turned into?"),
         ]);
-        let r = grade_talk_ratio(&t);
+        let r = grade_talk_ratio(&long_open);
+        assert!(!r.passed);
+        assert!(r.detail.contains("opening 0"), "{}", r.detail);
+
+        // ...but a within-budget opener is never charged to the ratio.
+        let learner_turn = "the tide thing: I think the moon pulls a sheet and the water just goes where the sheet goes, and nobody told it to";
+        let ok = trace(&[
+            assistant("That tide question, the one you left open: what have you actually seen it do, out there on the water?"),
+            learner(learner_turn),
+            learner("and the sheet is thin, really thin"),
+            assistant("A thin sheet. What's pulling it?"),
+        ]);
+        let r = grade_talk_ratio(&ok);
         assert!(r.passed, "{}", r.detail);
+    }
+
+    #[test]
+    fn a_long_learner_turn_earns_a_longer_reply() {
+        let long_turn = "ok so here is the whole thing as I see it right now, and bear with me because it is a lot: the moon pulls on the water, but the water is heavy and the beach is shallow, so the pull shows up late, and the lateness changes with the shape of the bay, and that is why my local tide table never matches the moon rising";
+        assert!(word_count(long_turn) > 60);
+        let t = trace(&[
+            learner(long_turn),
+            assistant("The pull shows up late, and the lateness changes with the shape of the bay. That's a mechanism, in your words. Say it once as the thing you now know: what decides how late the water is?"),
+        ]);
+        assert!(grade_talk_ratio(&t).passed, "{:?}", grade_talk_ratio(&t));
     }
 }

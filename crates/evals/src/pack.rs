@@ -132,15 +132,16 @@ pub const FIELD_RULES: &[PackRule] = &[
     PackRule {
         id: "10_say_less",
         surface: Surface::Session("philosophus"),
-        anchors: &["say less than they did"],
+        anchors: &[
+            "say less than they did",
+            "under twenty-five words",
+            "more than sixty",
+        ],
     },
     PackRule {
         id: "11_landed_reply",
         surface: Surface::Session("philosophus"),
-        anchors: &[
-            "answer it with one short line",
-            "in one short line, and stop",
-        ],
+        anchors: &["answer it with one short line", "under twenty words"],
     },
 ];
 
