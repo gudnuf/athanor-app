@@ -140,6 +140,11 @@ pub const FIELD_RULES: &[PackRule] = &[
         anchors: &["`child_question`", "that makes a twin"],
     },
     PackRule {
+        id: "philosophus_landing_exception",
+        surface: Surface::Session("philosophus"),
+        anchors: &["the landing is the one turn that doesn't ask"],
+    },
+    PackRule {
         id: "10_say_less",
         surface: Surface::Session("philosophus"),
         anchors: &[
