@@ -91,6 +91,33 @@ impl Store {
     /// Read-only. Stable ordering; free text verbatim. Uses `self.now()` for
     /// `exported_at` (so an injected clock makes it byte-for-byte reproducible).
     pub fn export_vault(&self) -> Result<String, CoreError> {
+        let expected = super::migrations::MIGRATIONS.len() as i64;
+        match self.read_only_version {
+            Some(found) if found < expected => self.export_vault_via_migrated_copy(found),
+            _ => self.render_vault(None),
+        }
+    }
+
+    /// An older read-only file: `VACUUM INTO` a temp copy, migrate the copy,
+    /// render from it. The source is never touched. The temp store keeps this
+    /// store's device id and clock, so the header is the same as a direct
+    /// export's, plus `source_schema_version`.
+    fn export_vault_via_migrated_copy(&self, found: i64) -> Result<String, CoreError> {
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(&self.0);
+            }
+        }
+        let tmp =
+            std::env::temp_dir().join(format!("athanor-export-{}.sqlite", crate::ids::new_id()));
+        let _guard = Cleanup(tmp.clone());
+        self.export_database_copy(&tmp)?;
+        let migrated = Store::open(&tmp, self.device_id.clone())?.with_clock(self.clock.clone());
+        migrated.render_vault(Some(found))
+    }
+
+    fn render_vault(&self, source_schema_version: Option<i64>) -> Result<String, CoreError> {
         let schema_version: i64 = self
             .conn()
             .pragma_query_value(None, "user_version", |r| r.get(0))?;
@@ -123,9 +150,12 @@ impl Store {
         let mut out = String::new();
         let _ = writeln!(
             out,
-            "---\nathanor_vault: 1\nexported_at: {}\nschema_version: {}\ndevice_id: {}\ncounts: {{profile_sections: {}, domains: {}, pull_notes: {}, threads: {}, realizations: {}, correspondences: {}, sessions: {}, tending_days: {}, kindled: {}}}\n---\n",
+            "---\nathanor_vault: 1\nexported_at: {}\nschema_version: {}\n{}device_id: {}\ncounts: {{profile_sections: {}, domains: {}, pull_notes: {}, threads: {}, realizations: {}, correspondences: {}, sessions: {}, tending_days: {}, kindled: {}}}\n---\n",
             ts(self.now()),
             schema_version,
+            source_schema_version
+                .map(|v| format!("source_schema_version: {v}\n"))
+                .unwrap_or_default(),
             q(&self.device_id),
             profile.len(),
             domains.len(),
@@ -621,20 +651,98 @@ mod tests {
         std::fs::remove_dir_all(dir).ok();
     }
 
-    #[test]
-    fn open_read_only_refuses_schema_mismatch() {
-        let dir = tmpdir();
+    /// Builds a file at schema `v1` only (the original tables, no later migrations).
+    fn old_schema_file(dir: &std::path::Path, versions: usize) -> std::path::PathBuf {
         let p = dir.join("old.sqlite");
+        let c = rusqlite::Connection::open(&p).unwrap();
+        c.pragma_update(None, "foreign_keys", true).unwrap();
+        crate::store::migrations::migrate_with(
+            &c,
+            &crate::store::migrations::MIGRATIONS[..versions],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO threads (id, prompt, state, born, created_at, updated_at, device_id)
+             VALUES ('t-old', 'an old question?', 'volatile', 5, 5, 5, 'device')",
+            [],
+        )
+        .unwrap();
+        p
+    }
+
+    #[test]
+    fn open_read_only_refuses_a_newer_schema() {
+        let dir = tmpdir();
+        let p = dir.join("new.sqlite");
         {
             let c = rusqlite::Connection::open(&p).unwrap();
-            c.pragma_update(None, "user_version", 1).unwrap();
+            let newer = crate::store::migrations::MIGRATIONS.len() + 1;
+            c.pragma_update(None, "user_version", newer as i64).unwrap();
         }
-        assert!(Store::open_read_only(&p, "d").is_err());
+        assert!(matches!(
+            Store::open_read_only(&p, "d"),
+            Err(CoreError::BadState(_))
+        ));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn export_vault_renders_an_older_schema_file() {
+        let dir = tmpdir();
+        let p = old_schema_file(&dir, 1);
+        let ro = Store::open_read_only(&p, "device-x")
+            .unwrap()
+            .with_clock(Arc::new(|| CLOCK));
+        let doc = ro.export_vault().unwrap();
+        let latest = crate::store::migrations::MIGRATIONS.len();
+        assert!(
+            doc.contains(&format!("schema_version: {latest}\n")),
+            "{doc}"
+        );
+        assert!(doc.contains("source_schema_version: 1\n"), "{doc}");
+        // The original device id and clock survive the temp-copy detour (RR-2).
+        assert!(doc.contains("device_id: \"device-x\"\n"), "{doc}");
+        assert!(
+            doc.contains("exported_at: \"2026-11-22T21:00:00Z\"\n"),
+            "{doc}"
+        );
+        assert!(doc.contains("### an old question?"), "{doc}");
+        assert_eq!(doc, ro.export_vault().unwrap(), "deterministic");
+        // The original is never touched.
         let c = rusqlite::Connection::open(&p).unwrap();
         let v: i64 = c
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 1, "no migration ran");
+        assert_eq!(v, 1, "no migration ran on the source");
+        // No temp copy is left behind.
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn export_vault_current_schema_has_no_source_line() {
+        let dir = tmpdir();
+        let p = dir.join("cur.sqlite");
+        drop(Store::open(&p, "d").unwrap());
+        let doc = Store::open_read_only(&p, "d")
+            .unwrap()
+            .export_vault()
+            .unwrap();
+        assert!(!doc.contains("source_schema_version"));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn export_database_copy_of_an_older_file_keeps_its_version() {
+        let dir = tmpdir();
+        let p = old_schema_file(&dir, 1);
+        let ro = Store::open_read_only(&p, "d").unwrap();
+        let dest = dir.join("copy.sqlite");
+        ro.export_database_copy(&dest).unwrap();
+        let c = rusqlite::Connection::open(&dest).unwrap();
+        let v: i64 = c
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, 1, "byte-honest copy, not migrated");
         std::fs::remove_dir_all(dir).ok();
     }
 

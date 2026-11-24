@@ -51,6 +51,9 @@ pub struct Store {
     conn: ReentrantMutex<Connection>,
     pub(crate) device_id: String,
     clock: Clock,
+    /// `Some(found)` for a read-only open (the file's `user_version`); `None`
+    /// for a normal open. Lets export migrate a temp copy of an older file.
+    pub(crate) read_only_version: Option<i64>,
 }
 
 impl Store {
@@ -69,13 +72,15 @@ impl Store {
             conn: ReentrantMutex::new(conn),
             device_id: device_id.into(),
             clock: Arc::new(system_clock),
+            read_only_version: None,
         })
     }
 
     /// Opens an EXISTING store file read-only for export. Never migrates, never
-    /// creates. Errors: missing file → NotFound; `user_version` != MIGRATIONS.len()
-    /// → BadState("schema vN, this build expects vM — export from a copy with a
-    /// matching build"). Sets busy_timeout(2s) so a read during the live engine's
+    /// creates. Errors: missing file → NotFound; `user_version` > MIGRATIONS.len()
+    /// (a file from a NEWER build) → BadState. An OLDER file opens fine:
+    /// `export_vault` renders it by migrating a temp copy, and
+    /// `export_database_copy` keeps it byte-honest at its own version. Sets busy_timeout(2s) so a read during the live engine's
     /// short write transaction waits instead of failing.
     pub fn open_read_only(
         path: impl AsRef<Path>,
@@ -95,15 +100,16 @@ impl Store {
         conn.busy_timeout(std::time::Duration::from_secs(2))?;
         let found: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
         let expected = migrations::MIGRATIONS.len();
-        if found as usize != expected {
+        if found < 0 || found as usize > expected {
             return Err(CoreError::BadState(format!(
-                "schema v{found}, this build expects v{expected} — export from a copy with a matching build"
+                "schema v{found} is newer than this build (v{expected}) — update the app to export it"
             )));
         }
         Ok(Store {
             conn: ReentrantMutex::new(conn),
             device_id: device_id.into(),
             clock: Arc::new(system_clock),
+            read_only_version: Some(found),
         })
     }
 
@@ -153,6 +159,41 @@ mod tests {
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .unwrap();
         assert_eq!(version as usize, migrations::MIGRATIONS.len());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn open_read_only_accepts_an_older_schema() {
+        let dir = std::env::temp_dir().join(format!("athanor-core-test-{}", crate::ids::new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("old.db");
+        {
+            let c = Connection::open(&path).unwrap();
+            migrations::migrate_with(&c, &migrations::MIGRATIONS[..1]).unwrap();
+        }
+        let ro = Store::open_read_only(&path, "d").unwrap();
+        assert_eq!(ro.read_only_version, Some(1));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn open_read_only_refuses_a_newer_schema() {
+        let dir = std::env::temp_dir().join(format!("athanor-core-test-{}", crate::ids::new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("new.db");
+        {
+            let c = Connection::open(&path).unwrap();
+            c.pragma_update(
+                None,
+                "user_version",
+                (migrations::MIGRATIONS.len() + 1) as i64,
+            )
+            .unwrap();
+        }
+        assert!(matches!(
+            Store::open_read_only(&path, "d"),
+            Err(CoreError::BadState(_))
+        ));
         std::fs::remove_dir_all(dir).ok();
     }
 

@@ -96,7 +96,7 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), CoreError> {
 /// the DDL and the `user_version` bump commit in a single transaction, so a
 /// mid-batch failure rolls back cleanly instead of leaving partial tables
 /// behind with a stale version.
-fn migrate_with(conn: &Connection, migrations: &[&str]) -> Result<(), CoreError> {
+pub(crate) fn migrate_with(conn: &Connection, migrations: &[&str]) -> Result<(), CoreError> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     for (i, sql) in migrations.iter().enumerate().skip(version as usize) {
         let result = conn.execute_batch(&format!(
