@@ -22,6 +22,7 @@ recent_salt:
 ripe_mercury:
   (nothing ripe — open from a fresh vein, or begin anew)
 last_trace: (no prior session)
+last_session_ago: (not supplied)
 recent_notes:
   (none yet — nothing has condensed)
 session_budget_min: 15
@@ -31,4 +32,4 @@ session_budget_min: 15
 <<INITIATION: opaque prose asset, not snapshotted>>
 
 === section 5: tools (placeholder-fill, literal) ===
-Tools available this session: fix_salt, open_thread, evaporate_thread, kindle_passage, weave_domains, update_memory, recall, shift_mask.
+Tools available this session: fix_salt, open_thread, bank_pull, evaporate_thread, kindle_passage, weave_domains, update_memory, recall, shift_mask.

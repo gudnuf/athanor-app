@@ -98,6 +98,13 @@ pub struct Conductor {
     /// ignores the mask/mode register). Fixed at construction.
     is_initiation: bool,
     thread_id: Option<String>,
+    /// "Now" for the prompt's `last_session_ago` line: the session's own start,
+    /// fixed at open so every turn assembles the same line (and so assembly
+    /// never reads a clock).
+    started_at: u64,
+    /// The device's UTC offset in minutes, supplied by the shell; `None` →
+    /// `last_session_ago: (not supplied)`.
+    tz_offset_min: Option<i32>,
     /// How many CONTENTFUL learner turns `run_turn` has seen (`open_turn`'s
     /// synthesized opening never counts). Close tends only if this is > 0 —
     /// except the initiation, which tends on its opening turn alone (bba7487).
@@ -157,6 +164,10 @@ impl Conductor {
         thread_id: Option<String>,
     ) -> Self {
         let is_initiation = mask == INITIATION_MASK && mode == INITIATION_MODE;
+        let started_at = store
+            .session_by_id(&session_id)
+            .map(|s| s.started_at)
+            .unwrap_or_else(|_| store.now());
         // The session's live register, shared with the Mystagogue's shift_mask
         // tool + the FFI header/pin. Seeded at the opening (mask, mode).
         let mask_state = mask::shared(&mask, &mode);
@@ -173,12 +184,21 @@ impl Conductor {
             mask_state,
             is_initiation,
             thread_id,
+            started_at,
+            tz_offset_min: None,
             learner_turns: 0,
             turns: Vec::new(),
             transcript: String::new(),
             tools_called: Vec::new(),
             landed: false,
         }
+    }
+
+    /// Tells the conductor the device's UTC offset (minutes) so the prompt can
+    /// say the learner's part of day. The shell passes it once after opening;
+    /// until then the line reads `(not supplied)`.
+    pub fn set_tz_offset_min(&mut self, tz_offset_min: Option<i32>) {
+        self.tz_offset_min = tz_offset_min;
     }
 
     pub fn session_id(&self) -> &str {
@@ -227,7 +247,12 @@ impl Conductor {
             prompt::assemble_initiation(&self.store)
         } else {
             let (mask, mode) = mask::current(&self.mask_state);
-            prompt::assemble(&mask, &mode, self.thread_id.as_deref(), &self.store)
+            let ctx = prompt::AssembleCtx {
+                now: Some(self.started_at),
+                tz_offset_min: self.tz_offset_min,
+                ..prompt::AssembleCtx::default()
+            };
+            prompt::assemble_ctx(&mask, &mode, self.thread_id.as_deref(), &self.store, &ctx)
         };
         AcpPrompt {
             system: plan.system_prompt,
@@ -1623,5 +1648,34 @@ mod tests {
         let dom = store.upsert_domain("woodworking").unwrap();
         assert_eq!(after.domain_id, Some(dom.id));
         assert_eq!(store.get_session(&sid).unwrap().thread_id, Some(thread.id));
+    }
+
+    #[tokio::test]
+    async fn conductor_passes_the_session_start_clock_and_tz_into_the_prompt() {
+        // 2026-03-28T19:00:00Z; the prior session closed 3 days earlier.
+        let now: u64 = 1_774_724_400;
+        let (store, t) = clock_store(now - 3 * 86_400);
+        let mut prior =
+            Conductor::begin(Arc::clone(&store), "philosophus", "explain", None).unwrap();
+        prior
+            .run_turn(&say("Hm."), Some("an earlier thought"), &mut |_| {})
+            .await
+            .unwrap();
+        prior.close(5).unwrap();
+        t.store(now, Ordering::SeqCst);
+        let mut c = Conductor::begin(Arc::clone(&store), "philosophus", "explain", None).unwrap();
+        // tz not supplied yet: honest "(not supplied)".
+        assert!(c
+            .assemble_prompt()
+            .system
+            .contains("last_session_ago: (not supplied)\n"));
+        c.set_tz_offset_min(Some(0));
+        // A later clock must not move the line: it is fixed at the session's start.
+        t.store(now + 5 * 3_600, Ordering::SeqCst);
+        let sys = c.assemble_prompt().system;
+        assert!(
+            sys.contains("last_session_ago: 3 days; their time: evening\n"),
+            "{sys}"
+        );
     }
 }

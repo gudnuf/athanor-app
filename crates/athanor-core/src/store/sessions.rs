@@ -136,6 +136,21 @@ impl Store {
         Ok(())
     }
 
+    /// When the most recent CLOSED session in which the learner spoke ended.
+    /// "Spoke" = the durable transcript carries a learner block (the same marker
+    /// the v3 backfill filters on); a session that never heard the learner is
+    /// abandoned at close, so it is not "last time". `None` if there is none.
+    pub(crate) fn last_learner_session_end(&self) -> Result<Option<u64>, CoreError> {
+        let marker = crate::transcript::TranscriptRole::Learner.marker();
+        let end: Option<u64> = self.conn().query_row(
+            "SELECT MAX(ended_at) FROM sessions
+             WHERE state = 'closed' AND ended_at IS NOT NULL AND instr(transcript, ?1) > 0",
+            params![marker],
+            |r| r.get(0),
+        )?;
+        Ok(end)
+    }
+
     /// Per-mask last-used timestamp: `(mask, MAX(created_at))` over every
     /// session, one row per distinct mask. Feeds the home-screen mask-affinity
     /// heat (lane 14) — the mask the Mystagogue last wore runs warm, others

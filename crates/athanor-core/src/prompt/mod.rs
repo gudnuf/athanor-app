@@ -121,6 +121,43 @@ impl AssembleCtx<'_> {
     }
 }
 
+/// The injection's clock line (core ask #1). Pure: `now` and `tz_offset_min`
+/// come in through [`AssembleCtx`]; this never reads a clock. The interval is
+/// coarse and spoken (`earlier today`, `1 day`, `n days`, `n weeks`, `n months`),
+/// counted in the device's local calendar days; `their time` is the local part
+/// of day. Either input missing → `(not supplied)`, which the pack reads the
+/// same as absent. A supplied clock with no earlier session says so.
+fn last_session_ago_line(
+    last_end: Option<u64>,
+    now: Option<u64>,
+    tz_offset_min: Option<i32>,
+) -> String {
+    let (Some(now), Some(tz)) = (now, tz_offset_min) else {
+        return "last_session_ago: (not supplied)".to_string();
+    };
+    let local = |t: u64| t as i64 + i64::from(tz) * 60;
+    let part = match local(now).rem_euclid(86_400) / 3_600 {
+        5..=11 => "morning",
+        12..=16 => "afternoon",
+        17..=21 => "evening",
+        _ => "night",
+    };
+    let interval = match last_end {
+        None => "(no prior session)".to_string(),
+        Some(end) => {
+            let days = (local(now).div_euclid(86_400) - local(end).div_euclid(86_400)).max(0);
+            match days {
+                0 => "earlier today".to_string(),
+                1 => "1 day".to_string(),
+                2..=13 => format!("{days} days"),
+                14..=62 => format!("{} weeks", days / 7),
+                _ => format!("{} months", days / 30),
+            }
+        }
+    };
+    format!("last_session_ago: {interval}; their time: {part}")
+}
+
 /// Renders the seven knows-you placeholders as a labeled injection block.
 /// Each empty field renders documented not-knowing language, never a fabricated
 /// history (core-identity §1: "behave as if you genuinely don't know yet").
@@ -247,6 +284,14 @@ fn profile_injection(store: &Store, focal_thread: Option<&str>, ctx: &AssembleCt
         Some(t) => out.push_str(t),
         None => out.push_str("(no prior session)"),
     }
+    out.push('\n');
+
+    // The clock line: the only "now" the model gets (identity.md §1).
+    out.push_str(&last_session_ago_line(
+        store.last_learner_session_end().unwrap_or(None),
+        ctx.now,
+        ctx.tz_offset_min,
+    ));
     out.push('\n');
 
     // recent_notes: the rich condensation residue from past sessions — what
@@ -1009,5 +1054,155 @@ mod tests {
         assert!(c.worked.is_empty(), "{:?}", c.worked);
         assert!(c.domains.is_empty(), "{:?}", c.domains);
         assert_eq!(c.note.as_deref(), Some("n"));
+    }
+
+    // ---- core ask #1: last_session_ago ----
+
+    const DAY: u64 = 86_400;
+    /// 2026-03-28T19:00:00Z
+    const NOW: u64 = 1_774_724_400;
+
+    #[test]
+    fn last_session_ago_line_buckets_the_interval() {
+        let line = |ago_secs: u64, tz: i32| {
+            last_session_ago_line(Some(NOW - ago_secs), Some(NOW), Some(tz))
+        };
+        // same local day
+        assert_eq!(
+            line(3_600, 0),
+            "last_session_ago: earlier today; their time: evening"
+        );
+        assert_eq!(line(DAY, 0), "last_session_ago: 1 day; their time: evening");
+        assert_eq!(
+            line(2 * DAY, 0),
+            "last_session_ago: 2 days; their time: evening"
+        );
+        assert_eq!(
+            line(13 * DAY, 0),
+            "last_session_ago: 13 days; their time: evening"
+        );
+        assert_eq!(
+            line(14 * DAY, 0),
+            "last_session_ago: 2 weeks; their time: evening"
+        );
+        assert_eq!(
+            line(8 * 7 * DAY, 0),
+            "last_session_ago: 8 weeks; their time: evening"
+        );
+        assert_eq!(
+            line(63 * DAY, 0),
+            "last_session_ago: 2 months; their time: evening"
+        );
+        assert_eq!(
+            line(200 * DAY, 0),
+            "last_session_ago: 6 months; their time: evening"
+        );
+    }
+
+    #[test]
+    fn last_session_ago_uses_the_devices_local_day_and_part_of_day() {
+        // 19:00Z is 04:00 the next local day at UTC+9: "night", and a session
+        // 5h ago (14:00Z = 23:00 the previous local day) is 1 day ago, not today.
+        let l = last_session_ago_line(Some(NOW - 5 * 3_600), Some(NOW), Some(540));
+        assert_eq!(l, "last_session_ago: 1 day; their time: night");
+        for (hour_utc, part) in [
+            (4, "night"),
+            (5, "morning"),
+            (11, "morning"),
+            (12, "afternoon"),
+            (16, "afternoon"),
+            (17, "evening"),
+            (21, "evening"),
+            (22, "night"),
+        ] {
+            let now = (NOW / DAY) * DAY + hour_utc * 3_600;
+            let l = last_session_ago_line(Some(now - 60), Some(now), Some(0));
+            assert!(
+                l.ends_with(&format!("their time: {part}")),
+                "{hour_utc}h → {l}"
+            );
+        }
+    }
+
+    #[test]
+    fn last_session_ago_missing_pieces_render_not_supplied() {
+        assert_eq!(
+            last_session_ago_line(Some(1), None, Some(0)),
+            "last_session_ago: (not supplied)"
+        );
+        assert_eq!(
+            last_session_ago_line(Some(1), Some(NOW), None),
+            "last_session_ago: (not supplied)"
+        );
+        assert_eq!(
+            last_session_ago_line(None, None, None),
+            "last_session_ago: (not supplied)"
+        );
+        // clock supplied but no earlier session: say so honestly.
+        assert_eq!(
+            last_session_ago_line(None, Some(NOW), Some(0)),
+            "last_session_ago: (no prior session); their time: evening"
+        );
+    }
+
+    #[test]
+    fn injection_renders_last_session_ago_after_last_trace_from_closed_learner_sessions() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::sync::Arc;
+        let t = Arc::new(AtomicU64::new(NOW - 3 * DAY));
+        let t2 = t.clone();
+        let store = Store::open_in_memory("d")
+            .unwrap()
+            .with_clock(Arc::new(move || t2.load(Ordering::SeqCst)));
+        // A real session (learner spoke), closed 3 days ago…
+        let real = store
+            .create_session(None, "philosophus", "explain")
+            .unwrap();
+        store
+            .append_transcript(
+                &real.id,
+                &crate::transcript::format_block(
+                    crate::transcript::TranscriptRole::Learner,
+                    "hello",
+                ),
+            )
+            .unwrap();
+        crate::session::close_session(&store, &real.id, 5, &[], true).unwrap();
+        // …and a later ghost (closed, nothing said) that must NOT count.
+        t.store(NOW - DAY, Ordering::SeqCst);
+        let ghost = store
+            .create_session(None, "philosophus", "explain")
+            .unwrap();
+        crate::session::close_session(&store, &ghost.id, 1, &[], false).unwrap();
+
+        let ctx = AssembleCtx {
+            now: Some(NOW),
+            tz_offset_min: Some(0),
+            ..AssembleCtx::default()
+        };
+        let p = assemble_ctx("philosophus", "explain", None, &store, &ctx).system_prompt;
+        assert!(
+            p.contains("last_session_ago: 3 days; their time: evening\n"),
+            "{p}"
+        );
+        let trace_at = p.find("last_trace:").unwrap();
+        let ago_at = p.find("last_session_ago:").unwrap();
+        let notes_at = p.find("recent_notes:").unwrap();
+        assert!(
+            trace_at < ago_at && ago_at < notes_at,
+            "line sits after last_trace"
+        );
+        // Default ctx stays honest and deterministic.
+        let d = assemble("philosophus", "explain", None, &store).system_prompt;
+        assert!(d.contains("last_session_ago: (not supplied)\n"));
+    }
+
+    // ---- core ask #2/#3: tool list ----
+
+    #[test]
+    fn bank_pull_is_listed_right_after_open_thread() {
+        let names = assets::tool_names();
+        let o = names.iter().position(|n| n == "open_thread").unwrap();
+        assert_eq!(names[o + 1], "bank_pull", "{names:?}");
     }
 }

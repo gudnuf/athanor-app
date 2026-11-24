@@ -316,6 +316,18 @@ impl Mystagogue {
                 }),
             },
             AcpToolSpec {
+                name: "bank_pull".into(),
+                json_schema: json!({
+                    "type": "object",
+                    "description": "Keep what the learner asked you to keep (\"save that\", \"bank it\") as a pull note, in their own words. This stores the sentence; it opens no question.",
+                    "properties": {
+                        "text": { "type": "string", "description": "the learner's own sentence, verbatim or lightly cleaned for legibility. Never a summary." },
+                        "domain": { "type": "string", "description": "the learner's domain it belongs to, if clear; reuse an active_domains name (optional)" }
+                    },
+                    "required": ["text"]
+                }),
+            },
+            AcpToolSpec {
                 name: "evaporate_thread".into(),
                 json_schema: json!({
                     "type": "object",
@@ -350,6 +362,7 @@ impl Mystagogue {
                 name: "update_memory".into(),
                 json_schema: json!({
                     "type": "object",
+                    "description": "REPLACES the whole section with `content` — it does not append. Whatever the section held before is gone, so a single new line erases the earlier ones. To add to a section, send its existing lines plus the new one. To keep a sentence the learner asked you to save, use bank_pull instead. At the landing, in their words; never on the strength of silence.",
                     "properties": {
                         "section": { "type": "string" },
                         "content": { "type": "string" }
@@ -447,6 +460,23 @@ impl Mystagogue {
                 self.store.kindle_passage("AZOTH", Some(&corr.id))?;
                 Ok(json!({ "correspondence_id": corr.id }))
             }
+            "bank_pull" => {
+                let a: BankPullArgs = serde_json::from_value(args)?;
+                let text = a.text.trim();
+                if text.is_empty() {
+                    return Err(CoreError::BadState(
+                        "bank_pull needs the learner's own sentence in `text`".into(),
+                    ));
+                }
+                let domain_id = match a.domain.as_deref() {
+                    Some(name) if !name.trim().is_empty() => {
+                        Some(self.store.upsert_domain(name)?.id)
+                    }
+                    _ => None,
+                };
+                let note = self.store.add_pull_note(domain_id.as_deref(), text)?;
+                Ok(json!({ "id": note.id, "ok": true }))
+            }
             "update_memory" => {
                 let a: UpdateMemoryArgs = serde_json::from_value(args)?;
                 self.store.set_profile_section(&a.section, &a.content)?;
@@ -498,6 +528,13 @@ struct FixSaltArgs {
 #[derive(Deserialize)]
 struct OpenThreadArgs {
     question: String,
+    #[serde(default)]
+    domain: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct BankPullArgs {
+    text: String,
     #[serde(default)]
     domain: Option<String>,
 }
@@ -922,6 +959,7 @@ mod tests {
             vec![
                 "fix_salt",
                 "open_thread",
+                "bank_pull",
                 "evaporate_thread",
                 "kindle_passage",
                 "weave_domains",
@@ -1055,5 +1093,51 @@ mod tests {
             mask::current(&state),
             ("philosophus".into(), "explain".into())
         );
+    }
+
+    #[tokio::test]
+    async fn bank_pull_stores_the_learners_words_as_a_pull_note() {
+        let store = Store::open_in_memory("dev").unwrap();
+        let myst = Mystagogue::new(store_arc(store));
+        let res = myst
+            .dispatch(call(
+                "bank_pull",
+                json!({ "text": "I keep wanting to know why the tide lags the moon", "domain": "tides" }),
+            ))
+            .await;
+        assert_eq!(res.value["ok"], true, "{:?}", res.value);
+        let id = res.value["id"].as_str().unwrap();
+        let notes = myst.store().all_pull_notes().unwrap();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].id, id);
+        assert_eq!(
+            notes[0].text,
+            "I keep wanting to know why the tide lags the moon"
+        );
+        let dom = myst.store().upsert_domain("tides").unwrap();
+        assert_eq!(notes[0].domain_id, Some(dom.id));
+        // No domain is fine; empty text is refused (nothing to keep).
+        let bare = myst
+            .dispatch(call("bank_pull", json!({ "text": "just this" })))
+            .await;
+        assert_eq!(bare.value["ok"], true);
+        let empty = myst
+            .dispatch(call("bank_pull", json!({ "text": "   " })))
+            .await;
+        assert!(empty.value.get("error").is_some(), "{:?}", empty.value);
+        assert_eq!(myst.store().all_pull_notes().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn update_memory_description_says_it_replaces_the_whole_section() {
+        let spec = Mystagogue::tool_specs()
+            .into_iter()
+            .find(|t| t.name == "update_memory")
+            .unwrap();
+        let d = spec.json_schema["description"]
+            .as_str()
+            .expect("has a description");
+        assert!(d.contains("REPLACES the whole section"), "{d}");
+        assert!(d.contains("bank_pull"), "points keeps at bank_pull: {d}");
     }
 }
