@@ -52,7 +52,11 @@ impl RealConfig {
             None => DEFAULT_MAX_TURNS,
             Some(s) => match s.parse::<usize>() {
                 Ok(n) if n > 0 => n,
-                _ => return Err(format!("EVALS_REAL_TURNS must be a positive integer, got {s:?}")),
+                _ => {
+                    return Err(format!(
+                        "EVALS_REAL_TURNS must be a positive integer, got {s:?}"
+                    ))
+                }
             },
         };
         let personas = personas
@@ -63,7 +67,10 @@ impl RealConfig {
                     .collect::<Vec<_>>()
             })
             .filter(|v| !v.is_empty());
-        Ok(RealConfig { max_turns, personas })
+        Ok(RealConfig {
+            max_turns,
+            personas,
+        })
     }
 
     pub fn from_env() -> Result<Self, String> {
@@ -76,7 +83,10 @@ impl RealConfig {
 
 /// Narrows `all` to the named personas (in the order named). An unknown name
 /// is an error, so a typo can't silently run nothing.
-pub fn select_personas(all: Vec<Persona>, names: Option<&[String]>) -> Result<Vec<Persona>, String> {
+pub fn select_personas(
+    all: Vec<Persona>,
+    names: Option<&[String]>,
+) -> Result<Vec<Persona>, String> {
     let Some(names) = names else { return Ok(all) };
     let mut pool: Vec<Option<Persona>> = all.into_iter().map(Some).collect();
     let mut out = Vec::new();
@@ -137,7 +147,8 @@ impl TurnRecorder {
 
     pub fn flush(&mut self) {
         if !self.buffer.is_empty() {
-            self.turns.push(Turn::Assistant(std::mem::take(&mut self.buffer)));
+            self.turns
+                .push(Turn::Assistant(std::mem::take(&mut self.buffer)));
         }
     }
 
@@ -250,7 +261,10 @@ pub async fn run_persona_real(
     }
     // The app's own close path: condense (best-effort, tapped for its raw
     // text), then land the session.
-    let tap = CloseTap { inner: engine, close_text: Mutex::new(None) };
+    let tap = CloseTap {
+        inner: engine,
+        close_text: Mutex::new(None),
+    };
     let condense_err = if engine_error.is_none() {
         conductor.condense(&tap).await.err().map(|e| e.to_string())
     } else {
@@ -285,7 +299,12 @@ pub async fn run_persona_real(
             },
         },
     ];
-    checks.extend(persona.field.iter().map(|c| crate::field::run_check(*c, &trace)));
+    checks.extend(
+        persona
+            .field
+            .iter()
+            .map(|c| crate::field::run_check(*c, &trace)),
+    );
     checks.push(CheckResult {
         name: "close_pass".into(),
         passed: close_record.is_some() || engine_failed,
@@ -342,7 +361,13 @@ pub struct RealReport {
 pub fn report_path(dir: &Path, pack_version: &str, model: &str) -> PathBuf {
     let safe: String = model
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '.' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '.' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     dir.join(format!("{pack_version}-{safe}.json"))
 }
@@ -415,7 +440,10 @@ pub fn judge_checklist(model: &str, runs: &[(&Persona, &RealRun)]) -> String {
             out.push_str("\n**Close pass (raw):**\n\n```\n");
             out.push_str(&c.raw);
             out.push_str("\n```\n\n");
-            out.push_str(&format!("- parsed NOTE: {}\n", c.note.as_deref().unwrap_or("(none)")));
+            out.push_str(&format!(
+                "- parsed NOTE: {}\n",
+                c.note.as_deref().unwrap_or("(none)")
+            ));
             if c.profile.is_empty() {
                 out.push_str("- parsed PROFILE: (none)\n");
             }
@@ -429,7 +457,12 @@ pub fn judge_checklist(model: &str, runs: &[(&Persona, &RealRun)]) -> String {
 
 /// One human line per persona.
 pub fn result_line(r: &ScenarioReport) -> String {
-    let failing: Vec<&str> = r.checks.iter().filter(|c| !c.passed).map(|c| c.name.as_str()).collect();
+    let failing: Vec<&str> = r
+        .checks
+        .iter()
+        .filter(|c| !c.passed)
+        .map(|c| c.name.as_str())
+        .collect();
     if failing.is_empty() {
         format!("{:<16} PASS ({} checks)", r.id, r.checks.len())
     } else {
@@ -455,7 +488,10 @@ pub async fn run_real_suite(
     let report = RealReport {
         model: model.to_string(),
         max_turns: cfg.max_turns,
-        suite: SuiteReport::assemble(PACK_VERSION, runs.iter().map(|r| r.report.clone()).collect()),
+        suite: SuiteReport::assemble(
+            PACK_VERSION,
+            runs.iter().map(|r| r.report.clone()).collect(),
+        ),
         closes: runs.iter().filter_map(|r| r.close.clone()).collect(),
     };
     let json_path = write_report(dir, &report)?;
@@ -483,7 +519,10 @@ mod tests {
 
     impl PerTurn {
         fn new(replies: Vec<Vec<AcpUpdate>>) -> Self {
-            Self { replies: Mutex::new(replies.into()), systems: Mutex::default() }
+            Self {
+                replies: Mutex::new(replies.into()),
+                systems: Mutex::default(),
+            }
         }
     }
 
@@ -519,16 +558,26 @@ mod tests {
         assert_eq!((d.max_turns, d.personas), (6, None));
         let c = RealConfig::parse(Some("3"), Some("leaver, returner,")).unwrap();
         assert_eq!(c.max_turns, 3);
-        assert_eq!(c.personas, Some(vec!["leaver".to_string(), "returner".to_string()]));
+        assert_eq!(
+            c.personas,
+            Some(vec!["leaver".to_string(), "returner".to_string()])
+        );
         assert!(RealConfig::parse(Some("0"), None).is_err());
         assert!(RealConfig::parse(Some("x"), None).is_err());
-        assert_eq!(RealConfig::parse(Some(""), Some("")).unwrap().personas, None);
+        assert_eq!(
+            RealConfig::parse(Some(""), Some("")).unwrap().personas,
+            None
+        );
     }
 
     #[test]
     fn select_personas_filters_in_order_and_rejects_typos() {
-        let got = select_personas(all_personas(), Some(&["returner".into(), "leaver".into()])).unwrap();
-        assert_eq!(got.iter().map(|p| p.name).collect::<Vec<_>>(), ["returner", "leaver"]);
+        let got =
+            select_personas(all_personas(), Some(&["returner".into(), "leaver".into()])).unwrap();
+        assert_eq!(
+            got.iter().map(|p| p.name).collect::<Vec<_>>(),
+            ["returner", "leaver"]
+        );
         assert_eq!(select_personas(all_personas(), None).unwrap().len(), 11);
         assert!(select_personas(all_personas(), Some(&["nobody".into()])).is_err());
     }
@@ -570,15 +619,44 @@ mod tests {
         let run = run_persona_real(&engine, &p, 6).await;
         assert!(run.report.checks.iter().any(|c| c.name == "spiral"));
         assert!(run.report.checks.iter().any(|c| c.name == "empty_turns"));
-        assert!(run.report.checks.iter().find(|c| c.name == "engine_ok").unwrap().passed);
-        assert!(run.report.checks.iter().find(|c| c.name == "session_lands").unwrap().passed);
-        assert_eq!(engine.systems.lock().unwrap().len(), n + 1, "turns + close pass");
+        assert!(
+            run.report
+                .checks
+                .iter()
+                .find(|c| c.name == "engine_ok")
+                .unwrap()
+                .passed
+        );
+        assert!(
+            run.report
+                .checks
+                .iter()
+                .find(|c| c.name == "session_lands")
+                .unwrap()
+                .passed
+        );
+        assert_eq!(
+            engine.systems.lock().unwrap().len(),
+            n + 1,
+            "turns + close pass"
+        );
         let close = run.close.expect("close pass recorded");
         assert!(close.raw.contains("slow processor"));
-        assert_eq!(close.note.as_deref(), Some("Mostly dots. Left the door open."));
+        assert_eq!(
+            close.note.as_deref(),
+            Some("Mostly dots. Left the door open.")
+        );
         assert_eq!(close.profile.len(), 1);
-        let g = run.report.checks.iter().find(|c| c.name == "profile_from_silence").unwrap();
-        assert!(!g.passed, "a silence-based how_i_learn line must fail rule 9: {g:?}");
+        let g = run
+            .report
+            .checks
+            .iter()
+            .find(|c| c.name == "profile_from_silence")
+            .unwrap();
+        assert!(
+            !g.passed,
+            "a silence-based how_i_learn line must fail rule 9: {g:?}"
+        );
     }
 
     #[tokio::test]
@@ -589,7 +667,12 @@ mod tests {
         replies.push(say("NOTE: Mostly dots. Left the door open."));
         let engine = PerTurn::new(replies);
         let run = run_persona_real(&engine, &p, 6).await;
-        let g = run.report.checks.iter().find(|c| c.name == "profile_from_silence").unwrap();
+        let g = run
+            .report
+            .checks
+            .iter()
+            .find(|c| c.name == "profile_from_silence")
+            .unwrap();
         assert!(g.passed, "{g:?}");
     }
 
@@ -599,7 +682,10 @@ mod tests {
         let engine = PerTurn::new(vec![say("Hm.")]);
         let _ = run_persona_real(&engine, &p, 6).await;
         let sys = engine.systems.lock().unwrap()[0].clone();
-        assert!(sys.contains("Stalled: come at it sideways"), "seeded note reaches the prompt");
+        assert!(
+            sys.contains("Stalled: come at it sideways"),
+            "seeded note reaches the prompt"
+        );
     }
 
     #[tokio::test]
@@ -607,7 +693,12 @@ mod tests {
         let p = dead_air();
         let engine = PerTurn::new(vec![]);
         let run = run_persona_real(&engine, &p, 6).await;
-        let c = run.report.checks.iter().find(|c| c.name == "engine_ok").unwrap();
+        let c = run
+            .report
+            .checks
+            .iter()
+            .find(|c| c.name == "engine_ok")
+            .unwrap();
         assert!(!c.passed && c.detail.contains("script exhausted"), "{c:?}");
         assert!(!run.report.passed);
     }
@@ -616,7 +707,9 @@ mod tests {
     fn report_path_names_pack_and_model_and_writer_is_timestamp_free() {
         let dir = std::env::temp_dir().join(format!("evals-real-{}", std::process::id()));
         assert_eq!(
-            report_path(&dir, "v1", "claude-opus-5-5").file_name().unwrap(),
+            report_path(&dir, "v1", "claude-opus-5-5")
+                .file_name()
+                .unwrap(),
             "v1-claude-opus-5-5.json"
         );
         let rep = RealReport {
@@ -639,8 +732,14 @@ mod tests {
         let p = returner();
         let run = RealRun {
             report: ScenarioReport::new("returner", vec![]),
-            turns: vec![Turn::LearnerText("a kite".into()), Turn::Assistant("Taut?".into())],
-            close: Some(CloseRecord::parse("returner", "NOTE: Kite, slack and taut.")),
+            turns: vec![
+                Turn::LearnerText("a kite".into()),
+                Turn::Assistant("Taut?".into()),
+            ],
+            close: Some(CloseRecord::parse(
+                "returner",
+                "NOTE: Kite, slack and taut.",
+            )),
         };
         let md = judge_checklist("m", &[(&p, &run)]);
         assert!(md.contains("## returner"));
@@ -661,7 +760,9 @@ mod tests {
         replies.push(say("NOTE: ok"));
         let engine = PerTurn::new(replies);
         let cfg = RealConfig::parse(None, None).unwrap();
-        run_real_suite(&engine, "claude-opus-5-5", &cfg, vec![p], &dir).await.unwrap();
+        run_real_suite(&engine, "claude-opus-5-5", &cfg, vec![p], &dir)
+            .await
+            .unwrap();
         assert!(dir.join("v1-claude-opus-5-5.json").exists());
         assert!(dir.join("v1-claude-opus-5-5.judge.md").exists());
         let _ = std::fs::remove_dir_all(&dir);
