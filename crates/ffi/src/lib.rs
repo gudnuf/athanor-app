@@ -15,6 +15,7 @@ pub mod events;
 pub mod export;
 pub mod records;
 pub mod session;
+mod text_bellows;
 
 pub use engine::{AthanorEngine, EngineError, TierConfig};
 pub use events::{SessionEvent, SessionEventListener};
