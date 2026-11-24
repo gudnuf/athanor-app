@@ -27,10 +27,12 @@ this repo. Violating one of these is a bug even if the tests pass.
    salt is a defect.
 5. **Fire is append-only.** The grimoire/session-trace log never rewrites
    history. New entries only.
-6. **The spiral invariant: every `fix_salt` spawns a child thread.** Each
-   realization must be followed, at minimum, by one `open_thread` call. This
-   is also a deterministic eval check (see the eval harness, once it lands) —
-   a prompt-pack change that breaks this is a regression, not a style choice.
+6. **The spiral invariant: every `fix_salt` spawns a child thread.** Every
+   `fix_salt` names exactly one child question (`child_question`), which the
+   core opens as the child thread; a second `open_thread` for the same
+   question is a defect. This is also a deterministic eval check
+   (`evals::grade::grade_spiral`) — a prompt-pack change that breaks this is
+   a regression, not a style choice.
 7. **No plausible hallucination stands in for an honest gap.** Anything the
    Mystagogue didn't actually establish with the learner renders as
    acknowledged uncertainty, never a confident invented fact — same spirit as
